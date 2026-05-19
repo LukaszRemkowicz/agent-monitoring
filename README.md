@@ -55,3 +55,25 @@ docker compose run --rm monitoring-app pytest
 
 Run migrations from the container so Aerich uses the Compose database service
 via `DATABASE_HOST=db` and `DATABASE_PORT=5432`.
+
+## CI/CD
+
+GitHub Actions workflows live in `.github/workflows` and mirror the MCP project
+shape:
+
+- `ci.yml` runs pre-commit quality checks, pytest through the shared reusable
+  `python-tests-uv` workflow, CodeQL, version checks, and a Docker build smoke.
+- `codeql.yml` runs the scheduled weekly CodeQL scan.
+- `release.yml` tags `main` through the shared release workflow.
+
+Operational scripts live under `infra/scripts`:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/build.sh
+TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+The release scripts build and deploy tagged images named
+`prod-agent-monitoring:<TAG>`. Deployment applies migrations inside the
+production Compose container and then runs the one-shot monitoring command,
+defaulting to `log_analysis`.

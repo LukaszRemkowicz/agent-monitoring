@@ -24,6 +24,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: production
     restart: "no"
     depends_on:
       db:

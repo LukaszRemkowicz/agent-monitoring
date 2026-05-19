@@ -50,7 +50,27 @@ repos:
             echo "SAFETY_API_KEY is required for the safety pre-commit hook. Set it in your shell or store it in macOS Keychain as SAFETY_API_KEY." >&2;
             exit 1;
           fi &&
-
+          project_file=".safety-project.ini" &&
+          policy_file=".safety-policy.yml" &&
+          project_backup="$(mktemp)" &&
+          policy_backup="$(mktemp)" &&
+          had_project=0 &&
+          had_policy=0 &&
+          if [ -f "$project_file" ]; then cp "$project_file" "$project_backup" && had_project=1; fi &&
+          if [ -f "$policy_file" ]; then cp "$policy_file" "$policy_backup" && had_policy=1; fi &&
+          cleanup() {
+            if [ "$had_project" -eq 1 ]; then
+              cp "$project_backup" "$project_file";
+            else
+              rm -f "$project_file";
+            fi;
+            if [ "$had_policy" -eq 1 ]; then
+              cp "$policy_backup" "$policy_file";
+            else
+              rm -f "$policy_file";
+            fi;
+            rm -f "$project_backup" "$policy_backup";
+          } &&
           trap cleanup EXIT &&
           uv run safety --stage cicd scan --target .'
         language: system

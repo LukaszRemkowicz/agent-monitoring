@@ -14,7 +14,10 @@ services:
       - monitoring-db:/var/lib/postgresql/data
 
   monitoring-app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
     depends_on:
       db:
         condition: service_healthy
