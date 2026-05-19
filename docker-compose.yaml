@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: monitoring
+      POSTGRES_PASSWORD: monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitoring -d monitoring"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - monitoring-db:/var/lib/postgresql/data
+
+  monitoring-app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: monitoring
+      DATABASE_USER: monitoring
+      DATABASE_PASSWORD: monitoring
+      MONITORING_PROJECT: landingpage
+      LOG_ANALYSIS_MCP_URL: http://mcp-log-server:8000/mcp
+    command: ["log_analysis", "--help"]
+
+volumes:
+  monitoring-db:

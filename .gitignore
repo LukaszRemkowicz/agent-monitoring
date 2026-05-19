@@ -1,0 +1,10 @@
+doc/analysis/
+docs/analysis/
+
+.DS_Store
+.idea/
+.pytest_cache/
+.ruff_cache/
+.venv/
+__pycache__/
+*.pyc
