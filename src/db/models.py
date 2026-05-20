@@ -22,7 +22,7 @@ class RunStatus(StrEnum):
 class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
     """Query helpers for log analyses."""
 
-    def for_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
         """Filter log analyses for a specific analysis date."""
 
         return self.filter(analysis_date=analysis_date)
@@ -67,8 +67,8 @@ class LogAnalysisManager(QuerySetManager["LogAnalysis", LogAnalysisQuerySet]):
     def __init__(self) -> None:
         super().__init__(LogAnalysisQuerySet)
 
-    def for_date(self, analysis_date: date) -> LogAnalysisQuerySet:
-        return self.get_queryset().for_date(analysis_date)
+    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+        return self.get_queryset().filter_by_date(analysis_date)
 
     def older_than(self, days: int) -> LogAnalysisQuerySet:
         return self.get_queryset().older_than(days)
@@ -89,7 +89,7 @@ class LogAnalysisManager(QuerySetManager["LogAnalysis", LogAnalysisQuerySet]):
 class SitemapAnalysisQuerySet(QuerySet["SitemapAnalysis"]):
     """Query helpers for sitemap analyses."""
 
-    def for_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
         """Filter sitemap analyses for a specific analysis date."""
 
         return self.filter(analysis_date=analysis_date)
@@ -134,8 +134,8 @@ class SitemapAnalysisManager(QuerySetManager["SitemapAnalysis", SitemapAnalysisQ
     def __init__(self) -> None:
         super().__init__(SitemapAnalysisQuerySet)
 
-    def for_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
-        return self.get_queryset().for_date(analysis_date)
+    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().filter_by_date(analysis_date)
 
     def older_than(self, days: int) -> SitemapAnalysisQuerySet:
         return self.get_queryset().older_than(days)

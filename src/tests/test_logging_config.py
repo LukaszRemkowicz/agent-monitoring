@@ -3,11 +3,14 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 
 import pytest
 
 from conf import Settings
 from logging_config import JsonFormatter, PlainFormatter, configure_logging, get_logger
+
+ANSI_PATTERN = re.compile(r"\033\[[0-9;]*m")
 
 
 def make_record(**extra: object) -> logging.LogRecord:
@@ -27,13 +30,41 @@ def make_record(**extra: object) -> logging.LogRecord:
 def test_json_formatter_outputs_single_line_structured_payload() -> None:
     record = make_record(project="landingpage", attempt=1)
 
-    payload = json.loads(JsonFormatter().format(record))
+    message = JsonFormatter().format(record)
+    payload = json.loads(message)
 
+    assert "\n" not in message
     assert payload["level"] == "INFO"
     assert payload["logger"] == "agent_monitoring.tests"
     assert payload["message"] == "hello world"
     assert payload["project"] == "landingpage"
     assert payload["attempt"] == 1
+
+
+def test_json_formatter_can_render_pretty_json() -> None:
+    record = make_record(project="landingpage", attempt=1)
+
+    message = JsonFormatter(indent=2).format(record)
+    payload = json.loads(message)
+
+    assert message.startswith("{\n")
+    assert '\n  "level": "INFO"' in message
+    assert payload["project"] == "landingpage"
+
+
+def test_json_formatter_can_render_colored_pretty_json() -> None:
+    record = make_record(project="landingpage", attempt=1, force=False)
+
+    message = JsonFormatter(indent=2, use_color=True).format(record)
+    payload = json.loads(ANSI_PATTERN.sub("", message))
+
+    assert "\033[36m" in message
+    assert "\033[32m" in message
+    assert "\033[33m" in message
+    assert "\033[35m" in message
+    assert payload["project"] == "landingpage"
+    assert payload["attempt"] == 1
+    assert payload["force"] is False
 
 
 def test_plain_formatter_appends_sorted_extra_fields() -> None:
@@ -72,9 +103,9 @@ def test_json_formatter_ignores_empty_exception_info() -> None:
 
 def test_configure_logging_supports_json_and_child_loggers() -> None:
     stream = io.StringIO()
-    runtime_settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "json"})
+    settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "json"})
 
-    configure_logging(runtime_settings, stream=stream)
+    configure_logging(settings, stream=stream)
     get_logger("tests").info("configured", extra={"project": "landingpage"})
 
     payload = json.loads(stream.getvalue())
@@ -83,24 +114,25 @@ def test_configure_logging_supports_json_and_child_loggers() -> None:
     assert payload["project"] == "landingpage"
 
 
-def test_configure_logging_supports_pretty_colored_logs() -> None:
+def test_configure_logging_supports_pretty_json_logs() -> None:
     stream = io.StringIO()
-    runtime_settings = Settings(
-        {"LOG_LEVEL": "INFO", "LOG_FORMAT": "pretty", "LOG_COLOR": "always"}
-    )
+    settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "pretty", "LOG_COLOR": "always"})
 
-    configure_logging(runtime_settings, stream=stream)
+    configure_logging(settings, stream=stream)
     get_logger("tests").info("configured", extra={"event": "tool_result"})
 
     message = stream.getvalue()
-    assert "\033[32m" in message
-    assert "INFO [agent_monitoring.tests] configured" in message
-    assert "event='tool_result'" in message
-    assert "asctime=" not in message
+    clean_message = ANSI_PATTERN.sub("", message)
+    payload = json.loads(clean_message)
+    assert clean_message.startswith("{\n")
+    assert "\033[36m" in message
+    assert payload["logger"] == "agent_monitoring.tests"
+    assert payload["message"] == "configured"
+    assert payload["event"] == "tool_result"
 
 
 def test_configure_logging_rejects_unknown_format() -> None:
-    runtime_settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "xml", "LOG_COLOR": "never"})
+    settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "xml", "LOG_COLOR": "never"})
 
     with pytest.raises(ValueError, match="Unsupported LOG_FORMAT"):
-        configure_logging(runtime_settings, stream=io.StringIO())
+        configure_logging(settings, stream=io.StringIO())

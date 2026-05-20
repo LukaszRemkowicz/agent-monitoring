@@ -1,10 +1,12 @@
+from typing import Any
+
 import pytest
 
 from conf import Settings
 from db.config import build_database_url, build_tortoise_config
 
 
-def test_build_tortoise_config_contains_aerich_only_for_phase_zero():
+def test_build_tortoise_config_contains_aerich_only_for_phase_zero() -> None:
     settings = Settings(
         {
             "DATABASE_HOST": "db",
@@ -26,7 +28,7 @@ def test_build_tortoise_config_contains_aerich_only_for_phase_zero():
     assert config["apps"]["models"]["migrations"] == "migrations/models"
 
 
-def test_build_database_url_escapes_credentials():
+def test_build_database_url_escapes_credentials() -> None:
     settings = Settings(
         {
             "DATABASE_HOST": "db.example",
@@ -43,13 +45,15 @@ def test_build_database_url_escapes_credentials():
 
 
 @pytest.mark.asyncio
-async def test_database_lifecycle_initializes_and_closes_tortoise(monkeypatch):
-    calls = []
+async def test_database_lifecycle_initializes_and_closes_tortoise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
 
-    async def fake_init(**tortoise_kwargs):
+    async def fake_init(**tortoise_kwargs: object) -> None:
         calls.append(("init", tortoise_kwargs["config"]))
 
-    async def fake_close_connections():
+    async def fake_close_connections() -> None:
         calls.append(("close", None))
 
     from db import lifecycle
@@ -74,13 +78,15 @@ async def test_database_lifecycle_initializes_and_closes_tortoise(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_database_lifespan_wraps_initialization_and_shutdown(monkeypatch):
-    calls = []
+async def test_database_lifespan_wraps_initialization_and_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
 
-    async def fake_initialize_database(config):
+    async def fake_initialize_database(config: dict[str, Any]) -> None:
         calls.append(f"init:{config['connections']['default']}")
 
-    async def fake_close_database():
+    async def fake_close_database() -> None:
         calls.append("close")
 
     from db import lifecycle

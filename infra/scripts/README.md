@@ -88,7 +88,8 @@ Deploy behavior:
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`
 - starts the database service
-- applies committed migrations with `uv run migrate` unless `SKIP_MIGRATE=true`
+- applies committed migrations with the container `migrate` command unless
+  `SKIP_MIGRATE=true`
 - runs the one-shot monitoring command, defaulting to `log_analysis`
 - records the deployed tag under the script state directory after the command
   succeeds

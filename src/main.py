@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
+
 import typer
 
 from conf import settings
 from decorators import as_async, db
 from logging_config import get_logger
+from services import LogAnalysisService
 
 app = typer.Typer(
     name="monitoring",
@@ -23,7 +26,7 @@ async def log_analysis(
     analysis_date: str | None = typer.Option(
         None,
         "--analysis-date",
-        help="Analysis date to process. Defaults to the job service date.",
+        help="Analysis date to process. Defaults to today.",
     ),
     force: bool = typer.Option(
         False,
@@ -36,10 +39,22 @@ async def log_analysis(
         help="Send the analysis email when the future job succeeds.",
     ),
 ) -> None:
-    """Phase 0 placeholder for the scheduled log analysis job."""
+    """Prepare the MCP workflow bundle for the scheduled log analysis job."""
+    parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
+    service = LogAnalysisService.create_default()
+    result = await service.run_log_analysis(
+        analysis_date=parsed_analysis_date,
+        force=force,
+        send_email=send_email,
+    )
+    workflow = result.workflow
     typer.echo(
-        "log-analysis is not implemented beyond Phase 0 "
-        f"(analysis_date={analysis_date}, force={force}, email={send_email})."
+        "Loaded MCP workflow bundle "
+        f"{workflow.workflow_name} "
+        f"(mandatory_skills={len(workflow.mandatory_skills)}, "
+        f"optional_skills={len(workflow.optional_skills)}, "
+        f"tools={len(workflow.tools)}, "
+        f"analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
 
 
@@ -49,7 +64,7 @@ async def sitemap_analysis(
     analysis_date: str | None = typer.Option(
         None,
         "--analysis-date",
-        help="Analysis date to process. Defaults to the job service date.",
+        help="Analysis date to process. Defaults to today.",
     ),
     force: bool = typer.Option(
         False,
@@ -63,14 +78,24 @@ async def sitemap_analysis(
     ),
 ) -> None:
     """Phase 0 placeholder for the scheduled sitemap analysis job."""
+    parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
     typer.echo(
         "sitemap-analysis is not implemented beyond Phase 0 "
-        f"(analysis_date={analysis_date}, force={force}, email={send_email})."
+        f"(analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
 
 
 @app.command("check-mcp")
 @as_async()
 async def check_mcp() -> None:
-    """Phase 0 placeholder for future MCP connectivity checks."""
-    typer.echo(f"MCP check is not implemented beyond Phase 0 ({settings.LOG_ANALYSIS_MCP_URL}).")
+    """Check that the MCP service status endpoint is reachable."""
+    service = LogAnalysisService.create_default()
+    status = await service.check_mcp_status()
+    typer.echo(
+        "MCP service is reachable "
+        f"({settings.LOG_ANALYSIS_MCP_URL}, "
+        f"name={status.name}, "
+        f"status={status.status}, "
+        f"environment={status.environment}, "
+        f"client_type={status.client_type})."
+    )

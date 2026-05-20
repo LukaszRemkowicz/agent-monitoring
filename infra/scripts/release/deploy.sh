@@ -6,8 +6,22 @@
 #   Deploy one prepared agent-monitoring production image safely and repeatedly.
 #
 # Typical usage:
-#   TAG=v0.1.0 infra/scripts/release/deploy.sh
-#   AUTO_APPROVE=true TAG=v0.1.0 infra/scripts/release/deploy.sh
+#   TAG=v0.1.0 doppler run -- infra/scripts/release/deploy.sh
+#   AUTO_APPROVE=true TAG=v0.1.0 doppler run -- infra/scripts/release/deploy.sh
+#
+# What this script does:
+#   - validates Compose configuration and required production secrets
+#   - prevents concurrent deploys with a lock
+#   - verifies the tagged image exists locally
+#   - runs a pre-deploy database backup unless SKIP_BACKUP=true
+#   - applies migrations unless SKIP_MIGRATE=true
+#   - runs the selected one-shot monitoring command
+#   - records current_tag after the command completes
+#
+# What this script does not do:
+#   - does not build images
+#   - does not create or rotate secrets
+#   - does not automatically rollback after a failed monitoring command
 ###############################################################################
 
 set -euo pipefail
@@ -96,6 +110,7 @@ printf "📁 State directory: %s\n" "$STATE_DIR"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 
+# Step 1: take a deploy lock so two deploys cannot mutate the stack at once.
 deploy_step "🔒" 1 8 "Acquire deploy lock"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     log_error "Another deployment is already running: $LOCK_DIR"
@@ -103,6 +118,7 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 printf "✅ Deploy lock acquired: %s\n" "$LOCK_DIR"
 
+# Step 2: for dry runs, validate Compose interpolation and exit before changes.
 deploy_step "🧪" 2 8 "Check dry-run mode and validate Compose config"
 if [[ "$DRY_RUN" == "true" ]]; then
     printf "🧾 DRY RUN: validating Compose config only\n"
@@ -113,6 +129,7 @@ fi
 docker compose "${COMPOSE_ARGS[@]}" config >/dev/null
 printf "✅ Compose config validated\n"
 
+# Step 3: verify the image was built or pulled before starting deployment.
 deploy_step "🔍" 3 8 "Verify release image exists"
 if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     log_error "Image not found locally: $IMAGE_NAME"
@@ -121,10 +138,12 @@ if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
 fi
 printf "✅ Release image found: %s\n" "$IMAGE_NAME"
 
+# Step 4: ask for explicit confirmation unless AUTO_APPROVE=true.
 deploy_step "⚠️" 4 8 "Confirm deploy"
 confirm_continue "Type yes to deploy $IMAGE_NAME to $ENVIRONMENT."
 printf "✅ Deploy confirmed\n"
 
+# Step 5: back up the target database before changing schema or running jobs.
 deploy_step "💾" 5 8 "Run pre-deploy database backup"
 if [[ "$SKIP_BACKUP" != "true" ]]; then
     ENVIRONMENT="$ENVIRONMENT" \
@@ -140,19 +159,22 @@ else
     confirm_continue "Type yes to continue without a pre-deploy backup."
 fi
 
+# Step 6: make sure the database service is running before migrations.
 deploy_step "🐘" 6 8 "Ensure database service is running"
 docker compose "${COMPOSE_ARGS[@]}" up -d db
 printf "✅ Database service is running or starting\n"
 
+# Step 7: apply committed migrations from the release image.
 deploy_step "🧬" 7 8 "Apply database migrations"
 if [[ "$SKIP_MIGRATE" != "true" ]]; then
-    docker compose "${COMPOSE_ARGS[@]}" run --rm app uv run migrate
+    docker compose "${COMPOSE_ARGS[@]}" run --rm app migrate
     printf "✅ Database migrations applied\n"
 else
     log_warn "Skipping database migrations because SKIP_MIGRATE=true"
     confirm_continue "Type yes to continue without applying migrations."
 fi
 
+# Step 8: run the selected one-shot monitoring command and record success.
 deploy_step "🚀" 8 8 "Run monitoring command"
 docker compose "${COMPOSE_ARGS[@]}" run --rm app "$MONITORING_COMMAND"
 printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"

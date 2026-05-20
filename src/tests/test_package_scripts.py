@@ -5,7 +5,7 @@ from unittest.mock import patch
 import scripts
 
 
-def test_console_scripts_are_standalone_commands():
+def test_console_scripts_are_standalone_commands() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text())
 
     scripts = pyproject["project"]["scripts"]
@@ -18,7 +18,7 @@ def test_console_scripts_are_standalone_commands():
     assert scripts["migrate"] == "db.cli:migrate"
 
 
-def test_console_script_entrypoints_configure_logging():
+def test_console_script_entrypoints_configure_logging() -> None:
     with (
         patch("scripts.configure_logging") as configure_logging,
         patch("scripts.typer.run") as typer_run,

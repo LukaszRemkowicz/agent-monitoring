@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test:
         [
@@ -20,7 +20,7 @@ services:
       retries: 5
 
   app:
-    image: ${ENVIRONMENT:?ENVIRONMENT is required}-agent-monitoring:${TAG:?TAG is required}
+    image: prod-agent-monitoring:${TAG:?TAG is required}
     build:
       context: .
       dockerfile: Dockerfile

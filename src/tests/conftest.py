@@ -1,9 +1,11 @@
+from collections.abc import AsyncIterator
+
 import pytest_asyncio
 from tortoise import Tortoise
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def tortoise_db():
+async def tortoise_db() -> AsyncIterator[None]:
     await Tortoise.init(
         config={
             "connections": {"default": "sqlite://:memory:"},

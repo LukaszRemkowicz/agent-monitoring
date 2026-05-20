@@ -8,6 +8,9 @@ ENV PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.11 /uv /usr/local/bin/uv
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY migrations ./migrations
