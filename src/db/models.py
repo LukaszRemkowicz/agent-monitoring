@@ -1,0 +1,454 @@
+from __future__ import annotations
+
+from datetime import date, timedelta
+from enum import StrEnum
+from typing import Any, ClassVar
+
+from tortoise import fields
+from tortoise.queryset import QuerySet
+
+from conf import settings
+
+from .managers import DatabaseModel, QuerySetManager
+
+
+class RunStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
+    """Query helpers for log analyses."""
+
+    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+        """Filter log analyses for a specific analysis date."""
+
+        return self.filter(analysis_date=analysis_date)
+
+    def older_than(self, days: int) -> LogAnalysisQuerySet:
+        """Filter log analyses older than N days."""
+
+        cutoff = date.today() - timedelta(days=days)
+        return self.filter(analysis_date__lt=cutoff)
+
+    def last_5_days(
+        self,
+        exclude_date: date | None = None,
+    ) -> LogAnalysisQuerySet:
+        """Return log analyses from the last five days, newest first."""
+
+        cutoff = date.today() - timedelta(days=5)
+        queryset = self.filter(analysis_date__gte=cutoff).order_by("-analysis_date")
+        if exclude_date is not None:
+            queryset = queryset.exclude(analysis_date=exclude_date)
+        return queryset
+
+    def unsent_emails(self) -> LogAnalysisQuerySet:
+        """Filter log analyses where email has not been sent."""
+
+        return self.filter(email_sent=False)
+
+    def by_severity(self, severity: str) -> LogAnalysisQuerySet:
+        """Filter log analyses by severity."""
+
+        return self.filter(severity=severity)
+
+    def critical(self) -> LogAnalysisQuerySet:
+        """Filter critical severity log analyses."""
+
+        return self.by_severity(LogAnalysis.Severity.CRITICAL.value)
+
+
+class LogAnalysisManager(QuerySetManager["LogAnalysis", LogAnalysisQuerySet]):
+    """Manager for log analysis queries."""
+
+    def __init__(self) -> None:
+        super().__init__(LogAnalysisQuerySet)
+
+    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+        return self.get_queryset().filter_by_date(analysis_date)
+
+    def older_than(self, days: int) -> LogAnalysisQuerySet:
+        return self.get_queryset().older_than(days)
+
+    def last_5_days(self, exclude_date: date | None = None) -> LogAnalysisQuerySet:
+        return self.get_queryset().last_5_days(exclude_date=exclude_date)
+
+    def unsent_emails(self) -> LogAnalysisQuerySet:
+        return self.get_queryset().unsent_emails()
+
+    def by_severity(self, severity: str) -> LogAnalysisQuerySet:
+        return self.get_queryset().by_severity(severity)
+
+    def critical(self) -> LogAnalysisQuerySet:
+        return self.get_queryset().critical()
+
+
+class SitemapAnalysisQuerySet(QuerySet["SitemapAnalysis"]):
+    """Query helpers for sitemap analyses."""
+
+    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+        """Filter sitemap analyses for a specific analysis date."""
+
+        return self.filter(analysis_date=analysis_date)
+
+    def older_than(self, days: int) -> SitemapAnalysisQuerySet:
+        """Filter sitemap analyses older than N days."""
+
+        cutoff = date.today() - timedelta(days=days)
+        return self.filter(analysis_date__lt=cutoff)
+
+    def last_5_days(
+        self,
+        exclude_date: date | None = None,
+    ) -> SitemapAnalysisQuerySet:
+        """Return sitemap analyses from the last five days, newest first."""
+
+        cutoff = date.today() - timedelta(days=5)
+        queryset = self.filter(analysis_date__gte=cutoff).order_by("-analysis_date")
+        if exclude_date is not None:
+            queryset = queryset.exclude(analysis_date=exclude_date)
+        return queryset
+
+    def unsent_emails(self) -> SitemapAnalysisQuerySet:
+        """Filter sitemap analyses where email has not been sent."""
+
+        return self.filter(email_sent=False)
+
+    def by_severity(self, severity: str) -> SitemapAnalysisQuerySet:
+        """Filter sitemap analyses by severity."""
+
+        return self.filter(severity=severity)
+
+    def critical(self) -> SitemapAnalysisQuerySet:
+        """Filter critical severity sitemap analyses."""
+
+        return self.by_severity(SitemapAnalysis.Severity.CRITICAL.value)
+
+
+class SitemapAnalysisManager(QuerySetManager["SitemapAnalysis", SitemapAnalysisQuerySet]):
+    """Manager for sitemap analysis queries."""
+
+    def __init__(self) -> None:
+        super().__init__(SitemapAnalysisQuerySet)
+
+    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().filter_by_date(analysis_date)
+
+    def older_than(self, days: int) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().older_than(days)
+
+    def last_5_days(self, exclude_date: date | None = None) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().last_5_days(exclude_date=exclude_date)
+
+    def unsent_emails(self) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().unsent_emails()
+
+    def by_severity(self, severity: str) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().by_severity(severity)
+
+    def critical(self) -> SitemapAnalysisQuerySet:
+        return self.get_queryset().critical()
+
+
+class LogAnalysis(DatabaseModel):
+    """Stored log-analysis report and execution state."""
+
+    class Severity(StrEnum):
+        INFO = "INFO"
+        WARNING = "WARNING"
+        CRITICAL = "CRITICAL"
+
+    objects: ClassVar[LogAnalysisManager] = LogAnalysisManager()
+
+    id = fields.IntField(
+        primary_key=True,
+        description="Database-generated integer id for this log analysis.",
+    )
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        db_index=True,
+        description="UTC timestamp when this log analysis row was created.",
+    )
+    analysis_date = fields.DateField(
+        unique=True,
+        db_index=True,
+        description="Calendar date this log analysis represents.",
+    )
+    mcp_artifact: fields.JSONField[dict[str, Any]] = fields.JSONField(
+        default=dict,
+        description="Opaque collect_logs artifact payload returned by MCP.",
+    )
+
+    status = fields.CharField(
+        max_length=20,
+        default=RunStatus.PENDING.value,
+        db_index=True,
+        description="Execution status for this log analysis job.",
+    )
+    started_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when this log analysis job started.",
+    )
+    finished_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when this log analysis job finished.",
+    )
+    failure_stage = fields.CharField(
+        max_length=80,
+        null=True,
+        description="Pipeline stage where this log analysis failed, if any.",
+    )
+    log_window_since = fields.DatetimeField(
+        null=True,
+        description="Start of the log collection time window requested from MCP.",
+    )
+    log_window_until = fields.DatetimeField(
+        null=True,
+        description="End of the log collection time window requested from MCP.",
+    )
+    mcp_collect_logs_id = fields.CharField(
+        max_length=255,
+        null=True,
+        description="Stable MCP collect_logs artifact id when MCP returns one.",
+    )
+    summary = fields.TextField(description="LLM-generated log analysis summary.")
+    severity = fields.CharField(
+        max_length=10,
+        default=Severity.INFO.value,
+        db_index=True,
+        description="LLM-classified severity for this log analysis.",
+    )
+    key_findings: fields.JSONField[list[str]] = fields.JSONField(
+        default=list,
+        description="List of important findings extracted from the log analysis.",
+    )
+    recommendations = fields.TextField(
+        default="",
+        description="LLM-generated operational recommendations.",
+    )
+    trend_summary = fields.TextField(
+        default="",
+        description="LLM-generated trend comparison against prior analyses.",
+    )
+    execution_time_seconds = fields.FloatField(
+        default=0.0,
+        description="Total wall-clock execution time for this log analysis job.",
+    )
+    gpt_tokens_used = fields.IntField(
+        default=0,
+        description="OpenAI token count used for this log analysis.",
+    )
+    gpt_cost_usd = fields.FloatField(
+        default=0.0,
+        description="Estimated OpenAI API cost in USD for this log analysis.",
+    )
+    email_sent = fields.BooleanField(
+        default=False,
+        db_index=True,
+        description="Whether the log analysis email was sent.",
+    )
+    error_message = fields.TextField(
+        default="",
+        description="Error message captured when this log analysis failed.",
+    )
+
+    class Meta:
+        table = "log_analyses"
+        ordering = ["-analysis_date"]
+
+    def __str__(self) -> str:
+        return f"Log Analysis {self.analysis_date} ({self.severity})"
+
+    @property
+    def execution_time_formatted(self) -> str:
+        """Return execution time formatted for reports."""
+
+        return f"{self.execution_time_seconds:.1f}"
+
+    def get_email_subject(self) -> str:
+        """Return the email subject for this log analysis."""
+
+        environment = settings.ENVIRONMENT.upper()
+        return f"[{environment}][{self.severity}] Daily Log Analysis - {self.analysis_date}"
+
+    def get_email_context(self) -> dict[str, object]:
+        """Return template context for this log analysis email."""
+
+        return {
+            "environment": settings.ENVIRONMENT,
+            "monitoring_project": settings.MONITORING_PROJECT,
+            "log_analysis": self,
+            "execution_time": self.execution_time_formatted,
+        }
+
+    async def mark_email_sent(self) -> None:
+        """Mark this log analysis email as sent."""
+
+        self.email_sent = True
+        await self.save(update_fields=["email_sent"])
+
+
+class SitemapAnalysis(DatabaseModel):
+    """Stored sitemap-analysis report and execution state."""
+
+    class Severity(StrEnum):
+        INFO = "INFO"
+        WARNING = "WARNING"
+        CRITICAL = "CRITICAL"
+
+    objects: ClassVar[SitemapAnalysisManager] = SitemapAnalysisManager()
+
+    id = fields.IntField(
+        primary_key=True,
+        description="Database-generated integer id for this sitemap analysis.",
+    )
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        db_index=True,
+        description="UTC timestamp when this sitemap analysis row was created.",
+    )
+    analysis_date = fields.DateField(
+        unique=True,
+        db_index=True,
+        description="Calendar date this sitemap analysis represents.",
+    )
+
+    status = fields.CharField(
+        max_length=20,
+        default=RunStatus.PENDING.value,
+        db_index=True,
+        description="Execution status for this sitemap analysis job.",
+    )
+    started_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when this sitemap analysis job started.",
+    )
+    finished_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when this sitemap analysis job finished.",
+    )
+    failure_stage = fields.CharField(
+        max_length=80,
+        null=True,
+        description="Pipeline stage where this sitemap analysis failed, if any.",
+    )
+    fetch_duration_seconds = fields.FloatField(
+        default=0.0,
+        description="Total time spent fetching and parsing sitemap data.",
+    )
+
+    root_sitemap_url = fields.CharField(
+        max_length=2048,
+        description="Root sitemap URL inspected by the sitemap analysis job.",
+    )
+    total_sitemaps = fields.IntField(
+        default=0,
+        description="Number of sitemap files discovered during analysis.",
+    )
+    total_urls = fields.IntField(
+        default=0,
+        description="Number of URLs discovered across all sitemap files.",
+    )
+    issue_summary: fields.JSONField[dict[str, int]] = fields.JSONField(
+        default=dict,
+        description="Structured summary of sitemap issues by category.",
+    )
+    issues: fields.JSONField[list[dict[str, Any]]] = fields.JSONField(
+        default=list,
+        description="Structured list of sitemap issues found by deterministic checks.",
+    )
+
+    summary = fields.TextField(description="LLM-generated sitemap analysis summary.")
+    severity = fields.CharField(
+        max_length=10,
+        default=Severity.INFO.value,
+        db_index=True,
+        description="LLM-classified severity for this sitemap analysis.",
+    )
+    key_findings: fields.JSONField[list[str]] = fields.JSONField(
+        default=list,
+        description="List of important findings extracted from the sitemap analysis.",
+    )
+    recommendations = fields.TextField(
+        default="",
+        description="LLM-generated sitemap recommendations.",
+    )
+    trend_summary = fields.TextField(
+        default="",
+        description="LLM-generated trend comparison against prior sitemap analyses.",
+    )
+
+    execution_time_seconds = fields.FloatField(
+        default=0.0,
+        description="Total wall-clock execution time for this sitemap analysis job.",
+    )
+    gpt_tokens_used = fields.IntField(
+        default=0,
+        description="OpenAI token count used for this sitemap analysis.",
+    )
+    gpt_cost_usd = fields.FloatField(
+        default=0.0,
+        description="Estimated OpenAI API cost in USD for this sitemap analysis.",
+    )
+    email_sent = fields.BooleanField(
+        default=False,
+        db_index=True,
+        description="Whether the sitemap analysis email was sent.",
+    )
+    error_message = fields.TextField(
+        default="",
+        description="Error message captured when this sitemap analysis failed.",
+    )
+
+    class Meta:
+        table = "sitemap_analyses"
+        ordering = ["-analysis_date"]
+
+    def __str__(self) -> str:
+        return f"Sitemap Analysis {self.analysis_date} ({self.severity})"
+
+    @property
+    def execution_time_formatted(self) -> str:
+        """Return execution time formatted for reports."""
+
+        return f"{self.execution_time_seconds:.1f}"
+
+    @property
+    def issue_count(self) -> int:
+        """Return the number of deterministic sitemap issues."""
+
+        return len(self.issues)
+
+    @property
+    def issue_summary_lines(self) -> list[str]:
+        """Return issue summary lines formatted for reports."""
+
+        lines: list[str] = []
+        for category, count in sorted(self.issue_summary.items()):
+            lines.append(f"{category.replace('_', ' ')}: {count}")
+        return lines
+
+    def get_email_subject(self) -> str:
+        """Return the email subject for this sitemap analysis."""
+
+        environment = settings.ENVIRONMENT.upper()
+        return f"[{environment}][{self.severity}] Sitemap Analysis - {self.analysis_date}"
+
+    def get_email_context(self) -> dict[str, object]:
+        """Return template context for this sitemap analysis email."""
+
+        return {
+            "environment": settings.ENVIRONMENT,
+            "monitoring_project": settings.MONITORING_PROJECT,
+            "sitemap_analysis": self,
+            "execution_time": self.execution_time_formatted,
+        }
+
+    async def mark_email_sent(self) -> None:
+        """Mark this sitemap analysis email as sent."""
+
+        self.email_sent = True
+        await self.save(update_fields=["email_sent"])

@@ -1,0 +1,107 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: https://github.com/pycqa/isort
+    rev: 9.0.0a3
+    hooks:
+      - id: isort
+        args: ["--settings-path", "pyproject.toml"]
+
+  - repo: https://github.com/psf/black
+    rev: 26.5.1
+    hooks:
+      - id: black
+        args: ["--config", "pyproject.toml"]
+        language_version: python3.13
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.13
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache uv run mypy --explicit-package-bases src
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: safety
+        name: safety
+        entry: >-
+          env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache
+          bash -c 'if [ -z "${SAFETY_API_KEY:-}" ] && [ -x /usr/bin/security ]; then
+          export SAFETY_API_KEY="$(/usr/bin/security find-generic-password -s SAFETY_API_KEY -w 2>/dev/null)";
+          fi &&
+          if [ -z "${SAFETY_API_KEY:-}" ]; then
+            echo "SAFETY_API_KEY is required for the safety pre-commit hook. Set it in your shell or store it in macOS Keychain as SAFETY_API_KEY." >&2;
+            exit 1;
+          fi &&
+          project_file=".safety-project.ini" &&
+          policy_file=".safety-policy.yml" &&
+          project_backup="$(mktemp)" &&
+          policy_backup="$(mktemp)" &&
+          had_project=0 &&
+          had_policy=0 &&
+          if [ -f "$project_file" ]; then cp "$project_file" "$project_backup" && had_project=1; fi &&
+          if [ -f "$policy_file" ]; then cp "$policy_file" "$policy_backup" && had_policy=1; fi &&
+          cleanup() {
+            if [ "$had_project" -eq 1 ]; then
+              cp "$project_backup" "$project_file";
+            else
+              rm -f "$project_file";
+            fi;
+            if [ "$had_policy" -eq 1 ]; then
+              cp "$policy_backup" "$policy_file";
+            else
+              rm -f "$policy_file";
+            fi;
+            rm -f "$project_backup" "$policy_backup";
+          } &&
+          trap cleanup EXIT &&
+          uv run safety --stage cicd scan --target .'
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+        always_run: false
+        stages: [pre-commit]
+
+      - id: pip-audit
+        name: pip-audit
+        entry: >-
+          env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache
+          bash -c 'requirements_file="$(mktemp)" &&
+          cleanup() { rm -f "$requirements_file"; } &&
+          trap cleanup EXIT &&
+          uv export --frozen --no-dev --no-emit-project --no-hashes > "$requirements_file" &&
+          grep -v "^pip==" "$requirements_file" > "$requirements_file.filtered" &&
+          mv "$requirements_file.filtered" "$requirements_file" &&
+          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip'
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+        always_run: false
+        stages: [pre-commit]
+
+      - id: pytest-pre-commit
+        name: pytest (pre-commit)
+        entry: env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache uv run test
+        language: system
+        pass_filenames: false
+        files: ^(src/|pyproject\.toml|uv\.lock)$
+        stages: [pre-commit]
+
+exclude: ^migrations/
