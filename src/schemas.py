@@ -371,10 +371,10 @@ class LogAnalysisPromptContext(BaseModel):
 
     analysis_date: date
     workflow_name: str
-    current_phase: Literal["inspect_collected_logs"]
+    current_phase: Literal["inspect_collected_logs", "final_report"]
     completed_steps: list[str]
     allowed_actions: list[Literal["call_tools", "final_report"]]
-    next_required_action: Literal["call_tools"]
+    next_required_action: Literal["call_tools", "final_report"]
     final_report_allowed: bool
     available_projects: list[ProjectManifestSummary] = Field(default_factory=list)
     mandatory_skills: list[WorkflowSkillContent]
@@ -405,14 +405,37 @@ class LogAnalysisPreparedPrompt(BaseModel):
         return self.context.model_dump_json(indent=2)
 
 
+class LogAnalysisFinalReport(BaseModel):
+    """Validated final JSON report returned by the log-analysis LLM call.
+
+    Phase 2A intentionally stops at a single LLM request, so this is the
+    boundary contract between free-form model output and persisted monitoring
+    state. The LLM may reason from the deterministic MCP artifact, but only this
+    validated report shape is allowed to update the database summary fields.
+    """
+
+    action: Literal["final_report"]
+    summary: str
+    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    key_findings: list[str]
+    recommendations: str
+    trend_summary: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class LogAnalysisAgentContext(BaseModel):
     """Agent context assembled before the first log-analysis LLM call."""
 
     workflow: WorkflowBootstrap
     collect_logs: CollectLogsArtifact
     prompt: LogAnalysisPreparedPrompt
+    final_report: LogAnalysisFinalReport
     log_window_since: datetime
     log_window_until: datetime
+    llm_tokens_used: int = 0
+    llm_cost_usd: float = 0.0
+    llm_report_execution_time_seconds: float = 0.0
 
 
 class LogAnalysisIn(BaseModel):

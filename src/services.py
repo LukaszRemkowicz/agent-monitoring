@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from agents import MonitoringWorkflowAgent
@@ -27,9 +28,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 LOG_WORKFLOW_STARTED_SUMMARY = "Workflow preparation started."
-LOG_WORKFLOW_READY_SUMMARY = (
-    "Log artifact collected and prompt prepared; LLM analysis is not implemented yet."
-)
 SITEMAP_WORKFLOW_STARTED_SUMMARY = "Sitemap workflow preparation started."
 SITEMAP_WORKFLOW_READY_SUMMARY = "Sitemap analysis workflow record prepared."
 
@@ -77,6 +75,7 @@ class LogAnalysisService:
     ) -> LogAnalysisWorkflowResult:
         """Run the log-analysis workflow through the monitoring agent."""
 
+        execution_started_at: float = monotonic()
         logger.info(
             "preparing log-analysis workflow",
             extra={
@@ -121,22 +120,32 @@ class LogAnalysisService:
                 log_window=log_window,
             )
         except Exception as exc:
+            execution_time_seconds: float = round(monotonic() - execution_started_at, 3)
             await self.repository.update(
                 analysis,
                 status=RunStatus.FAILED,
                 finished_at=datetime.now(UTC),
-                failure_stage="workflow_bootstrap",
+                failure_stage="log_analysis",
                 error_message=str(exc),
+                execution_time_seconds=execution_time_seconds,
             )
             raise
+        execution_time_seconds = round(monotonic() - execution_started_at, 3)
         updated_analysis: LogAnalysisOut = await self.repository.update(
             analysis,
             status=RunStatus.SUCCEEDED,
             finished_at=datetime.now(UTC),
-            summary=LOG_WORKFLOW_READY_SUMMARY,
+            summary=agent_context.final_report.summary,
+            severity=agent_context.final_report.severity,
+            key_findings=agent_context.final_report.key_findings,
+            recommendations=agent_context.final_report.recommendations,
+            trend_summary=agent_context.final_report.trend_summary,
             mcp_artifact=agent_context.model_dump(mode="json"),
             log_window_since=log_window.since_datetime,
             log_window_until=log_window.until_datetime,
+            gpt_tokens_used=agent_context.llm_tokens_used,
+            gpt_cost_usd=agent_context.llm_cost_usd,
+            execution_time_seconds=execution_time_seconds,
         )
         logger.info(
             "prepared log-analysis workflow",
@@ -144,6 +153,7 @@ class LogAnalysisService:
                 "event": "log_analysis_workflow_prepare_done",
                 "workflow_name": agent_context.workflow.workflow_name,
                 "tool_count": len(agent_context.workflow.tools),
+                "execution_time_seconds": execution_time_seconds,
             },
         )
         return LogAnalysisWorkflowResult(analysis=updated_analysis, agent_context=agent_context)

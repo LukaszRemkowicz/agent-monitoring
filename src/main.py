@@ -51,19 +51,22 @@ async def log_analysis(
     )
     workflow = result.workflow
     collect_logs = result.collect_logs
+    final_report = result.agent_context.final_report
     typer.echo(
-        "Prepared log-analysis prompt "
+        "Completed log-analysis report "
         f"{workflow.workflow_name} "
         f"(mandatory_skills={len(workflow.mandatory_skills)}, "
         f"optional_skills={len(workflow.optional_skills)}, "
         f"tools={len(workflow.tools)}, "
         f"collected_projects={len(collect_logs.projects)}, "
+        f"severity={final_report.severity}, "
         f"analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
-    typer.echo("\nPrepared LLM system prompt:")
-    typer.echo(result.prepared_prompt.system_prompt)
-    typer.echo("\nPrepared LLM user prompt:")
-    typer.echo(result.prepared_prompt.user_prompt)
+    typer.echo(f"Summary: {final_report.summary}")
+    typer.echo(f"Key findings: {len(final_report.key_findings)}")
+    typer.echo(f"Recommendations: {final_report.recommendations}")
+    typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")
+    typer.echo(f"Execution time: {result.analysis.execution_time_seconds:.2f}s")
 
 
 @app.command("sitemap-analysis")

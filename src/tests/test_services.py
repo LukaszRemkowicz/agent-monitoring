@@ -3,6 +3,7 @@ from datetime import UTC, date, datetime
 import pytest
 from llm_core.protocols import LLMProvider
 from llm_core.providers.mock import MockProvider
+from pytest_mock import MockerFixture
 
 from agents import MonitoringWorkflowAgent
 from conf import Settings
@@ -12,6 +13,7 @@ from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisFinalReport,
     LogAnalysisIn,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
@@ -62,7 +64,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
             context=LogAnalysisPromptContext(
                 analysis_date=analysis_date,
                 workflow_name=workflow.workflow_name,
-                current_phase="inspect_collected_logs",
+                current_phase="final_report",
                 completed_steps=[
                     "analyze_daily_log_bundle",
                     "read_mandatory_skills",
@@ -111,8 +113,19 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
             workflow=workflow,
             collect_logs=collect_logs,
             prompt=prompt,
+            final_report=LogAnalysisFinalReport(
+                action="final_report",
+                summary="Landingpage logs are healthy.",
+                severity="INFO",
+                key_findings=["No critical incidents found."],
+                recommendations="Keep watching the backend logs.",
+                trend_summary="No prior trend data was available.",
+            ),
             log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
             log_window_until=datetime(2026, 5, 20, tzinfo=UTC),
+            llm_tokens_used=123,
+            llm_cost_usd=0.02,
+            llm_report_execution_time_seconds=4.32,
         )
 
 
@@ -263,9 +276,14 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
         "workflow/landingpage/latest"
     )
     assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
-    assert repository.saved[0]["summary"] == (
-        "Log artifact collected and prompt prepared; LLM analysis is not implemented yet."
-    )
+    assert repository.saved[0]["summary"] == "Landingpage logs are healthy."
+    assert repository.saved[0]["severity"] == "INFO"
+    assert repository.saved[0]["key_findings"] == ["No critical incidents found."]
+    assert repository.saved[0]["recommendations"] == "Keep watching the backend logs."
+    assert repository.saved[0]["trend_summary"] == "No prior trend data was available."
+    assert repository.saved[0]["gpt_tokens_used"] == 123
+    assert repository.saved[0]["gpt_cost_usd"] == 0.02
+    assert result.agent_context.llm_report_execution_time_seconds == 4.32
 
 
 @pytest.mark.asyncio
@@ -286,7 +304,7 @@ async def test_log_analysis_service_records_failure_state() -> None:
         )
 
     assert repository.saved[0]["status"] == RunStatus.FAILED.value
-    assert repository.saved[0]["failure_stage"] == "workflow_bootstrap"
+    assert repository.saved[0]["failure_stage"] == "log_analysis"
     assert repository.saved[0]["error_message"] == "MCP unavailable"
 
 
@@ -367,6 +385,31 @@ def test_log_analysis_service_default_agent_uses_configured_llm_provider() -> No
     )
 
     assert isinstance(service.agent.llm_provider, MockProvider)
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_service_records_execution_time(
+    mocker: MockerFixture,
+) -> None:
+    agent = FakeWorkflowAgent()
+    repository = FakeLogAnalysisRepository()
+    service = LogAnalysisService(
+        agent=agent,
+        mcp_client=FakeMcpClient(),
+        repository=repository,
+    )
+    monotonic = mocker.patch("services.monotonic", side_effect=[100.0, 103.25])
+
+    result = await service.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
+        force=False,
+        send_email=True,
+    )
+
+    assert monotonic.call_count == 2
+    assert result.analysis.execution_time_seconds == 3.25
+    assert repository.saved[-1]["execution_time_seconds"] == 3.25
 
 
 @pytest.mark.asyncio

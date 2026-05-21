@@ -7,6 +7,7 @@ from socket import gaierror
 from typing import Any, ParamSpec, TypeVar, overload
 
 import click
+from llm_core.exceptions import ProviderConfigurationError, ProviderExecutionError
 from tortoise.exceptions import DBConnectionError, IntegrityError
 
 from conf import settings
@@ -98,6 +99,36 @@ def db[**P, T](
                     "MCP call failed "
                     f"(tool={exc.tool_name or 'unknown'}, url={exc.mcp_url or 'unknown'}). "
                     f"Reason: {exc}.{hint}"
+                ) from None
+            except ProviderConfigurationError as exc:
+                logger.error(
+                    "LLM provider configuration failed",
+                    extra={
+                        "event": "llm_provider_configuration_failed",
+                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "error": str(exc),
+                    },
+                )
+                raise click.ClickException(
+                    "LLM provider configuration failed "
+                    f"(provider={settings.MONITORING_LLM_PROVIDER}). "
+                    f"Reason: {exc}. "
+                    "Check OPENAI_API_KEY in .env, Doppler, or the shell. "
+                    "The variable name must be OPENAI_API_KEY, not OPEN_API_KEY."
+                ) from None
+            except ProviderExecutionError as exc:
+                logger.error(
+                    "LLM provider request failed",
+                    extra={
+                        "event": "llm_provider_request_failed",
+                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "error": str(exc),
+                    },
+                )
+                raise click.ClickException(
+                    "LLM provider request failed "
+                    f"(provider={settings.MONITORING_LLM_PROVIDER}). "
+                    f"Reason: {exc}."
                 ) from None
 
         return wrapper

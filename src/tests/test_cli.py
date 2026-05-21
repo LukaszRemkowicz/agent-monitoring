@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 import typer
 from click import unstyle
+from llm_core.exceptions import ProviderConfigurationError
 from pytest_mock import MockerFixture
 from tortoise.exceptions import IntegrityError
 from typer.testing import CliRunner
@@ -21,6 +22,7 @@ from exceptions import McpClientError
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisFinalReport,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
     LogAnalysisPromptContext,
@@ -44,7 +46,12 @@ def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=analysis_date,
         status="succeeded",
-        summary="Workflow bundle loaded.",
+        summary="Landingpage logs are healthy.",
+        severity="INFO",
+        key_findings=["No critical incidents found."],
+        recommendations="Keep watching the backend logs.",
+        trend_summary="No prior trend data was available.",
+        execution_time_seconds=3.25,
     )
 
 
@@ -72,7 +79,7 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                 context=LogAnalysisPromptContext(
                     analysis_date=analysis_date,
                     workflow_name=workflow.workflow_name,
-                    current_phase="inspect_collected_logs",
+                    current_phase="final_report",
                     completed_steps=[
                         "analyze_daily_log_bundle",
                         "read_mandatory_skills",
@@ -80,8 +87,8 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                         "collect_logs",
                     ],
                     allowed_actions=["call_tools", "final_report"],
-                    next_required_action="call_tools",
-                    final_report_allowed=False,
+                    next_required_action="final_report",
+                    final_report_allowed=True,
                     available_projects=[
                         ProjectManifestSummary(
                             project_name="landingpage",
@@ -112,8 +119,19 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                     ],
                 ),
             ),
+            final_report=LogAnalysisFinalReport(
+                action="final_report",
+                summary="Landingpage logs are healthy.",
+                severity="INFO",
+                key_findings=["No critical incidents found."],
+                recommendations="Keep watching the backend logs.",
+                trend_summary="No prior trend data was available.",
+            ),
             log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
             log_window_until=datetime(2026, 5, 20, tzinfo=UTC),
+            llm_tokens_used=123,
+            llm_cost_usd=0.02,
+            llm_report_execution_time_seconds=4.32,
         ),
     )
 
@@ -173,12 +191,13 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
-    assert "Prepared log-analysis prompt analyze_daily_log_bundle" in result.output
-    assert "Prepared LLM system prompt:" in result.output
-    assert "Prompt" in result.output
-    assert "Prepared LLM user prompt:" in result.output
-    assert '"analysis_date": "2026-05-19"' in result.output
-    assert '"collection": {' in result.output
+    assert "Completed log-analysis report analyze_daily_log_bundle" in result.output
+    assert "severity=INFO" in result.output
+    assert "Summary: Landingpage logs are healthy." in result.output
+    assert "Key findings: 1" in result.output
+    assert "Recommendations: Keep watching the backend logs." in result.output
+    assert "LLM report time: 4.32s" in result.output
+    assert "Execution time: 3.25s" in result.output
     assert fake_service.calls[0] == {
         "analysis_date": date(2026, 5, 19),
         "log_window": {
@@ -631,6 +650,46 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     assert "Check LOG_ANALYSIS_MCP_URL" not in output
     assert "MCP_WORKFLOW_JWT" not in output
     assert "MCP server is running" not in output
+
+
+def test_db_decorator_formats_llm_provider_configuration_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise ProviderConfigurationError("OpenAI API key is required when no client is injected")
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "LLM provider configuration failed" in output
+    assert "OpenAI API" in output
+    assert "key is required" in output
+    assert "OPENAI_API_KEY" in output
+    assert "OPEN_API_KEY" in output
+    assert "Traceback" not in output
 
 
 def test_makemigrations_runs_aerich_migrate_and_numbers_file(
