@@ -22,7 +22,8 @@ services:
       dockerfile: Dockerfile
       target: development
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
@@ -51,7 +52,8 @@ services:
       dockerfile: Dockerfile
       target: development
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
