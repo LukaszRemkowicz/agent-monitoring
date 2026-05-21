@@ -3,7 +3,7 @@ from __future__ import annotations
 from llm_core.protocols import LLMProvider
 
 from logging_config import get_logger
-from protocols import WorkflowBundleClient
+from mcp import McpWorkflowClient
 from schemas import WorkflowBootstrap
 
 logger = get_logger(__name__)
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 class MonitoringWorkflowAgent:
     """Agent boundary for MCP-backed monitoring workflow bootstrap calls."""
 
-    def __init__(self, mcp_client: WorkflowBundleClient, llm_provider: LLMProvider) -> None:
+    def __init__(self, mcp_client: McpWorkflowClient, llm_provider: LLMProvider) -> None:
         self.mcp_client = mcp_client
         self.llm_provider = llm_provider
 

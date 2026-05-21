@@ -2,11 +2,16 @@ import pytest
 from llm_core.providers.mock import MockProvider
 
 from agents import MonitoringWorkflowAgent
+from mcp import McpWorkflowClient
 from schemas import WorkflowBootstrap
 
 
-class FakeMcpWorkflowClient:
+class FakeMcpWorkflowClient(McpWorkflowClient):
     def __init__(self) -> None:
+        super().__init__(
+            base_url="http://mcp.test/mcp",
+            workflow_jwt="test-workflow-jwt",
+        )
         self.calls: list[str] = []
 
     async def get_workflow_bundle(self) -> WorkflowBootstrap:

@@ -3,42 +3,35 @@
 Standalone background monitoring app for the externalized log and sitemap
 analysis workflow.
 
-## Roadmap
+## Current Scope
 
-### Phase 0 - Done
+The app currently provides the runtime foundation for monitoring workflows:
 
-Phase 0 is complete. It intentionally contains only the project skeleton:
-
-- Python source layout directly under `src`
-- explicit environment-backed settings
-- Tortoise models and migration helpers under `src/db`
-- Typer command entrypoints for `log_analysis`, `sitemap-analysis`, and
-  `check-mcp`
-- Docker Compose with PostgreSQL and a one-shot `monitoring-app` service
-- pytest-based test runner
-- pre-commit, CI/CD, Docker production target, and release scripts
-
-### Phase 1 - Application Layers
-
-Phase 1 should introduce the application boundaries needed before real
-monitoring workflows are implemented:
-
-- add service modules that own business workflows for log and sitemap analysis
-- add repository/query modules for database reads and writes, keeping Tortoise
+- service modules own business workflows for log and sitemap analysis
+- repository/query modules own database reads and writes, keeping Tortoise
   calls out of command handlers
-- make Typer commands thin orchestrators that parse options, open database
+- Typer commands are thin orchestrators that parse options, open database
   lifecycle, call services, and format command output
-- define typed input/result objects for command options and service responses
-- wire the shared `llm-core` provider boundary without making live analysis
+- typed result objects describe service responses
+- the shared `llm-core` provider boundary is wired without making live analysis
   requests yet
-- keep the real workflow intelligence inside `src/agents.py`; services prepare
+- real workflow intelligence stays inside `src/agents.py`; services prepare
   application state and agents own MCP bootstrap and future LLM/tool loops
-- add tests around service behavior and repository contracts without calling
+- tests cover service behavior and repository contracts without calling
   external MCP tools yet
+- Docker Compose, CI/CD, pre-commit, production image builds, and release
+  scripts support local and production operation
 
-Phase 1 should not collect real MCP logs, make a real LLM analysis request, or
-send email. Those are later workflow phases once the internal boundaries are
-stable.
+The app does not collect logs itself. MCP remains the source of truth for log
+collection and artifact creation. The app does not yet request MCP artifacts,
+make a real LLM analysis request, or send email. The next monitoring workflow
+work should:
+
+- call deterministic MCP tools to request log and sitemap artifacts
+- persist MCP artifact payloads and failure state on analysis records
+- pass collected artifacts into the monitoring agent for LLM analysis
+- save summaries, findings, severity, recommendations, and token/cost metadata
+- send report emails through a dedicated notification boundary
 
 Runtime settings are exposed through `src/conf.py`, following
 the Django-style `settings` pattern. Tortoise models live in

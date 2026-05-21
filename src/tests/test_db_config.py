@@ -1,6 +1,7 @@
 from typing import Any
 
 import pytest
+from pytest_mock import MockerFixture
 
 from conf import Settings
 from db.config import build_database_url, build_tortoise_config
@@ -46,7 +47,7 @@ def test_build_database_url_escapes_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_database_lifecycle_initializes_and_closes_tortoise(
-    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
 ) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -59,8 +60,8 @@ async def test_database_lifecycle_initializes_and_closes_tortoise(
     from db import lifecycle
     from db.lifecycle import close_database, initialize_database
 
-    monkeypatch.setattr(lifecycle.Tortoise, "init", fake_init)
-    monkeypatch.setattr(
+    mocker.patch.object(lifecycle.Tortoise, "init", fake_init)
+    mocker.patch.object(
         lifecycle.Tortoise,
         "close_connections",
         fake_close_connections,
@@ -79,7 +80,7 @@ async def test_database_lifecycle_initializes_and_closes_tortoise(
 
 @pytest.mark.asyncio
 async def test_database_lifespan_wraps_initialization_and_shutdown(
-    monkeypatch: pytest.MonkeyPatch,
+    mocker: MockerFixture,
 ) -> None:
     calls: list[str] = []
 
@@ -92,9 +93,9 @@ async def test_database_lifespan_wraps_initialization_and_shutdown(
     from db import lifecycle
     from db.lifecycle import database_lifespan
 
-    monkeypatch.setattr(lifecycle, "initialize_database", fake_initialize_database)
-    monkeypatch.setattr(lifecycle, "close_database", fake_close_database)
-    monkeypatch.setattr(
+    mocker.patch.object(lifecycle, "initialize_database", fake_initialize_database)
+    mocker.patch.object(lifecycle, "close_database", fake_close_database)
+    mocker.patch.object(
         lifecycle,
         "TORTOISE_ORM",
         {"connections": {"default": "postgres://user:pass@db:5432/monitoring"}},

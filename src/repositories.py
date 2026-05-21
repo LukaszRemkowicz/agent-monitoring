@@ -7,6 +7,7 @@ from tortoise.queryset import QuerySet
 
 from db.models import LogAnalysis, SitemapAnalysis
 from logging_config import get_logger
+from schemas import LogAnalysisIn, LogAnalysisOut, SitemapAnalysisIn, SitemapAnalysisOut
 
 logger = get_logger(__name__)
 
@@ -29,7 +30,29 @@ class LogAnalysisRepository:
         )
         return await self.filter(**filters).exists()
 
-    async def get_by_date(self, analysis_date: date) -> LogAnalysis | None:
+    async def create(self, data: LogAnalysisIn) -> LogAnalysisOut:
+        logger.debug(
+            "creating log analysis",
+            extra={
+                "event": "log_analysis_repository_create",
+                "analysis_date": str(data.analysis_date),
+            },
+        )
+        analysis = await self.model.objects.create(**data.model_dump())
+        return LogAnalysisOut.from_model(analysis)
+
+    async def update(self, analysis: LogAnalysisOut, **updates: Any) -> LogAnalysisOut:
+        data = analysis.model_dump(exclude={"id", "created_at"})
+        data.update(updates)
+        update_contract = LogAnalysisIn.model_validate(data)
+        analysis_model = await self.model.get(id=analysis.id)
+        update_data = update_contract.model_dump()
+        for field_name, value in update_data.items():
+            setattr(analysis_model, field_name, value)
+        await analysis_model.save(update_fields=list(update_data))
+        return LogAnalysisOut.from_model(analysis_model)
+
+    async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
         logger.debug(
             "fetching log analysis by date",
             extra={
@@ -37,7 +60,10 @@ class LogAnalysisRepository:
                 "analysis_date": str(analysis_date),
             },
         )
-        return await self.model.objects.filter_by_date(analysis_date).first()
+        analysis = await self.model.objects.filter_by_date(analysis_date).first()
+        if analysis is None:
+            return None
+        return LogAnalysisOut.from_model(analysis)
 
 
 class SitemapAnalysisRepository:
@@ -58,7 +84,29 @@ class SitemapAnalysisRepository:
         )
         return await self.filter(**filters).exists()
 
-    async def get_by_date(self, analysis_date: date) -> SitemapAnalysis | None:
+    async def create(self, data: SitemapAnalysisIn) -> SitemapAnalysisOut:
+        logger.debug(
+            "creating sitemap analysis",
+            extra={
+                "event": "sitemap_analysis_repository_create",
+                "analysis_date": str(data.analysis_date),
+            },
+        )
+        analysis = await self.model.objects.create(**data.model_dump())
+        return SitemapAnalysisOut.from_model(analysis)
+
+    async def update(self, analysis: SitemapAnalysisOut, **updates: Any) -> SitemapAnalysisOut:
+        data = analysis.model_dump(exclude={"id", "created_at"})
+        data.update(updates)
+        update_contract = SitemapAnalysisIn.model_validate(data)
+        analysis_model = await self.model.get(id=analysis.id)
+        update_data = update_contract.model_dump()
+        for field_name, value in update_data.items():
+            setattr(analysis_model, field_name, value)
+        await analysis_model.save(update_fields=list(update_data))
+        return SitemapAnalysisOut.from_model(analysis_model)
+
+    async def get_by_date(self, analysis_date: date) -> SitemapAnalysisOut | None:
         logger.debug(
             "fetching sitemap analysis by date",
             extra={
@@ -66,4 +114,7 @@ class SitemapAnalysisRepository:
                 "analysis_date": str(analysis_date),
             },
         )
-        return await self.model.objects.filter_by_date(analysis_date).first()
+        analysis = await self.model.objects.filter_by_date(analysis_date).first()
+        if analysis is None:
+            return None
+        return SitemapAnalysisOut.from_model(analysis)

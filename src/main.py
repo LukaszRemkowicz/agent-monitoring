@@ -7,7 +7,7 @@ import typer
 from conf import settings
 from decorators import as_async, db
 from logging_config import get_logger
-from services import LogAnalysisService
+from services import LogAnalysisService, SitemapAnalysisService
 
 app = typer.Typer(
     name="monitoring",
@@ -77,10 +77,16 @@ async def sitemap_analysis(
         help="Send the sitemap email when the future job succeeds.",
     ),
 ) -> None:
-    """Phase 0 placeholder for the scheduled sitemap analysis job."""
+    """Prepare the sitemap analysis workflow record."""
     parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
+    service = SitemapAnalysisService.create_default()
+    await service.run_sitemap_analysis(
+        analysis_date=parsed_analysis_date,
+        force=force,
+        send_email=send_email,
+    )
     typer.echo(
-        "sitemap-analysis is not implemented beyond Phase 0 "
+        "Prepared sitemap analysis record "
         f"(analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
 

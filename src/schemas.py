@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -144,6 +145,128 @@ class McpServiceStatusResponse(BaseModel):
     error: McpToolError | None = None
 
 
+class LogAnalysisIn(BaseModel):
+    """Validated data passed from services into the log-analysis repository."""
+
+    analysis_date: date
+    mcp_artifact: dict[str, Any] = Field(default_factory=dict)
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure_stage: str | None = None
+    log_window_since: datetime | None = None
+    log_window_until: datetime | None = None
+    mcp_collect_logs_id: str | None = None
+    summary: str
+    severity: str = "INFO"
+    key_findings: list[str] = Field(default_factory=list)
+    recommendations: str = ""
+    trend_summary: str = ""
+    execution_time_seconds: float = 0.0
+    gpt_tokens_used: int = 0
+    gpt_cost_usd: float = 0.0
+    email_sent: bool = False
+    error_message: str = ""
+
+
+class LogAnalysisOut(LogAnalysisIn):
+    """Validated log-analysis data returned by the repository layer."""
+
+    id: int
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, analysis: Any) -> LogAnalysisOut:
+        return cls.model_validate(
+            {
+                "id": analysis.id,
+                "created_at": analysis.created_at,
+                "analysis_date": analysis.analysis_date,
+                "mcp_artifact": analysis.mcp_artifact,
+                "status": analysis.status,
+                "started_at": analysis.started_at,
+                "finished_at": analysis.finished_at,
+                "failure_stage": analysis.failure_stage,
+                "log_window_since": analysis.log_window_since,
+                "log_window_until": analysis.log_window_until,
+                "mcp_collect_logs_id": analysis.mcp_collect_logs_id,
+                "summary": analysis.summary,
+                "severity": analysis.severity,
+                "key_findings": analysis.key_findings,
+                "recommendations": analysis.recommendations,
+                "trend_summary": analysis.trend_summary,
+                "execution_time_seconds": analysis.execution_time_seconds,
+                "gpt_tokens_used": analysis.gpt_tokens_used,
+                "gpt_cost_usd": analysis.gpt_cost_usd,
+                "email_sent": analysis.email_sent,
+                "error_message": analysis.error_message,
+            }
+        )
+
+
+class SitemapAnalysisIn(BaseModel):
+    """Validated data passed from services into the sitemap-analysis repository."""
+
+    analysis_date: date
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    failure_stage: str | None = None
+    fetch_duration_seconds: float = 0.0
+    root_sitemap_url: str
+    total_sitemaps: int = 0
+    total_urls: int = 0
+    issue_summary: dict[str, int] = Field(default_factory=dict)
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    summary: str
+    severity: str = "INFO"
+    key_findings: list[str] = Field(default_factory=list)
+    recommendations: str = ""
+    trend_summary: str = ""
+    execution_time_seconds: float = 0.0
+    gpt_tokens_used: int = 0
+    gpt_cost_usd: float = 0.0
+    email_sent: bool = False
+    error_message: str = ""
+
+
+class SitemapAnalysisOut(SitemapAnalysisIn):
+    """Validated sitemap-analysis data returned by the repository layer."""
+
+    id: int
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, analysis: Any) -> SitemapAnalysisOut:
+        return cls.model_validate(
+            {
+                "id": analysis.id,
+                "created_at": analysis.created_at,
+                "analysis_date": analysis.analysis_date,
+                "status": analysis.status,
+                "started_at": analysis.started_at,
+                "finished_at": analysis.finished_at,
+                "failure_stage": analysis.failure_stage,
+                "fetch_duration_seconds": analysis.fetch_duration_seconds,
+                "root_sitemap_url": analysis.root_sitemap_url,
+                "total_sitemaps": analysis.total_sitemaps,
+                "total_urls": analysis.total_urls,
+                "issue_summary": analysis.issue_summary,
+                "issues": analysis.issues,
+                "summary": analysis.summary,
+                "severity": analysis.severity,
+                "key_findings": analysis.key_findings,
+                "recommendations": analysis.recommendations,
+                "trend_summary": analysis.trend_summary,
+                "execution_time_seconds": analysis.execution_time_seconds,
+                "gpt_tokens_used": analysis.gpt_tokens_used,
+                "gpt_cost_usd": analysis.gpt_cost_usd,
+                "email_sent": analysis.email_sent,
+                "error_message": analysis.error_message,
+            }
+        )
+
+
 class LogAnalysisWorkflowResult(BaseModel):
     """Service-level result returned by the log-analysis workflow preparation.
 
@@ -152,4 +275,11 @@ class LogAnalysisWorkflowResult(BaseModel):
     bundle.
     """
 
+    analysis: LogAnalysisOut
     workflow: WorkflowBootstrap
+
+
+class SitemapAnalysisWorkflowResult(BaseModel):
+    """Service-level result returned by sitemap-analysis workflow preparation."""
+
+    analysis: SitemapAnalysisOut

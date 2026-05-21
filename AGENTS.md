@@ -69,8 +69,6 @@ Top-level and important paths:
   `src/schemas.py`.
 - `src/schemas.py`
   Pydantic contracts for MCP payloads, JSON-RPC envelopes, and service results.
-- `src/protocols.py`
-  Protocols for boundary interfaces used by services and agents.
 - `src/repositories.py`
   Database access boundaries. Keep Tortoise ORM calls out of command handlers.
 - `src/db/models.py`
@@ -172,7 +170,9 @@ simple concrete project type is available.
 - Keep Tortoise calls inside repositories, managers, or querysets.
 - Keep MCP HTTP/JSON-RPC transport details inside `src/mcp.py`.
 - Keep Pydantic payload contracts in `src/schemas.py`.
-- Keep boundary protocols in `src/protocols.py`.
+- Prefer concrete app dependencies in services and agents unless there are
+  multiple real production implementations. This keeps Python IDE navigation
+  useful. Add ABCs or protocols only when they clarify a real boundary.
 - Keep business workflow orchestration in services.
 - Keep real agent behavior in `src/agents.py`.
 - For monitoring work, remember the hard boundary: deterministic code gathers
