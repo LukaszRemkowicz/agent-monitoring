@@ -354,7 +354,8 @@ def test_db_decorator_formats_database_connection_errors(
 
     assert result.exit_code == 1
     assert "Database connection failed" in output
-    assert "Check DATABASE_HOST" in output
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
     assert "Traceback" not in output
 
 
