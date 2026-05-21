@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING
 
 from agents import MonitoringWorkflowAgent
@@ -11,14 +11,15 @@ from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
+    LogAnalysisAgentContext,
     LogAnalysisIn,
     LogAnalysisOut,
     LogAnalysisWorkflowResult,
+    LogCollectionWindow,
     McpServiceStatus,
     SitemapAnalysisIn,
     SitemapAnalysisOut,
     SitemapAnalysisWorkflowResult,
-    WorkflowBootstrap,
 )
 
 if TYPE_CHECKING:
@@ -26,7 +27,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 LOG_WORKFLOW_STARTED_SUMMARY = "Workflow preparation started."
-LOG_WORKFLOW_READY_SUMMARY = "Workflow bundle loaded; analysis execution is not implemented yet."
+LOG_WORKFLOW_READY_SUMMARY = (
+    "Log artifact collected and prompt prepared; LLM analysis is not implemented yet."
+)
 SITEMAP_WORKFLOW_STARTED_SUMMARY = "Sitemap workflow preparation started."
 SITEMAP_WORKFLOW_READY_SUMMARY = "Sitemap analysis workflow record prepared."
 
@@ -68,6 +71,7 @@ class LogAnalysisService:
         self,
         *,
         analysis_date: date,
+        log_window: LogCollectionWindow,
         force: bool,
         send_email: bool,
     ) -> LogAnalysisWorkflowResult:
@@ -82,22 +86,21 @@ class LogAnalysisService:
                 "send_email": send_email,
             },
         )
-        if not force:
-            existing: LogAnalysisOut | None = await self.repository.get_by_date(analysis_date)
-            if existing is not None:
-                logger.info(
-                    "log analysis already exists for analysis date",
-                    extra={
-                        "event": "log_analysis_workflow_prepare_skipped",
-                        "analysis_date": str(analysis_date),
-                        "reason": "existing_analysis",
-                    },
-                )
-                msg = (
-                    f"Log analysis already exists for {analysis_date}. "
-                    "Use --force to load a new workflow bundle."
-                )
-                raise ValueError(msg)
+        existing: LogAnalysisOut | None = await self.repository.get_by_date(analysis_date)
+        if existing is not None and not force:
+            logger.info(
+                "log analysis already exists for analysis date",
+                extra={
+                    "event": "log_analysis_workflow_prepare_skipped",
+                    "analysis_date": str(analysis_date),
+                    "reason": "existing_analysis",
+                },
+            )
+            msg = (
+                f"Log analysis already exists for {analysis_date}. "
+                "Use --force to load a new workflow bundle."
+            )
+            raise ValueError(msg)
 
         analysis_input: LogAnalysisIn = LogAnalysisIn(
             analysis_date=analysis_date,
@@ -105,9 +108,18 @@ class LogAnalysisService:
             started_at=datetime.now(UTC),
             summary=LOG_WORKFLOW_STARTED_SUMMARY,
         )
-        analysis: LogAnalysisOut = await self.repository.create(analysis_input)
+        if existing is not None:
+            analysis: LogAnalysisOut = await self.repository.update(
+                existing,
+                **analysis_input.model_dump(exclude={"analysis_date"}),
+            )
+        else:
+            analysis = await self.repository.create(analysis_input)
         try:
-            workflow: WorkflowBootstrap = await self.agent.run_log_analysis()
+            agent_context: LogAnalysisAgentContext = await self.agent.run_log_analysis(
+                analysis_date=analysis_date,
+                log_window=log_window,
+            )
         except Exception as exc:
             await self.repository.update(
                 analysis,
@@ -122,17 +134,19 @@ class LogAnalysisService:
             status=RunStatus.SUCCEEDED,
             finished_at=datetime.now(UTC),
             summary=LOG_WORKFLOW_READY_SUMMARY,
-            mcp_artifact=workflow.model_dump(mode="json"),
+            mcp_artifact=agent_context.model_dump(mode="json"),
+            log_window_since=log_window.since_datetime,
+            log_window_until=log_window.until_datetime,
         )
         logger.info(
             "prepared log-analysis workflow",
             extra={
                 "event": "log_analysis_workflow_prepare_done",
-                "workflow_name": workflow.workflow_name,
-                "tool_count": len(workflow.tools),
+                "workflow_name": agent_context.workflow.workflow_name,
+                "tool_count": len(agent_context.workflow.tools),
             },
         )
-        return LogAnalysisWorkflowResult(analysis=updated_analysis, workflow=workflow)
+        return LogAnalysisWorkflowResult(analysis=updated_analysis, agent_context=agent_context)
 
     @classmethod
     def create_default(cls, _settings: Settings = settings) -> LogAnalysisService:
@@ -147,6 +161,17 @@ class LogAnalysisService:
             ),
             mcp_client=mcp_client,
             repository=LogAnalysisRepository(),
+        )
+
+    @staticmethod
+    def create_log_collection_window(analysis_date: date) -> LogCollectionWindow:
+        log_window_since: datetime = datetime.combine(analysis_date, time.min, tzinfo=UTC)
+        log_window_until: datetime = log_window_since + timedelta(days=1)
+        return LogCollectionWindow(
+            since=_format_mcp_timestamp(log_window_since),
+            until=_format_mcp_timestamp(log_window_until),
+            since_datetime=log_window_since,
+            until_datetime=log_window_until,
         )
 
 
@@ -169,7 +194,7 @@ class SitemapAnalysisService:
         force: bool,
         send_email: bool,
     ) -> SitemapAnalysisWorkflowResult:
-        """Create the Phase 1 sitemap-analysis workflow record."""
+        """Create the sitemap-analysis workflow record."""
 
         logger.info(
             "preparing sitemap-analysis workflow",
@@ -180,22 +205,21 @@ class SitemapAnalysisService:
                 "send_email": send_email,
             },
         )
-        if not force:
-            existing: SitemapAnalysisOut | None = await self.repository.get_by_date(analysis_date)
-            if existing is not None:
-                logger.info(
-                    "sitemap analysis already exists for analysis date",
-                    extra={
-                        "event": "sitemap_analysis_workflow_prepare_skipped",
-                        "analysis_date": str(analysis_date),
-                        "reason": "existing_analysis",
-                    },
-                )
-                msg = (
-                    f"Sitemap analysis already exists for {analysis_date}. "
-                    "Use --force to prepare a new workflow record."
-                )
-                raise ValueError(msg)
+        existing: SitemapAnalysisOut | None = await self.repository.get_by_date(analysis_date)
+        if existing is not None and not force:
+            logger.info(
+                "sitemap analysis already exists for analysis date",
+                extra={
+                    "event": "sitemap_analysis_workflow_prepare_skipped",
+                    "analysis_date": str(analysis_date),
+                    "reason": "existing_analysis",
+                },
+            )
+            msg = (
+                f"Sitemap analysis already exists for {analysis_date}. "
+                "Use --force to prepare a new workflow record."
+            )
+            raise ValueError(msg)
 
         analysis_input: SitemapAnalysisIn = SitemapAnalysisIn(
             analysis_date=analysis_date,
@@ -204,7 +228,13 @@ class SitemapAnalysisService:
             root_sitemap_url=self.root_sitemap_url,
             summary=SITEMAP_WORKFLOW_STARTED_SUMMARY,
         )
-        analysis: SitemapAnalysisOut = await self.repository.create(analysis_input)
+        if existing is not None:
+            analysis: SitemapAnalysisOut = await self.repository.update(
+                existing,
+                **analysis_input.model_dump(exclude={"analysis_date"}),
+            )
+        else:
+            analysis = await self.repository.create(analysis_input)
         try:
             updated_analysis: SitemapAnalysisOut = await self.repository.update(
                 analysis,
@@ -236,3 +266,7 @@ class SitemapAnalysisService:
             repository=SitemapAnalysisRepository(),
             root_sitemap_url=_settings.SITEMAP_ROOT_URL,
         )
+
+
+def _format_mcp_timestamp(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")

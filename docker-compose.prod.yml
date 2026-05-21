@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - ${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}:/var/lib/postgresql
     healthcheck:
       test:
         [
@@ -50,6 +50,3 @@ services:
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
     command: ["log_analysis"]
-
-volumes:
-  postgres-data:

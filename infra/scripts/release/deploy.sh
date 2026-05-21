@@ -47,6 +47,7 @@ SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 MONITORING_COMMAND="${MONITORING_COMMAND:-log_analysis}"
+ALLOW_EMPTY_POSTGRES_DATA_DIR="${ALLOW_EMPTY_POSTGRES_DATA_DIR:-false}"
 
 DATABASE_NAME="${DATABASE_NAME:-agent_monitoring}"
 DATABASE_USER="${DATABASE_USER:-agent_monitoring}"
@@ -63,6 +64,8 @@ EMAIL_TO="${EMAIL_TO:?EMAIL_TO is required}"
 SITEMAP_ROOT_URL="${SITEMAP_ROOT_URL:-}"
 SITEMAP_EMAIL_TO="${SITEMAP_EMAIL_TO:-}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
+POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}"
+POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
 
 export \
     ENVIRONMENT \
@@ -82,7 +85,8 @@ export \
     EMAIL_TO \
     SITEMAP_ROOT_URL \
     SITEMAP_EMAIL_TO \
-    RETENTION_DAYS
+    RETENTION_DAYS \
+    POSTGRES_DATA_DIR
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -106,6 +110,7 @@ printf "🏷️  Release tag: %s\n" "$TAG"
 printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🧪 Monitoring command: %s\n" "$MONITORING_COMMAND"
+printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -128,6 +133,15 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 docker compose "${COMPOSE_ARGS[@]}" config >/dev/null
 printf "✅ Compose config validated\n"
+mkdir -p "$POSTGRES_DATA_DIR"
+printf "✅ Postgres data directory exists: %s\n" "$POSTGRES_DATA_DIR"
+if [[ ! -f "$POSTGRES_PG_VERSION_FILE" && "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
+    log_error "Postgres data directory is empty or not initialized: $POSTGRES_DATA_DIR"
+    log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"
+    log_info "Restore/migrate existing production data before deploying this compose file."
+    log_info "For a brand-new environment only, set ALLOW_EMPTY_POSTGRES_DATA_DIR=true."
+    exit 1
+fi
 
 # Step 3: verify the image was built or pulled before starting deployment.
 deploy_step "🔍" 3 8 "Verify release image exists"
@@ -153,6 +167,7 @@ if [[ "$SKIP_BACKUP" != "true" ]]; then
     DATABASE_NAME="$DATABASE_NAME" \
     DATABASE_USER="$DATABASE_USER" \
     DATABASE_PASSWORD="$DATABASE_PASSWORD" \
+    POSTGRES_DATA_DIR="$POSTGRES_DATA_DIR" \
         "$PROJECT_DIR/infra/scripts/db_backup/backup_db.sh"
 else
     log_warn "Skipping database backup because SKIP_BACKUP=true"

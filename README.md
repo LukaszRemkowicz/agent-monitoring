@@ -17,18 +17,19 @@ The app currently provides the runtime foundation for monitoring workflows:
   requests yet
 - real workflow intelligence stays inside `src/agents.py`; services prepare
   application state and agents own MCP bootstrap and future LLM/tool loops
-- tests cover service behavior and repository contracts without calling
-  external MCP tools yet
+- tests cover service behavior, MCP contracts, and repository boundaries without
+  calling live external services
 - Docker Compose, CI/CD, pre-commit, production image builds, and release
   scripts support local and production operation
 
 The app does not collect logs itself. MCP remains the source of truth for log
-collection and artifact creation. The app does not yet request MCP artifacts,
-make a real LLM analysis request, or send email. The next monitoring workflow
-work should:
+collection and artifact creation. The log-analysis command now requests the MCP
+workflow collection artifact and prepares the prompt/context that will be sent
+to the LLM later. The app does not yet make a real LLM analysis request or send
+email. The next monitoring workflow work should:
 
-- call deterministic MCP tools to request log and sitemap artifacts
-- persist MCP artifact payloads and failure state on analysis records
+- call follow-up deterministic MCP tools to inspect the collected log artifact
+- request sitemap artifacts when the sitemap flow moves beyond record creation
 - pass collected artifacts into the monitoring agent for LLM analysis
 - save summaries, findings, severity, recommendations, and token/cost metadata
 - send report emails through a dedicated notification boundary
@@ -136,3 +137,7 @@ The release scripts build and deploy tagged images named
 `prod-agent-monitoring:<TAG>`. Deployment applies migrations inside the
 production Compose container and then runs the one-shot monitoring command,
 defaulting to `log_analysis`.
+
+Production Postgres data is stored outside Docker volumes at
+`/var/lib/agent-monitoring/postgresql` by default. Override with
+`POSTGRES_DATA_DIR` only when pointing to another durable host path.

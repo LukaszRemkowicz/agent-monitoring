@@ -41,21 +41,29 @@ async def log_analysis(
 ) -> None:
     """Prepare the MCP workflow bundle for the scheduled log analysis job."""
     parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
+    log_window = LogAnalysisService.create_log_collection_window(parsed_analysis_date)
     service = LogAnalysisService.create_default()
     result = await service.run_log_analysis(
         analysis_date=parsed_analysis_date,
+        log_window=log_window,
         force=force,
         send_email=send_email,
     )
     workflow = result.workflow
+    collect_logs = result.collect_logs
     typer.echo(
-        "Loaded MCP workflow bundle "
+        "Prepared log-analysis prompt "
         f"{workflow.workflow_name} "
         f"(mandatory_skills={len(workflow.mandatory_skills)}, "
         f"optional_skills={len(workflow.optional_skills)}, "
         f"tools={len(workflow.tools)}, "
+        f"collected_projects={len(collect_logs.projects)}, "
         f"analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
+    typer.echo("\nPrepared LLM system prompt:")
+    typer.echo(result.prepared_prompt.system_prompt)
+    typer.echo("\nPrepared LLM user prompt:")
+    typer.echo(result.prepared_prompt.user_prompt)
 
 
 @app.command("sitemap-analysis")

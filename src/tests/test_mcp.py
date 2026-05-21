@@ -1,8 +1,12 @@
+import json
+
 import httpx
 import pytest
 
+from exceptions import McpClientError
 from mcp import McpWorkflowClient
-from schemas import StructuredContent
+from schemas import CollectLogsArtifact, ProjectManifestSummary, StructuredContent
+from tests.conftest import build_collect_logs_artifact_payload
 
 
 @pytest.mark.asyncio
@@ -129,6 +133,235 @@ async def test_mcp_workflow_client_get_service_status_uses_status_tool() -> None
 
     assert status.status == "ok"
     assert '"name":"get_mcp_service_status"' in tool_names[0]
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_collect_logs_omits_project_names_for_jwt_scope() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": build_collect_logs_artifact_payload(),
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    artifact: CollectLogsArtifact = await client.collect_logs(
+        since="2026-05-19T00:00:00Z",
+        until="2026-05-20T00:00:00Z",
+    )
+
+    assert artifact.action == "collect_logs"
+    assert artifact.projects[0].snapshot_dir == "workflow/landingpage/latest"
+    assert artifact.projects[0].sources[0].source_key == "backend"
+    assert requests[0]["method"] == "tools/call"
+    assert requests[0]["params"] == {
+        "name": "collect_logs",
+        "arguments": {
+            "since": "2026-05-19T00:00:00Z",
+            "until": "2026-05-20T00:00:00Z",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> None:
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Unknown project 'landingpage'.",
+                            }
+                        ],
+                        "structuredContent": {
+                            "status": "error",
+                            "error_code": "unknown_project",
+                            "message": "Unknown project 'landingpage'.",
+                            "retry_tips": ["Call list_projects."],
+                            "details": {"requested_project_names": ["landingpage"]},
+                        },
+                        "isError": True,
+                    }
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(McpClientError) as error_info:
+        await client.collect_logs(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+        )
+
+    assert "Unknown project 'landingpage'" in str(error_info.value)
+    assert "Call list_projects" in str(error_info.value)
+    assert error_info.value.tool_name == "collect_logs"
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_collect_logs_validation_error_lists_fields() -> None:
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "structuredContent": {
+                            "action": "collect_logs",
+                            "workspace": "workflow",
+                            "projects": [
+                                {
+                                    "project_name": "landingpage",
+                                    "workspace": "workflow",
+                                    "snapshot_dir": "workflow/landingpage/latest",
+                                    "collected_at": "2026-05-20T00:01:00Z",
+                                }
+                            ],
+                        },
+                    }
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(McpClientError) as error_info:
+        await client.collect_logs(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+        )
+
+    message = str(error_info.value)
+    assert "MCP collect_logs response did not match expected shape" in message
+    assert "result.structuredContent.projects.0.requested_project_name" in message
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_list_projects_uses_discovery_tool() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": {
+                        "result": [
+                            {
+                                "project_name": "landingpage",
+                                "project_summary": "Landingpage project.",
+                                "source_keys": ["backend", "nginx"],
+                            },
+                            {
+                                "project_name": "shop",
+                                "project_summary": "Shop project.",
+                                "source_keys": ["backend"],
+                            },
+                        ],
+                    },
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    projects: list[ProjectManifestSummary] = await client.list_projects()
+
+    assert [project.project_name for project in projects] == ["landingpage", "shop"]
+    assert projects[0].source_keys == ["backend", "nginx"]
+    assert requests[0]["params"] == {
+        "name": "list_projects",
+        "arguments": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_list_projects_returns_empty_list() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": {
+                        "result": [],
+                    },
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    projects: list[ProjectManifestSummary] = await client.list_projects()
+
+    assert projects == []
+    assert requests[0]["params"] == {
+        "name": "list_projects",
+        "arguments": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_reads_workflow_skill_resource() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "contents": [
+                        {
+                            "uri": "skill://workflow/project_context",
+                            "mimeType": "text/plain",
+                            "text": "Project context skill body.",
+                        }
+                    ]
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    skill_text: str = await client.read_resource("skill://workflow/project_context")
+
+    assert skill_text == "Project context skill body."
+    assert requests[0]["method"] == "resources/read"
+    assert requests[0]["params"] == {"uri": "skill://workflow/project_context"}
 
 
 @pytest.mark.asyncio
