@@ -23,14 +23,12 @@ The app currently provides the runtime foundation for monitoring workflows:
   scripts support local and production operation
 
 The app does not collect logs itself. MCP remains the source of truth for log
-collection and artifact creation. The log-analysis command now requests the MCP
-workflow collection artifact and prepares the prompt/context that will be sent
-to the LLM later. The app does not yet make a real LLM analysis request or send
-email. The next monitoring workflow work should:
+collection and artifact creation. The log-analysis command requests the MCP
+workflow collection artifact, runs the LLM tool loop through deterministic MCP
+follow-up tools, and persists the validated final report. The next monitoring
+workflow work should:
 
-- call follow-up deterministic MCP tools to inspect the collected log artifact
 - request sitemap artifacts when the sitemap flow moves beyond record creation
-- pass collected artifacts into the monitoring agent for LLM analysis
 - save summaries, findings, severity, recommendations, and token/cost metadata
 - send report emails through a dedicated notification boundary
 
@@ -49,11 +47,40 @@ package. Configure it with:
 - `MONITORING_LLM_PROVIDER`, defaulting to `openai-fast`
 - `MONITORING_LLM_FAST_MODEL`, defaulting to `gpt-4.1-mini`
 - `MONITORING_LLM_STRONG_MODEL`, defaulting to `gpt-5`
+- `MONITORING_PRIVATE_CONTEXT_PATH`, defaulting to
+  `private/vps_monitoring_context.md`
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`, optional
 - `DEBUG=True` switches logs to colored, indented `pretty` JSON. `DEBUG` defaults to
   `False`; local Docker Compose sets it to `true`, while host-side `uv run`
   commands keep one-line JSON logs unless `DEBUG=True` is exported.
+
+## Private VPS Context
+
+MCP stays generic and manifest-driven. Detailed VPS architecture context belongs
+to this monitoring app, because it can include private details about installed
+services, domains, ports, security posture, and operational expectations.
+
+Create this local file when you want the LLM report to understand your VPS:
+
+```bash
+mkdir -p private
+$EDITOR private/vps_monitoring_context.md
+```
+
+The `private/` directory is ignored by Git, so this file is not published to
+GitHub. This file is mandatory for log analysis. A safe example lives in
+`infra/docs/vps_monitoring_context.example.md`.
+
+Production Compose mounts the same private directory read-only into the app
+container. By default deploy expects:
+
+```text
+private/vps_monitoring_context.md
+```
+
+Set `MONITORING_PRIVATE_CONTEXT_DIR` only when the private file lives outside the
+repository checkout on the production host.
 
 ## Local Runtime
 

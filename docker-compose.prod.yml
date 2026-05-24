@@ -49,4 +49,6 @@ services:
       SITEMAP_ROOT_URL: ${SITEMAP_ROOT_URL:-}
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
+    volumes:
+      - ${MONITORING_PRIVATE_CONTEXT_DIR:-./private}:/app/private:ro
     command: ["log_analysis"]

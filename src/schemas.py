@@ -262,6 +262,27 @@ class McpCollectLogsResponse(BaseModel):
     error: McpToolError | None = None
 
 
+class McpGenericToolPayload(BaseModel):
+    """Validated `structuredContent` body for follow-up MCP tool calls.
+
+    The LLM can choose deterministic follow-up MCP tools from the advertised
+    workflow bundle. Those tools can return different domain shapes, so the
+    client validates only the shared JSON-RPC wrapper and keeps the tool-specific
+    structured content as a dictionary for prompt feedback and persistence.
+    """
+
+    structured_content: dict[str, Any] = Field(alias="structuredContent")
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+
+class McpGenericToolResponse(BaseModel):
+    """JSON-RPC response envelope for generic follow-up MCP tool calls."""
+
+    result: McpGenericToolPayload | None = None
+    error: McpToolError | None = None
+
+
 class ProjectManifestSummary(BaseModel):
     """Lightweight project summary returned by MCP `list_projects`.
 
@@ -373,7 +394,7 @@ class LogAnalysisPromptContext(BaseModel):
     workflow_name: str
     current_phase: Literal["inspect_collected_logs", "final_report"]
     completed_steps: list[str]
-    allowed_actions: list[Literal["call_tools", "final_report"]]
+    allowed_actions: list[Literal["call_tools", "read_skills", "final_report"]]
     next_required_action: Literal["call_tools", "final_report"]
     final_report_allowed: bool
     available_projects: list[ProjectManifestSummary] = Field(default_factory=list)
@@ -408,20 +429,59 @@ class LogAnalysisPreparedPrompt(BaseModel):
 class LogAnalysisFinalReport(BaseModel):
     """Validated final JSON report returned by the log-analysis LLM call.
 
-    Phase 2A intentionally stops at a single LLM request, so this is the
-    boundary contract between free-form model output and persisted monitoring
-    state. The LLM may reason from the deterministic MCP artifact, but only this
-    validated report shape is allowed to update the database summary fields.
+    This is the boundary contract between free-form model output and persisted
+    monitoring state. The LLM may reason from the deterministic MCP artifact and
+    follow-up MCP tool results, but only this validated report shape is allowed
+    to update the database summary fields.
     """
 
     action: Literal["final_report"]
     summary: str
     severity: Literal["INFO", "WARNING", "CRITICAL"]
+    severity_rationale: str
     key_findings: list[str]
+    evidence: list[str]
+    coverage_gaps: list[str]
     recommendations: str
+    watch_only_items: list[str]
     trend_summary: str
 
     model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisToolCall(BaseModel):
+    """One deterministic MCP tool call requested by the LLM action loop."""
+
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisToolCallRequest(BaseModel):
+    """LLM action requesting deterministic MCP follow-up tool calls."""
+
+    action: Literal["call_tools"]
+    tool_calls: list[LogAnalysisToolCall]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisSkillReadRequest(BaseModel):
+    """LLM action requesting optional MCP workflow skill resources."""
+
+    action: Literal["read_skills"]
+    skill_names: list[str]
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisToolResult(BaseModel):
+    """Structured result returned from one deterministic MCP follow-up tool."""
+
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    structured_content: dict[str, Any]
 
 
 class LogAnalysisAgentContext(BaseModel):
@@ -430,6 +490,7 @@ class LogAnalysisAgentContext(BaseModel):
     workflow: WorkflowBootstrap
     collect_logs: CollectLogsArtifact
     prompt: LogAnalysisPreparedPrompt
+    tool_results: list[LogAnalysisToolResult] = Field(default_factory=list)
     final_report: LogAnalysisFinalReport
     log_window_since: datetime
     log_window_until: datetime

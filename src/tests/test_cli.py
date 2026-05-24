@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 import typer
 from click import unstyle
-from llm_core.exceptions import ProviderConfigurationError
+from llm_core.exceptions import ProviderConfigurationError, ProviderExecutionError
 from pytest_mock import MockerFixture
 from tortoise.exceptions import IntegrityError
 from typer.testing import CliRunner
@@ -18,7 +18,7 @@ import main
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
-from exceptions import McpClientError
+from exceptions import McpClientError, PrivateMonitoringContextError
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
@@ -86,7 +86,7 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                         "list_projects",
                         "collect_logs",
                     ],
-                    allowed_actions=["call_tools", "final_report"],
+                    allowed_actions=["call_tools", "read_skills", "final_report"],
                     next_required_action="final_report",
                     final_report_allowed=True,
                     available_projects=[
@@ -110,6 +110,7 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                     report_contract={
                         "summary": "string",
                         "severity": "INFO|WARNING|CRITICAL",
+                        "severity_rationale": "string",
                         "key_findings": "list[string]",
                         "recommendations": "string",
                         "trend_summary": "string",
@@ -123,8 +124,12 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                 action="final_report",
                 summary="Landingpage logs are healthy.",
                 severity="INFO",
+                severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
+                evidence=["group_errors found no repeated backend errors."],
+                coverage_gaps=["celery_beat collected zero lines."],
                 recommendations="Keep watching the backend logs.",
+                watch_only_items=["Routine SSH brute-force traffic blocked by fail2ban."],
                 trend_summary="No prior trend data was available.",
             ),
             log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
@@ -194,7 +199,15 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert "Completed log-analysis report analyze_daily_log_bundle" in result.output
     assert "severity=INFO" in result.output
     assert "Summary: Landingpage logs are healthy." in result.output
-    assert "Key findings: 1" in result.output
+    assert "Severity rationale: INFO because no service-impacting issue was found." in result.output
+    assert "Key findings:" in result.output
+    assert "- No critical incidents found." in result.output
+    assert "Evidence:" in result.output
+    assert "- group_errors found no repeated backend errors." in result.output
+    assert "Coverage gaps:" in result.output
+    assert "- celery_beat collected zero lines." in result.output
+    assert "Watch-only items:" in result.output
+    assert "- Routine SSH brute-force traffic blocked by fail2ban." in result.output
     assert "Recommendations: Keep watching the backend logs." in result.output
     assert "LLM report time: 4.32s" in result.output
     assert "Execution time: 3.25s" in result.output
@@ -689,6 +702,91 @@ def test_db_decorator_formats_llm_provider_configuration_errors(
     assert "key is required" in output
     assert "OPENAI_API_KEY" in output
     assert "OPEN_API_KEY" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_private_monitoring_context_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise PrivateMonitoringContextError(
+            "Private monitoring context file is required but was not found: "
+            "/app/private/vps_monitoring_context.md",
+            context_path="/app/private/vps_monitoring_context.md",
+        )
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Private monitoring context is not configured" in output
+    assert "/app/private/vps_monitoring_context.md" in output
+    assert "MONITORING_PRIVATE_CONTEXT_PATH" in output
+    assert "private/vps_monitoring_context.md" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_llm_provider_execution_error_cause(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        try:
+            raise RuntimeError("HTTP 400: unsupported parameter 'temperature'")
+        except RuntimeError as exc:
+            raise ProviderExecutionError("OpenAI provider request failed") from exc
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "LLM provider request failed" in output
+    assert "OpenAI provider request failed" in output
+    assert "RuntimeError" in output
+    assert "unsupported parameter 'temperature'" in output
     assert "Traceback" not in output
 
 

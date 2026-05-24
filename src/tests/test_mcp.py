@@ -365,6 +365,77 @@ async def test_mcp_workflow_client_reads_workflow_skill_resource() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": {
+                        "action": "group_errors",
+                        "project_name": "landingpage",
+                        "groups": [{"message": "No repeated errors", "count": 0}],
+                    }
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    structured_content: dict[str, object] = await client.call_deterministic_tool(
+        "group_errors",
+        {"project_name": "landingpage"},
+    )
+
+    assert structured_content["action"] == "group_errors"
+    assert structured_content["project_name"] == "landingpage"
+    assert requests[0]["params"] == {
+        "name": "group_errors",
+        "arguments": {"project_name": "landingpage"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_deterministic_tool_raises_result_error() -> None:
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "isError": True,
+                        "structuredContent": {
+                            "status": "error",
+                            "message": "Unknown source key 'backend'.",
+                            "retry_tips": ["Call list_projects."],
+                        },
+                    }
+                },
+            )
+        ),
+    )
+
+    with pytest.raises(McpClientError) as error_info:
+        await client.call_deterministic_tool(
+            "group_errors",
+            {"project_name": "landingpage", "source_key": "backend"},
+        )
+
+    assert "Unknown source key 'backend'" in str(error_info.value)
+    assert "Call list_projects" in str(error_info.value)
+    assert error_info.value.tool_name == "group_errors"
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_requires_workflow_jwt() -> None:
     client = McpWorkflowClient(
         base_url="http://mcp.local/mcp",

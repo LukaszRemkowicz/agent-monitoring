@@ -87,6 +87,9 @@ Deploy behavior:
 - creates the production Postgres host data directory before starting `db`;
   default: `/var/lib/agent-monitoring/postgresql`, override with
   `POSTGRES_DATA_DIR`
+- mounts the private monitoring context directory into the app container;
+  default: `private/`, override with `MONITORING_PRIVATE_CONTEXT_DIR`.
+  The app validates the mandatory context file at runtime.
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`

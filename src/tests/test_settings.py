@@ -13,7 +13,8 @@ def test_settings_expose_uppercase_fields() -> None:
     assert settings.DEBUG is False
     assert settings.LOG_FORMAT == "json"
     assert settings.MONITORING_PROJECT == "landingpage"
-    assert settings.LOG_ANALYSIS_MCP_URL == "http://127.0.0.1:8001/mcp"
+    assert settings.MONITORING_PRIVATE_CONTEXT_PATH.endswith("private/vps_monitoring_context.md")
+    assert settings.LOG_ANALYSIS_MCP_URL == settings_module.LOG_ANALYSIS_MCP_URL
     assert settings.MONITORING_LLM_PROVIDER == "openai-fast"
 
 
@@ -27,6 +28,7 @@ def test_settings_can_load_injected_source() -> None:
             "DATABASE_PASSWORD": "secret",
             "ENVIRONMENT": "dev",
             "MONITORING_PROJECT": "landingpage",
+            "MONITORING_PRIVATE_CONTEXT_PATH": "/tmp/private-context.md",
             "LOG_ANALYSIS_MCP_URL": "http://mcp.local/mcp",
             "MCP_WORKFLOW_JWT": "jwt-token",
             "MONITORING_LLM_PROVIDER": "mock",
@@ -35,6 +37,7 @@ def test_settings_can_load_injected_source() -> None:
 
     assert settings.ENVIRONMENT == "dev"
     assert settings.MONITORING_PROJECT == "landingpage"
+    assert settings.MONITORING_PRIVATE_CONTEXT_PATH == "/tmp/private-context.md"
     assert settings.LOG_ANALYSIS_MCP_URL == "http://mcp.local/mcp"
     assert settings.MCP_WORKFLOW_JWT == "jwt-token"
     assert settings.MONITORING_LLM_PROVIDER == "mock"

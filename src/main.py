@@ -63,10 +63,25 @@ async def log_analysis(
         f"analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
     )
     typer.echo(f"Summary: {final_report.summary}")
-    typer.echo(f"Key findings: {len(final_report.key_findings)}")
+    typer.echo(f"Severity rationale: {final_report.severity_rationale}")
+    _echo_list("Key findings", final_report.key_findings)
+    _echo_list("Evidence", final_report.evidence)
+    _echo_list("Coverage gaps", final_report.coverage_gaps)
     typer.echo(f"Recommendations: {final_report.recommendations}")
+    _echo_list("Watch-only items", final_report.watch_only_items)
     typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")
     typer.echo(f"Execution time: {result.analysis.execution_time_seconds:.2f}s")
+
+
+def _echo_list(label: str, values: list[str]) -> None:
+    """Print a compact CLI list section."""
+
+    typer.echo(f"{label}:")
+    if not values:
+        typer.echo("- none")
+        return
+    for value in values:
+        typer.echo(f"- {value}")
 
 
 @app.command("sitemap-analysis")

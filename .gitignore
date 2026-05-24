@@ -5,6 +5,9 @@ docs/analysis/
 .agent/
 .agents/
 
+# Private monitoring context
+private/
+
 # OS/editor files
 .DS_Store
 .idea/

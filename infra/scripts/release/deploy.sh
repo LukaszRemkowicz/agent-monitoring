@@ -66,6 +66,7 @@ SITEMAP_EMAIL_TO="${SITEMAP_EMAIL_TO:-}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}"
 POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
+MONITORING_PRIVATE_CONTEXT_DIR="${MONITORING_PRIVATE_CONTEXT_DIR:-$PROJECT_DIR/private}"
 
 export \
     ENVIRONMENT \
@@ -86,7 +87,8 @@ export \
     SITEMAP_ROOT_URL \
     SITEMAP_EMAIL_TO \
     RETENTION_DAYS \
-    POSTGRES_DATA_DIR
+    POSTGRES_DATA_DIR \
+    MONITORING_PRIVATE_CONTEXT_DIR
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -111,6 +113,7 @@ printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🧪 Monitoring command: %s\n" "$MONITORING_COMMAND"
 printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
+printf "🔐 Private context directory: %s\n" "$MONITORING_PRIVATE_CONTEXT_DIR"
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")

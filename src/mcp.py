@@ -11,6 +11,7 @@ from logging_config import get_logger
 from schemas import (
     CollectLogsArtifact,
     McpCollectLogsResponse,
+    McpGenericToolResponse,
     McpProjectManifestListResponse,
     McpReadResourceResponse,
     McpServiceStatus,
@@ -199,6 +200,54 @@ class McpWorkflowClient:
                 tool_name="get_mcp_service_status",
             )
         return status_response.result.structured_content
+
+    async def call_deterministic_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute one MCP-owned analysis tool requested by the LLM loop.
+
+        The monitoring agent lets the LLM decide which advertised MCP tool it
+        needs next, but the tool execution itself stays outside the LLM. This
+        method is the narrow boundary for that handoff: it sends the validated
+        tool name and arguments through the MCP JSON-RPC transport, checks the
+        generic tool-response envelope, converts MCP errors into
+        ``McpClientError``, and returns only the deterministic
+        ``structuredContent`` payload.
+
+        Keeping this as a separate client method makes the workflow boundary
+        explicit. The LLM can request facts, while MCP remains responsible for
+        collecting, filtering, grouping, and inspecting logs in deterministic
+        code.
+        """
+
+        response: dict[str, Any] = await self._make_call(name, arguments)
+        self._raise_tool_result_error_if_present(response, name)
+        try:
+            tool_response: McpGenericToolResponse = McpGenericToolResponse.model_validate(response)
+        except ValidationError as exc:
+            raise McpClientError(
+                self._format_validation_error(
+                    f"MCP {name} response did not match expected shape.",
+                    exc,
+                ),
+                mcp_url=self.base_url,
+                tool_name=name,
+            ) from exc
+        if tool_response.error is not None:
+            raise McpClientError(
+                f"MCP {name} error: {tool_response.error.message}",
+                mcp_url=self.base_url,
+                tool_name=name,
+            )
+        if tool_response.result is None:
+            raise McpClientError(
+                f"MCP {name} response did not include a result object.",
+                mcp_url=self.base_url,
+                tool_name=name,
+            )
+        return tool_response.result.structured_content
 
     async def read_resource(self, uri: str) -> str:
         """Read one MCP resource and return its validated text content."""

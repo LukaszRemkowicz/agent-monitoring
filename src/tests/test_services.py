@@ -29,12 +29,15 @@ from schemas import (
 from services import LogAnalysisService, SitemapAnalysisService
 from tests.conftest import build_collect_logs_artifact_payload
 
+PRIVATE_MONITORING_CONTEXT = "# Private VPS Monitoring Context\n\nTest context."
+
 
 class FakeWorkflowAgent(MonitoringWorkflowAgent):
     def __init__(self, llm_provider: LLMProvider | None = None) -> None:
         super().__init__(
             FakeMcpClient(),
             llm_provider=llm_provider or MockProvider(),
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
         )
         self.calls: int = 0
 
@@ -71,7 +74,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                     "list_projects",
                     "collect_logs",
                 ],
-                allowed_actions=["call_tools", "final_report"],
+                allowed_actions=["call_tools", "read_skills", "final_report"],
                 next_required_action="call_tools",
                 final_report_allowed=False,
                 available_projects=[
@@ -100,8 +103,12 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                 report_contract={
                     "summary": "string",
                     "severity": "INFO|WARNING|CRITICAL",
+                    "severity_rationale": "string",
                     "key_findings": "list[string]",
+                    "evidence": "list[string]",
+                    "coverage_gaps": "list[string]",
                     "recommendations": "string",
+                    "watch_only_items": "list[string]",
                     "trend_summary": "string",
                 },
                 instructions=[
@@ -117,8 +124,12 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                 action="final_report",
                 summary="Landingpage logs are healthy.",
                 severity="INFO",
+                severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
+                evidence=["group_errors found no repeated errors."],
+                coverage_gaps=[],
                 recommendations="Keep watching the backend logs.",
+                watch_only_items=["Routine bot traffic."],
                 trend_summary="No prior trend data was available.",
             ),
             log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
@@ -134,6 +145,7 @@ class FailingWorkflowAgent(MonitoringWorkflowAgent):
         super().__init__(
             FakeMcpClient(),
             llm_provider=MockProvider(),
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
         )
 
     async def run_log_analysis(
@@ -380,6 +392,7 @@ def test_log_analysis_service_default_agent_uses_configured_llm_provider() -> No
                 "MONITORING_LLM_PROVIDER": "mock",
                 "MONITORING_LLM_FAST_MODEL": "gpt-4.1-mini",
                 "MONITORING_LLM_STRONG_MODEL": "gpt-5",
+                "MONITORING_PRIVATE_CONTEXT_PATH": __file__,
             }
         )
     )

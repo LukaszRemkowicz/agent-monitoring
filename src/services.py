@@ -10,6 +10,7 @@ from db.models import RunStatus
 from llm import get_monitoring_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
+from monitoring_context import load_private_monitoring_context
 from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
     LogAnalysisAgentContext,
@@ -168,6 +169,9 @@ class LogAnalysisService:
             agent=MonitoringWorkflowAgent(
                 mcp_client,
                 llm_provider=get_monitoring_llm_provider(_settings),
+                private_monitoring_context=load_private_monitoring_context(
+                    _settings.MONITORING_PRIVATE_CONTEXT_PATH
+                ),
             ),
             mcp_client=mcp_client,
             repository=LogAnalysisRepository(),
