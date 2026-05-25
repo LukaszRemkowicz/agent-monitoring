@@ -39,6 +39,12 @@ class PromptAssetLoader:
 loader = PromptAssetLoader()
 
 
+def load_text(name: str) -> str:
+    """Return one markdown prompt asset from the default prompt asset dir."""
+
+    return loader.load_text(name)
+
+
 def load_markdown_bullets(name: str) -> list[str]:
     """Return top-level markdown bullet items from the default prompt asset dir."""
 

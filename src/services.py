@@ -116,9 +116,11 @@ class LogAnalysisService:
         else:
             analysis = await self.repository.create(analysis_input)
         try:
+            historical_context: str = await self._build_historical_context(analysis_date)
             agent_context: LogAnalysisAgentContext = await self.agent.run_log_analysis(
                 analysis_date=analysis_date,
                 log_window=log_window,
+                historical_context=historical_context,
             )
         except Exception as exc:
             execution_time_seconds: float = round(monotonic() - execution_started_at, 3)
@@ -197,6 +199,52 @@ class LogAnalysisService:
             since_datetime=log_window_since,
             until_datetime=log_window_until,
         )
+
+    async def _build_historical_context(self, analysis_date: date) -> str:
+        """Return landingpage-style markdown context from recent stored reports."""
+
+        historical_runs: list[LogAnalysisOut] = await self.repository.last_5_days(analysis_date)
+        historical_context: str = HistoricalContextBuilder.build(historical_runs)
+        if historical_context:
+            logger.info(
+                "historical context loaded for monitoring agent",
+                extra={
+                    "event": "log_analysis_historical_context_loaded",
+                    "analysis_date": str(analysis_date),
+                    "historical_run_count": len(historical_runs),
+                    "historical_context_chars": len(historical_context),
+                },
+            )
+        else:
+            logger.info(
+                "no historical context available for monitoring agent",
+                extra={
+                    "event": "log_analysis_historical_context_empty",
+                    "analysis_date": str(analysis_date),
+                },
+            )
+        return historical_context
+
+
+class HistoricalContextBuilder:
+    """Format stored log-analysis reports into the landingpage historical block."""
+
+    @staticmethod
+    def build(records: list[LogAnalysisOut]) -> str:
+        """Return markdown context for recent analyses, or an empty string."""
+
+        if not records:
+            return ""
+
+        lines: list[str] = []
+        for record in records:
+            lines.append(
+                f"## {record.analysis_date} — Severity: {record.severity}\n"
+                f"Summary: {record.summary}\n"
+                f"Key findings: {record.key_findings}\n"
+                f"Recommendations: {record.recommendations}"
+            )
+        return "\n\n".join(lines)
 
 
 class SitemapAnalysisService:

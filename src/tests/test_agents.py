@@ -192,6 +192,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
             since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
             until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
         ),
+        historical_context="",
     )
 
     assert mcp_client.calls == [
@@ -291,6 +292,68 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     }
     assert all(user_prompt["report_contract"].values())
     assert "analysis_date:" not in context.prompt.user_prompt
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_includes_historical_context_in_system_prompt() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "group_errors",
+                        "arguments": {"project_name": "landingpage"},
+                    }
+                ],
+            }
+        )
+    )
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Logs are healthy.",
+                "severity": "INFO",
+                "severity_rationale": "INFO because no new issue was found.",
+                "key_findings": ["No new critical errors."],
+                "evidence": ["Current grouped errors match historical noise."],
+                "coverage_gaps": [],
+                "recommendations": "No immediate action needed.",
+                "watch_only_items": ["Known scanner noise."],
+                "trend_summary": "Scanner noise remained stable versus 2026-05-18.",
+            }
+        )
+    )
+    historical_context = (
+        "## 2026-05-18 — Severity: INFO\n"
+        "Summary: Previous run saw scanner noise only.\n"
+        "Key findings: ['No service impact.']\n"
+        "Recommendations: No action needed."
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+        historical_context=historical_context,
+    )
+
+    assert "HISTORICAL LOG ANALYSIS (last 5 days from DB)" in context.prompt.system_prompt
+    assert historical_context in context.prompt.system_prompt
+    assert "YOUR TASK: TEMPORAL COMPARISON" in context.prompt.system_prompt
+    assert "Previous run saw scanner noise only." not in context.prompt.user_prompt
 
 
 @pytest.mark.asyncio

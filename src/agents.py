@@ -10,7 +10,7 @@ from llm_core.protocols import LLMProvider
 from llm_core.types import GenerationOptions, LLMRequest, LLMResponse, Message, ResponseFormat
 from pydantic import ValidationError
 
-from assets_loader import load_markdown_bullets, load_markdown_mapping
+from assets_loader import load_markdown_bullets, load_markdown_mapping, load_text
 from exceptions import McpClientError
 from logging_config import get_logger
 from mcp import McpWorkflowClient
@@ -37,6 +37,7 @@ MAX_LLM_TOOL_LOOP_ITERATIONS = 5
 LOG_ANALYSIS_INSTRUCTIONS = load_markdown_bullets("log_analysis_instructions.md")
 LOG_ANALYSIS_FOLLOWUP_INSTRUCTIONS = load_markdown_bullets("log_analysis_followup_instructions.md")
 LOG_ANALYSIS_REPORT_CONTRACT = load_markdown_mapping("log_analysis_report_contract.md")
+HISTORICAL_CONTEXT_TEMPLATE = load_text("historical_context.md")
 
 
 class MonitoringWorkflowAgent:
@@ -57,6 +58,7 @@ class MonitoringWorkflowAgent:
         *,
         analysis_date: date,
         log_window: LogCollectionWindow,
+        historical_context: str = "",
     ) -> LogAnalysisAgentContext:
         """Prepare deterministic context before the first log-analysis LLM call."""
 
@@ -90,6 +92,7 @@ class MonitoringWorkflowAgent:
             available_projects=available_projects,
             collect_logs=collect_logs,
             private_monitoring_context=self.private_monitoring_context,
+            historical_context=historical_context,
         )
         llm_report_started_at: float = monotonic()
         final_report: LogAnalysisFinalReport
@@ -160,6 +163,7 @@ class MonitoringWorkflowAgent:
         available_projects: list[ProjectManifestSummary],
         collect_logs: CollectLogsArtifact,
         private_monitoring_context: str,
+        historical_context: str,
     ) -> LogAnalysisPreparedPrompt:
         """Build the structured prompt context that will be sent to the LLM later."""
 
@@ -168,6 +172,7 @@ class MonitoringWorkflowAgent:
                 workflow=workflow,
                 mandatory_skills=mandatory_skills,
                 private_monitoring_context=private_monitoring_context,
+                historical_context=historical_context,
             ),
             context=LogAnalysisPromptContext(
                 analysis_date=analysis_date,
@@ -209,6 +214,7 @@ class MonitoringWorkflowAgent:
         workflow: WorkflowBootstrap,
         mandatory_skills: list[WorkflowSkillContent],
         private_monitoring_context: str,
+        historical_context: str,
     ) -> str:
         """Append private VPS context and mandatory skills to the MCP-owned prompt."""
 
@@ -224,12 +230,18 @@ class MonitoringWorkflowAgent:
                 )
             )
         mandatory_skill_prompt: str = "\n\n".join(skill_sections)
+        historical_section: str = ""
+        if historical_context:
+            historical_section = HISTORICAL_CONTEXT_TEMPLATE.format(
+                historical_data=historical_context
+            )
         return "\n\n".join(
             part
             for part in [
                 workflow.prompt.strip(),
                 "# Mandatory Workflow Skills",
                 mandatory_skill_prompt.strip(),
+                historical_section.strip(),
                 "# Private Monitoring Context",
                 private_monitoring_context.strip(),
             ]

@@ -5,7 +5,7 @@ from typing import Any
 
 from tortoise.queryset import QuerySet
 
-from db.models import LogAnalysis, SitemapAnalysis
+from db.models import LogAnalysis, RunStatus, SitemapAnalysis
 from logging_config import get_logger
 from schemas import LogAnalysisIn, LogAnalysisOut, SitemapAnalysisIn, SitemapAnalysisOut
 
@@ -64,6 +64,21 @@ class LogAnalysisRepository:
         if analysis is None:
             return None
         return LogAnalysisOut.from_model(analysis)
+
+    async def last_5_days(self, analysis_date: date) -> list[LogAnalysisOut]:
+        """Return successful analyses from the last five days excluding this date."""
+
+        logger.debug(
+            "fetching last five days of log analyses",
+            extra={
+                "event": "log_analysis_repository_last_5_days",
+                "analysis_date": str(analysis_date),
+            },
+        )
+        analyses: list[LogAnalysis] = await self.model.objects.last_5_days(
+            exclude_date=analysis_date
+        ).filter(status=RunStatus.SUCCEEDED.value)
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
 
 class SitemapAnalysisRepository:
