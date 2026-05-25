@@ -83,7 +83,17 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
                             "default": None,
                         }
                     ],
-                )
+                ),
+                WorkflowTool(
+                    tool_name="inspect_proxy_activity",
+                    description="Inspect proxy status distribution.",
+                    arguments=[],
+                ),
+                WorkflowTool(
+                    tool_name="inspect_live_fail2ban_activity",
+                    description="Inspect live fail2ban jails.",
+                    arguments=[],
+                ),
             ],
         )
 
@@ -438,6 +448,99 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
         "event": "log_analysis_duplicate_mcp_tool_call_skipped",
         "tool_name": "group_errors",
     }
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_adds_probe_interpretation_result() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    mcp_client.tool_results.update(
+        {
+            "inspect_proxy_activity": {
+                "action": "inspect_proxy_activity",
+                "project_name": "landingpage",
+                "total_requests": 100,
+                "status_class_counts": {"2xx": 20, "4xx": 80, "5xx": 0},
+                "upstream_error_count": 0,
+            },
+            "inspect_live_fail2ban_activity": {
+                "action": "inspect_live_fail2ban_activity",
+                "project_name": "vps-security",
+                "active_jails": 3,
+                "currently_banned_total": 2,
+            },
+        }
+    )
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "inspect_proxy_activity",
+                        "arguments": {"project_name": "landingpage"},
+                    },
+                    {
+                        "tool_name": "inspect_live_fail2ban_activity",
+                        "arguments": {"project_name": "vps-security"},
+                    },
+                ],
+            }
+        )
+    )
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Scanner traffic is blocked.",
+                "severity": "INFO",
+                "severity_rationale": "INFO because probe noise has no service impact.",
+                "key_findings": ["Proxy noise is covered by active fail2ban."],
+                "evidence": ["monitoring_app_probe_interpretation returned watch_only."],
+                "coverage_gaps": [],
+                "recommendations": "No immediate mitigation change is indicated.",
+                "watch_only_items": ["Blocked scanner traffic."],
+                "trend_summary": "No trend data available.",
+            }
+        )
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    assert [result.tool_name for result in context.tool_results] == [
+        "inspect_proxy_activity",
+        "inspect_live_fail2ban_activity",
+        "monitoring_app_probe_interpretation",
+    ]
+    interpretation = context.tool_results[-1].structured_content
+    assert interpretation == {
+        "action": "monitoring_app_probe_interpretation",
+        "proxy_activity": "scanner_or_probe_noise",
+        "fail2ban_activity": "active",
+        "blocked_traffic_evidence": "present",
+        "recommendation_category": "watch_only",
+        "summary": (
+            "Proxy activity looks like scanner/probe noise and fail2ban is active. "
+            "Treat this as watch-only unless other tool evidence shows service impact "
+            "or missed blocking."
+        ),
+    }
+    followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
+    assert "monitoring_app_probe_interpretation" in followup_text
+    assert "watch_only" in followup_text
 
 
 @pytest.mark.asyncio

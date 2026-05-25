@@ -1,5 +1,6 @@
 doc/analysis/
 docs/analysis/
+infra/docs/analysis/
 
 # Local agent workspace
 .agent/

@@ -307,6 +307,10 @@ class MonitoringWorkflowAgent:
                 raise ValueError("LLM action did not match expected shape.")
 
             tool_results.extend(new_tool_results)
+            interpretation_result = self._build_probe_interpretation_result(tool_results)
+            if interpretation_result is not None:
+                tool_results.append(interpretation_result)
+                new_tool_results.append(interpretation_result)
             messages.append(
                 Message.from_text(
                     "user",
@@ -325,6 +329,122 @@ class MonitoringWorkflowAgent:
             )
 
         raise ValueError("LLM tool loop exceeded maximum iterations before final_report.")
+
+    @staticmethod
+    def _build_probe_interpretation_result(
+        tool_results: list[LogAnalysisToolResult],
+    ) -> LogAnalysisToolResult | None:
+        """Return a local proxy/fail2ban interpretation when enough facts exist.
+
+        MCP tools provide separate deterministic facts: proxy status distribution
+        and fail2ban activity. This helper does not collect new data and does
+        not know project-specific jail names. It only turns already-returned MCP
+        facts into a small generic evidence object so the LLM does not have to
+        mentally join scanner/probe traffic with blocking status on its own.
+        """
+
+        if any(
+            result.tool_name == "monitoring_app_probe_interpretation" for result in tool_results
+        ):
+            return None
+
+        proxy_results: list[LogAnalysisToolResult] = [
+            result for result in tool_results if result.tool_name == "inspect_proxy_activity"
+        ]
+        if not proxy_results:
+            return None
+
+        fail2ban_results: list[LogAnalysisToolResult] = [
+            result
+            for result in tool_results
+            if result.tool_name == "inspect_live_fail2ban_activity"
+        ]
+        saw_4xx: bool = False
+        saw_5xx_or_upstream_error: bool = False
+        for result in proxy_results:
+            content: dict[str, Any] = result.structured_content
+            status_counts = content.get("status_class_counts", {})
+            if isinstance(status_counts, dict):
+                saw_4xx = saw_4xx or _to_int(status_counts.get("4xx")) > 0
+                saw_5xx_or_upstream_error = (
+                    saw_5xx_or_upstream_error or _to_int(status_counts.get("5xx")) > 0
+                )
+            saw_4xx = saw_4xx or _to_int(content.get("four_xx_count")) > 0
+            saw_5xx_or_upstream_error = (
+                saw_5xx_or_upstream_error
+                or _to_int(content.get("five_xx_count")) > 0
+                or _to_int(content.get("upstream_error_count")) > 0
+            )
+
+        if saw_5xx_or_upstream_error:
+            proxy_activity = "service_impact_possible"
+        elif saw_4xx:
+            proxy_activity = "scanner_or_probe_noise"
+        else:
+            proxy_activity = "no_probe_signal"
+
+        fail2ban_activity = "unknown"
+        if fail2ban_results:
+            fail2ban_activity = "inactive"
+            for result in fail2ban_results:
+                content = result.structured_content
+                if str(content.get("status", "")).lower() in {"error", "unavailable", "inactive"}:
+                    continue
+                jails = content.get("jails")
+                if (
+                    (isinstance(jails, list) and jails)
+                    or _to_int(content.get("active_jails")) > 0
+                    or _to_int(content.get("active_jail_count")) > 0
+                    or _to_int(content.get("currently_banned_total")) > 0
+                ):
+                    fail2ban_activity = "active"
+                    break
+
+        blocked_traffic_evidence = "not_applicable"
+        if proxy_activity == "scanner_or_probe_noise":
+            if fail2ban_activity == "active":
+                blocked_traffic_evidence = "present"
+            elif fail2ban_activity == "inactive":
+                blocked_traffic_evidence = "missing"
+            else:
+                blocked_traffic_evidence = "inconclusive"
+
+        if proxy_activity == "service_impact_possible":
+            recommendation_category = "investigate_mitigation_gap"
+        elif blocked_traffic_evidence == "present":
+            recommendation_category = "watch_only"
+        elif fail2ban_activity in {"unknown", "inactive"}:
+            recommendation_category = "verify_coverage"
+        else:
+            recommendation_category = "watch_only"
+        summaries: dict[str, str] = {
+            "watch_only": (
+                "Proxy activity looks like scanner/probe noise and fail2ban is active. "
+                "Treat this as watch-only unless other tool evidence shows service impact "
+                "or missed blocking."
+            ),
+            "verify_coverage": (
+                "Proxy activity looks like scanner/probe noise, but blocking evidence is "
+                "missing or inconclusive. Verify fail2ban/log coverage before recommending "
+                "mitigation changes."
+            ),
+            "investigate_mitigation_gap": (
+                "Proxy or upstream evidence may indicate service impact. Investigate the "
+                "traffic and mitigation coverage before treating it as watch-only noise."
+            ),
+        }
+        return LogAnalysisToolResult(
+            tool_name="monitoring_app_probe_interpretation",
+            arguments={},
+            structured_content={
+                "action": "monitoring_app_probe_interpretation",
+                "proxy_activity": proxy_activity,
+                "fail2ban_activity": fail2ban_activity,
+                "blocked_traffic_evidence": blocked_traffic_evidence,
+                "recommendation_category": recommendation_category,
+                "summary": summaries[recommendation_category],
+            },
+        )
 
     def _request_llm_action(
         self,
@@ -551,3 +671,17 @@ class MonitoringWorkflowAgent:
             return LogAnalysisFinalReport.model_validate(payload)
         except (TypeError, ValidationError, StructuredOutputError) as exc:
             raise ValueError("LLM final report did not match expected shape.") from exc
+
+
+def _to_int(value: object) -> int:
+    """Return a best-effort integer for deterministic MCP count fields."""
+
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
