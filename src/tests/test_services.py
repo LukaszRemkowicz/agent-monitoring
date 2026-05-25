@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from unittest.mock import ANY
 
 import pytest
 from llm_core.protocols import LLMProvider
@@ -299,8 +300,9 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_analysis_service_records_failure_state() -> None:
+async def test_log_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
     repository = FakeLogAnalysisRepository()
+    error_mock = mocker.patch("services.logger.error")
     service = LogAnalysisService(
         agent=FailingWorkflowAgent(),
         mcp_client=FakeMcpClient(),
@@ -318,6 +320,16 @@ async def test_log_analysis_service_records_failure_state() -> None:
     assert repository.saved[0]["status"] == RunStatus.FAILED.value
     assert repository.saved[0]["failure_stage"] == "log_analysis"
     assert repository.saved[0]["error_message"] == "MCP unavailable"
+    error_mock.assert_called_once_with(
+        "log-analysis workflow failed",
+        extra={
+            "event": "log_analysis_workflow_failed",
+            "analysis_date": "2026-05-19",
+            "failure_stage": "log_analysis",
+            "execution_time_seconds": ANY,
+            "error": "MCP unavailable",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -450,8 +462,9 @@ async def test_sitemap_analysis_service_creates_workflow_record() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_service_records_failure_state() -> None:
+async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
     repository = FailingSitemapCompletionRepository()
+    error_mock = mocker.patch("services.logger.error")
     service = SitemapAnalysisService(
         repository=repository,
         root_sitemap_url="https://example.com/sitemap.xml",
@@ -468,6 +481,15 @@ async def test_sitemap_analysis_service_records_failure_state() -> None:
     assert repository.saved[0]["status"] == RunStatus.FAILED.value
     assert repository.saved[0]["failure_stage"] == "workflow_preparation"
     assert repository.saved[0]["error_message"] == "sitemap preparation failed"
+    error_mock.assert_called_once_with(
+        "sitemap-analysis workflow failed",
+        extra={
+            "event": "sitemap_analysis_workflow_failed",
+            "analysis_date": "2026-05-19",
+            "failure_stage": "workflow_preparation",
+            "error": "sitemap preparation failed",
+        },
+    )
 
 
 @pytest.mark.asyncio

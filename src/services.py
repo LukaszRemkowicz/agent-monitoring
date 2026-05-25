@@ -122,6 +122,16 @@ class LogAnalysisService:
             )
         except Exception as exc:
             execution_time_seconds: float = round(monotonic() - execution_started_at, 3)
+            logger.error(
+                "log-analysis workflow failed",
+                extra={
+                    "event": "log_analysis_workflow_failed",
+                    "analysis_date": str(analysis_date),
+                    "failure_stage": "log_analysis",
+                    "execution_time_seconds": execution_time_seconds,
+                    "error": str(exc),
+                },
+            )
             await self.repository.update(
                 analysis,
                 status=RunStatus.FAILED,
@@ -257,6 +267,15 @@ class SitemapAnalysisService:
                 summary=SITEMAP_WORKFLOW_READY_SUMMARY,
             )
         except Exception as exc:
+            logger.error(
+                "sitemap-analysis workflow failed",
+                extra={
+                    "event": "sitemap_analysis_workflow_failed",
+                    "analysis_date": str(analysis_date),
+                    "failure_stage": "workflow_preparation",
+                    "error": str(exc),
+                },
+            )
             await self.repository.update(
                 analysis,
                 status=RunStatus.FAILED,

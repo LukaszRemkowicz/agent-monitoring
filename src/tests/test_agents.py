@@ -294,6 +294,90 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
 
 
 @pytest.mark.asyncio
+async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
+    mocker: MockerFixture,
+) -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    duplicate_action = {
+        "action": "call_tools",
+        "tool_calls": [
+            {
+                "tool_name": "group_errors",
+                "arguments": {"project_name": "landingpage"},
+            }
+        ],
+    }
+    llm_provider.queue_text_response(json.dumps(duplicate_action))
+    llm_provider.queue_text_response(json.dumps(duplicate_action))
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Logs were summarized after duplicate tool request was skipped.",
+                "severity": "INFO",
+                "severity_rationale": "INFO because no service-impacting issue was found.",
+                "key_findings": ["Duplicate MCP tool request was skipped."],
+                "evidence": ["group_errors result was already available."],
+                "coverage_gaps": [],
+                "recommendations": "Keep monitoring.",
+                "watch_only_items": [],
+                "trend_summary": "No historical trend was available.",
+            }
+        )
+    )
+    info_mock = mocker.patch("agents.logger.info")
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    assert mcp_client.calls == [
+        "get_workflow_bundle",
+        "read_resource:skill://workflow/severity_guide",
+        "list_projects",
+        "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
+        "call_deterministic_tool:group_errors:{'project_name': 'landingpage'}",
+    ]
+    assert [result.tool_name for result in context.tool_results] == [
+        "group_errors",
+        "duplicate_mcp_tool_call_skipped",
+    ]
+    duplicate_result = context.tool_results[1]
+    assert duplicate_result.structured_content == {
+        "action": "duplicate_mcp_tool_call_skipped",
+        "tool_name": "group_errors",
+        "message": (
+            "This MCP tool call was already executed with the same arguments. "
+            "Use the previous result, request a different tool, or return final_report."
+        ),
+    }
+    followup_text: str = cast(TextPart, llm_provider.requests[2].messages[-1].parts[0]).text
+    assert "duplicate_mcp_tool_call_skipped" in followup_text
+    duplicate_log_calls = [
+        call
+        for call in info_mock.call_args_list
+        if call.args and call.args[0] == "skipping duplicate LLM-requested MCP tool call"
+    ]
+    assert len(duplicate_log_calls) == 1
+    assert duplicate_log_calls[0].kwargs["extra"] == {
+        "event": "log_analysis_duplicate_mcp_tool_call_skipped",
+        "tool_name": "group_errors",
+    }
+
+
+@pytest.mark.asyncio
 async def test_monitoring_workflow_agent_logs_llm_actions(
     mocker: MockerFixture,
 ) -> None:

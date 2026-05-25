@@ -21,6 +21,7 @@ from schemas import (
     LogAnalysisPreparedPrompt,
     LogAnalysisPromptContext,
     LogAnalysisSkillReadRequest,
+    LogAnalysisToolCall,
     LogAnalysisToolCallRequest,
     LogAnalysisToolResult,
     LogCollectionWindow,
@@ -250,6 +251,7 @@ class MonitoringWorkflowAgent:
         ]
         tool_results: list[LogAnalysisToolResult] = []
         fetched_skill_names: set[str] = set()
+        executed_mcp_tool_calls: set[str] = set()
         llm_tokens_used: int = 0
         llm_cost_usd: float = 0.0
         for iteration in range(1, MAX_LLM_TOOL_LOOP_ITERATIONS + 1):
@@ -280,6 +282,7 @@ class MonitoringWorkflowAgent:
                 new_tool_results: list[LogAnalysisToolResult] = await self._execute_requested_tools(
                     tool_request=tool_request,
                     workflow=workflow,
+                    executed_mcp_tool_calls=executed_mcp_tool_calls,
                 )
             elif action == "read_skills":
                 skill_request: LogAnalysisSkillReadRequest = self._build_skill_read_request(payload)
@@ -389,6 +392,7 @@ class MonitoringWorkflowAgent:
         *,
         tool_request: LogAnalysisToolCallRequest,
         workflow: WorkflowBootstrap,
+        executed_mcp_tool_calls: set[str],
     ) -> list[LogAnalysisToolResult]:
         """Execute validated MCP tools requested by the LLM action."""
 
@@ -399,6 +403,32 @@ class MonitoringWorkflowAgent:
         for tool_call in tool_request.tool_calls:
             if tool_call.tool_name not in available_tool_names:
                 raise ValueError(f"LLM requested unavailable MCP tool: {tool_call.tool_name}")
+            tool_call_key: str = self._build_mcp_tool_call_key(tool_call)
+            if tool_call_key in executed_mcp_tool_calls:
+                logger.info(
+                    "skipping duplicate LLM-requested MCP tool call",
+                    extra={
+                        "event": "log_analysis_duplicate_mcp_tool_call_skipped",
+                        "tool_name": tool_call.tool_name,
+                    },
+                )
+                tool_results.append(
+                    LogAnalysisToolResult(
+                        tool_name="duplicate_mcp_tool_call_skipped",
+                        arguments=tool_call.arguments,
+                        structured_content={
+                            "action": "duplicate_mcp_tool_call_skipped",
+                            "tool_name": tool_call.tool_name,
+                            "message": (
+                                "This MCP tool call was already executed with the same "
+                                "arguments. Use the previous result, request a different "
+                                "tool, or return final_report."
+                            ),
+                        },
+                    )
+                )
+                continue
+            executed_mcp_tool_calls.add(tool_call_key)
             structured_content: dict[str, Any] = await self.mcp_client.call_deterministic_tool(
                 tool_call.tool_name,
                 tool_call.arguments,
@@ -411,6 +441,19 @@ class MonitoringWorkflowAgent:
                 )
             )
         return tool_results
+
+    @staticmethod
+    def _build_mcp_tool_call_key(tool_call: LogAnalysisToolCall) -> str:
+        """Return a stable key for one MCP tool name plus its arguments."""
+
+        return json.dumps(
+            {
+                "tool_name": tool_call.tool_name,
+                "arguments": tool_call.arguments,
+            },
+            sort_keys=True,
+            default=str,
+        )
 
     async def _execute_requested_skill_reads(
         self,
