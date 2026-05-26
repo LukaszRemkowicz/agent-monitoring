@@ -66,11 +66,12 @@ def _sanitize_message(value: str) -> str:
 
 
 def _extra_log_fields(record: logging.LogRecord) -> dict[str, Any]:
-    return {
+    fields = {
         key: _normalize_log_value(value)
         for key, value in record.__dict__.items()
         if key not in _STANDARD_LOG_RECORD_FIELDS and not key.startswith("_")
     }
+    return fields
 
 
 def _use_color(value: str, stream: Any) -> bool:

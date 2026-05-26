@@ -9,23 +9,99 @@ from typing import Any, cast
 import pytest
 import typer
 from click import unstyle
+from llm_core.exceptions import ProviderConfigurationError, ProviderExecutionError
 from pytest_mock import MockerFixture
+from tortoise.exceptions import IntegrityError
 from typer.testing import CliRunner
 
 import main
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
+from exceptions import McpClientError, PrivateMonitoringContextError
 from schemas import (
+    CollectLogsArtifact,
+    LogAnalysisAgentContext,
+    LogAnalysisFinalReport,
     LogAnalysisOut,
+    LogAnalysisPreparedPrompt,
+    LogAnalysisPromptContext,
     LogAnalysisWorkflowResult,
+    LogCollectionWindow,
     McpServiceStatus,
+    ProjectManifestSummary,
     SitemapAnalysisOut,
     SitemapAnalysisWorkflowResult,
+    SnapshotAccessGuidance,
     WorkflowBootstrap,
 )
+from tests.conftest import build_collect_logs_artifact_payload
 
 runner = CliRunner()
+
+
+def _patch_log_analysis_command_dependencies(
+    mocker: MockerFixture,
+    fake_service: object,
+) -> dict[str, Any]:
+    """Patch command-layer constructors while testing CLI argument handling."""
+
+    service_calls: list[dict[str, Any]] = []
+    original_service_class = main.LogAnalysisService
+
+    class FakeLogAnalysisServiceConstructor:
+        create_log_collection_window = staticmethod(
+            original_service_class.create_log_collection_window
+        )
+
+        def __new__(cls, **kwargs: Any) -> Any:
+            service_calls.append(kwargs)
+            return fake_service
+
+    dependencies = dict[str, Any](
+        mcp_client=object(),
+        agent=object(),
+        llm_provider=object(),
+        repository=object(),
+        llm_call_repository=object(),
+        service_calls=service_calls,
+    )
+    dependencies["mcp_client_constructor"] = mocker.patch.object(
+        main,
+        "McpWorkflowClient",
+        return_value=dependencies["mcp_client"],
+    )
+    dependencies["agent_constructor"] = mocker.patch.object(
+        main,
+        "MonitoringWorkflowAgent",
+        return_value=dependencies["agent"],
+    )
+    dependencies["llm_provider_factory"] = mocker.patch.object(
+        main,
+        "get_monitoring_llm_provider",
+        return_value=dependencies["llm_provider"],
+    )
+    dependencies["context_loader"] = mocker.patch.object(
+        main,
+        "load_private_monitoring_context",
+        return_value="Private VPS context",
+    )
+    dependencies["repository_constructor"] = mocker.patch.object(
+        main,
+        "LogAnalysisRepository",
+        return_value=dependencies["repository"],
+    )
+    dependencies["llm_call_repository_constructor"] = mocker.patch.object(
+        main,
+        "LLMCallRepository",
+        return_value=dependencies["llm_call_repository"],
+    )
+    mocker.patch.object(
+        main,
+        "LogAnalysisService",
+        FakeLogAnalysisServiceConstructor,
+    )
+    return dependencies
 
 
 def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
@@ -34,7 +110,98 @@ def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=analysis_date,
         status="succeeded",
-        summary="Workflow bundle loaded.",
+        summary="Landingpage logs are healthy.",
+        severity="INFO",
+        key_findings=["No critical incidents found."],
+        recommendations="Keep watching the backend logs.",
+        trend_summary="No prior trend data was available.",
+        execution_time_seconds=3.25,
+    )
+
+
+def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
+    workflow = WorkflowBootstrap(
+        workflow_name="analyze_daily_log_bundle",
+        prompt="Prompt",
+        mandatory_skills=[],
+        optional_skills=[],
+        tools=[],
+    )
+    collect_logs = CollectLogsArtifact.model_validate(
+        build_collect_logs_artifact_payload(
+            next_step_tips=[],
+            resolved_source_keys=["backend"],
+        )
+    )
+    return LogAnalysisWorkflowResult(
+        analysis=_log_analysis_out(analysis_date),
+        agent_context=LogAnalysisAgentContext(
+            workflow=workflow,
+            collect_logs=collect_logs,
+            prompt=LogAnalysisPreparedPrompt(
+                system_prompt="Prompt",
+                context=LogAnalysisPromptContext(
+                    analysis_date=analysis_date,
+                    workflow_name=workflow.workflow_name,
+                    current_phase="final_report",
+                    completed_steps=[
+                        "analyze_daily_log_bundle",
+                        "read_mandatory_skills",
+                        "list_projects",
+                        "collect_logs",
+                    ],
+                    allowed_actions=["call_tools", "read_skills", "final_report"],
+                    next_required_action="final_report",
+                    final_report_allowed=True,
+                    available_projects=[
+                        ProjectManifestSummary(
+                            project_name="landingpage",
+                            project_summary="Landingpage project.",
+                            source_keys=["backend"],
+                        )
+                    ],
+                    mandatory_skills=[],
+                    optional_skills=[],
+                    collection=collect_logs,
+                    snapshot_access=SnapshotAccessGuidance(
+                        workspace="workflow",
+                        session_id=None,
+                        session_id_is_for_session_workspace_only=True,
+                        workflow_followup_arguments=["project_name", "archive_name"],
+                        instruction="Use project_name for workflow follow-up tools.",
+                    ),
+                    available_tools=[],
+                    report_contract={
+                        "summary": "string",
+                        "severity": "INFO|WARNING|CRITICAL",
+                        "severity_rationale": "string",
+                        "key_findings": "list[string]",
+                        "recommendations": "string",
+                        "trend_summary": "string",
+                    },
+                    instructions=[
+                        "Use deterministic MCP snapshot tools before final report.",
+                    ],
+                ),
+            ),
+            final_report=LogAnalysisFinalReport(
+                action="final_report",
+                summary="Landingpage logs are healthy.",
+                severity="INFO",
+                severity_rationale="INFO because no service-impacting issue was found.",
+                key_findings=["No critical incidents found."],
+                evidence=["group_errors found no repeated backend errors."],
+                coverage_gaps=["celery_beat collected zero lines."],
+                recommendations="Keep watching the backend logs.",
+                watch_only_items=["Routine SSH brute-force traffic blocked by fail2ban."],
+                trend_summary="No prior trend data was available.",
+            ),
+            log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
+            log_window_until=datetime(2026, 5, 20, tzinfo=UTC),
+            llm_tokens_used=123,
+            llm_cost_usd=0.02,
+            llm_report_execution_time_seconds=4.32,
+        ),
     )
 
 
@@ -49,7 +216,7 @@ def _sitemap_analysis_out(analysis_date: date) -> SitemapAnalysisOut:
     )
 
 
-def test_cli_help_lists_phase_zero_commands() -> None:
+def test_cli_help_lists_monitoring_commands() -> None:
     result = runner.invoke(main.app, ["--help"])
 
     assert result.exit_code == 0
@@ -69,43 +236,57 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             self,
             *,
             analysis_date: date,
+            log_window: LogCollectionWindow,
             force: bool,
             send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
+                    "log_window": log_window.model_dump(),
                     "force": force,
                     "send_email": send_email,
                 }
             )
-            return LogAnalysisWorkflowResult(
-                analysis=_log_analysis_out(analysis_date),
-                workflow=WorkflowBootstrap(
-                    workflow_name="analyze_daily_log_bundle",
-                    prompt="Prompt",
-                    mandatory_skills=[],
-                    optional_skills=[],
-                    tools=[],
-                ),
-            )
+            return _log_analysis_result(analysis_date)
 
     fake_service = FakeLogAnalysisService()
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
-    )
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
 
     result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
-    assert "Loaded MCP workflow bundle analyze_daily_log_bundle" in result.output
+    assert "Completed log-analysis report analyze_daily_log_bundle" in result.output
+    assert "severity=INFO" in result.output
+    assert "Summary: Landingpage logs are healthy." in result.output
+    assert "Severity rationale: INFO because no service-impacting issue was found." in result.output
+    assert "Key findings:" in result.output
+    assert "- No critical incidents found." in result.output
+    assert "Evidence:" in result.output
+    assert "- group_errors found no repeated backend errors." in result.output
+    assert "Coverage gaps:" in result.output
+    assert "- celery_beat collected zero lines." in result.output
+    assert "Watch-only items:" in result.output
+    assert "- Routine SSH brute-force traffic blocked by fail2ban." in result.output
+    assert "Recommendations: Keep watching the backend logs." in result.output
+    assert "LLM report time: 4.32s" in result.output
+    assert "Execution time: 3.25s" in result.output
     assert fake_service.calls[0] == {
         "analysis_date": date(2026, 5, 19),
+        "log_window": {
+            "since": "2026-05-19T00:00:00Z",
+            "until": "2026-05-20T00:00:00Z",
+            "since_datetime": datetime(2026, 5, 19, tzinfo=UTC),
+            "until_datetime": datetime(2026, 5, 20, tzinfo=UTC),
+        },
         "force": False,
         "send_email": True,
     }
+    assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
+    assert (
+        dependencies["service_calls"][0]["llm_call_repository"]
+        is dependencies["llm_call_repository"]
+    )
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -124,51 +305,47 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
             self,
             *,
             analysis_date: date,
+            log_window: LogCollectionWindow,
             force: bool,
             send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
+                    "log_window": log_window.model_dump(),
                     "force": force,
                     "send_email": send_email,
                 }
             )
-            return LogAnalysisWorkflowResult(
-                analysis=_log_analysis_out(analysis_date),
-                workflow=WorkflowBootstrap(
-                    workflow_name="analyze_daily_log_bundle",
-                    prompt="Prompt",
-                    mandatory_skills=[],
-                    optional_skills=[],
-                    tools=[],
-                ),
-            )
+            return _log_analysis_result(analysis_date)
 
     fake_service = FakeLogAnalysisService()
     mocker.patch.object(main, "date", FakeDate)
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
-    )
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
 
     result = runner.invoke(main.app, ["log-analysis"])
 
     assert result.exit_code == 0
     assert fake_service.calls[0]["analysis_date"] == date(2026, 5, 20)
+    assert fake_service.calls[0]["log_window"] == {
+        "since": "2026-05-20T00:00:00Z",
+        "until": "2026-05-21T00:00:00Z",
+        "since_datetime": datetime(2026, 5, 20, tzinfo=UTC),
+        "until_datetime": datetime(2026, 5, 21, tzinfo=UTC),
+    }
     assert "analysis_date=2026-05-20" in result.output
+    assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
 
 
 def test_check_mcp_command_calls_mcp_service_status(
     mocker: MockerFixture,
 ) -> None:
-    class FakeLogAnalysisService:
+    class FakeMcpWorkflowClient:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        async def check_mcp_status(self) -> McpServiceStatus:
-            self.calls.append("check_mcp_status")
+        async def get_service_status(self) -> McpServiceStatus:
+            self.calls.append("get_service_status")
             return McpServiceStatus(
                 name="mcp-log-server",
                 status="ok",
@@ -176,17 +353,21 @@ def test_check_mcp_command_calls_mcp_service_status(
                 client_type="workflow_agent",
             )
 
-    fake_service = FakeLogAnalysisService()
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
+    fake_client = FakeMcpWorkflowClient()
+    build_client = mocker.patch.object(
+        main,
+        "McpWorkflowClient",
+        return_value=fake_client,
     )
 
     result = runner.invoke(main.app, ["check-mcp"])
 
     assert result.exit_code == 0
-    assert fake_service.calls == ["check_mcp_status"]
+    assert fake_client.calls == ["get_service_status"]
+    assert build_client.call_args.kwargs == {
+        "base_url": main.settings.LOG_ANALYSIS_MCP_URL,
+        "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
+    }
     assert "MCP service is reachable" in result.output
     assert "name=mcp-log-server" in result.output
     assert "status=ok" in result.output
@@ -216,15 +397,16 @@ def test_sitemap_analysis_command_calls_sitemap_service(
             return SitemapAnalysisWorkflowResult(analysis=_sitemap_analysis_out(analysis_date))
 
     fake_service = FakeSitemapAnalysisService()
-    mocker.patch.object(
-        main.SitemapAnalysisService,
-        "create_default",
+    build_service = mocker.patch.object(
+        main,
+        "SitemapAnalysisService",
         return_value=fake_service,
     )
 
     result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
+    assert build_service.call_args.kwargs["root_sitemap_url"] == main.settings.SITEMAP_ROOT_URL
     assert "Prepared sitemap analysis record" in result.output
     assert fake_service.calls[0] == {
         "analysis_date": date(2026, 5, 19),
@@ -253,8 +435,8 @@ def test_as_async_runs_coroutine_function() -> None:
         calls.append(name)
         return name.upper()
 
-    assert command("phase-0") == "PHASE-0"
-    assert calls == ["phase-0"]
+    assert command("monitoring") == "MONITORING"
+    assert calls == ["monitoring"]
 
 
 def test_db_decorator_runs_coroutine_inside_database_lifespan(
@@ -285,8 +467,8 @@ def test_db_decorator_runs_coroutine_inside_database_lifespan(
         calls.append(name)
         return name.upper()
 
-    assert command("phase-0") == "PHASE-0"
-    assert calls == ["enter", "phase-0", "exit"]
+    assert command("monitoring") == "MONITORING"
+    assert calls == ["enter", "monitoring", "exit"]
 
 
 def test_db_decorator_can_be_called_as_factory(
@@ -356,6 +538,322 @@ def test_db_decorator_formats_database_connection_errors(
     assert "Database connection failed" in output
     assert isinstance(result.exception, SystemExit)
     assert result.exception.code == 1
+    assert "Traceback" not in output
+
+
+def test_db_decorator_does_not_label_integrity_errors_as_connection_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise IntegrityError("duplicate key value violates unique constraint")
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Database integrity error" in output
+    assert "duplicate key value violates unique constraint" in output
+    assert "Database connection failed" not in output
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_mcp_client_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise McpClientError(
+            "MCP workflow call failed: All connection attempts failed",
+            mcp_url="http://127.0.0.1:8001/mcp",
+            tool_name="analyze_daily_log_bundle",
+            hint=(
+                "Check LOG_ANALYSIS_MCP_URL and whether the MCP server is running. "
+                "For Docker Compose commands, remember that localhost means the "
+                "monitoring container, not your host."
+            ),
+        )
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "MCP call failed" in output
+    assert "analyze_daily_log_bundle" in output
+    assert "http://127.0.0.1:8001/mcp" in output
+    assert "connection attempts failed" in output
+    assert "Check LOG_ANALYSIS_MCP_URL" in output
+    assert "server is running" in output
+    assert "Docker Compose" in output
+    assert "means the monitoring container" in output
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
+    assert "Traceback" not in output
+
+
+def test_db_decorator_does_not_add_connectivity_hint_to_mcp_validation_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise McpClientError(
+            (
+                "MCP collect_logs response did not match expected shape. "
+                "Invalid fields: result.structuredContent.projects.0.sources: Field required."
+            ),
+            mcp_url="http://127.0.0.1:8001/mcp",
+            tool_name="collect_logs",
+        )
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Invalid fields" in output
+    assert "result.structuredContent.projects.0.sources" in output
+    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "MCP_WORKFLOW_JWT" not in output
+    assert "MCP server is running" not in output
+
+
+def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_hint(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise McpClientError(
+            (
+                "MCP collect_logs error: Unknown project 'landingpage'. "
+                "No persisted manifest was found for that project. "
+                "Retry tips: Call list_projects to discover available projects."
+            ),
+            mcp_url="http://127.0.0.1:8001/mcp",
+            tool_name="collect_logs",
+        )
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "MCP call failed" in output
+    assert "collect_logs" in output
+    assert "Unknown project 'landingpage'" in output
+    assert "No persisted manifest" in output
+    assert "was found for that project" in output
+    assert "Call list_projects" in output
+    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "MCP_WORKFLOW_JWT" not in output
+    assert "MCP server is running" not in output
+
+
+def test_db_decorator_formats_llm_provider_configuration_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise ProviderConfigurationError("OpenAI API key is required when no client is injected")
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "LLM provider configuration failed" in output
+    assert "OpenAI API" in output
+    assert "key is required" in output
+    assert "OPENAI_API_KEY" in output
+    assert "OPEN_API_KEY" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_private_monitoring_context_errors(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        raise PrivateMonitoringContextError(
+            "Private monitoring context file is required but was not found: "
+            "/app/private/vps_monitoring_context.md",
+            context_path="/app/private/vps_monitoring_context.md",
+        )
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Private monitoring context is not configured" in output
+    assert "/app/private/vps_monitoring_context.md" in output
+    assert "MONITORING_PRIVATE_CONTEXT_PATH" in output
+    assert "private/vps_monitoring_context.md" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_llm_provider_execution_error_cause(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        try:
+            raise RuntimeError("HTTP 400: unsupported parameter 'temperature'")
+        except RuntimeError as exc:
+            raise ProviderExecutionError("OpenAI provider request failed") from exc
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "LLM provider request failed" in output
+    assert "OpenAI provider request failed" in output
+    assert "RuntimeError" in output
+    assert "unsupported parameter 'temperature'" in output
     assert "Traceback" not in output
 
 

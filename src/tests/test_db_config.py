@@ -7,7 +7,7 @@ from conf import Settings
 from db.config import build_database_url, build_tortoise_config
 
 
-def test_build_tortoise_config_contains_aerich_only_for_phase_zero() -> None:
+def test_build_tortoise_config_contains_aerich_models() -> None:
     settings = Settings(
         {
             "DATABASE_HOST": "db",

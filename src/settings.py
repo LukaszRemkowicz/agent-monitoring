@@ -36,6 +36,10 @@ LOG_ANALYSIS_MCP_URL = env.str(
 )
 MCP_WORKFLOW_JWT = env.str("MCP_WORKFLOW_JWT", default="")
 MONITORING_PROJECT = env.str("MONITORING_PROJECT", default="landingpage")
+MONITORING_PRIVATE_CONTEXT_PATH = env.str(
+    "MONITORING_PRIVATE_CONTEXT_PATH",
+    default=str(REPOSITORY_ROOT / "private/vps_monitoring_context.md"),
+)
 MONITORING_LLM_PROVIDER = env.str("MONITORING_LLM_PROVIDER", default="openai-fast")
 MONITORING_LLM_FAST_MODEL = env.str("MONITORING_LLM_FAST_MODEL", default="gpt-4.1-mini")
 MONITORING_LLM_STRONG_MODEL = env.str("MONITORING_LLM_STRONG_MODEL", default="gpt-5")

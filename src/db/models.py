@@ -22,12 +22,12 @@ class RunStatus(StrEnum):
 class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
     """Query helpers for log analyses."""
 
-    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> QuerySet[LogAnalysis]:
         """Filter log analyses for a specific analysis date."""
 
         return self.filter(analysis_date=analysis_date)
 
-    def older_than(self, days: int) -> LogAnalysisQuerySet:
+    def older_than(self, days: int) -> QuerySet[LogAnalysis]:
         """Filter log analyses older than N days."""
 
         cutoff = date.today() - timedelta(days=days)
@@ -36,7 +36,7 @@ class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
     def last_5_days(
         self,
         exclude_date: date | None = None,
-    ) -> LogAnalysisQuerySet:
+    ) -> QuerySet[LogAnalysis]:
         """Return log analyses from the last five days, newest first."""
 
         cutoff = date.today() - timedelta(days=5)
@@ -45,20 +45,20 @@ class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
             queryset = queryset.exclude(analysis_date=exclude_date)
         return queryset
 
-    def unsent_emails(self) -> LogAnalysisQuerySet:
+    def unsent_emails(self) -> QuerySet[LogAnalysis]:
         """Filter log analyses where email has not been sent."""
 
         return self.filter(email_sent=False)
 
-    def by_severity(self, severity: str) -> LogAnalysisQuerySet:
+    def by_severity(self, severity: str) -> QuerySet[LogAnalysis]:
         """Filter log analyses by severity."""
 
         return self.filter(severity=severity)
 
-    def critical(self) -> LogAnalysisQuerySet:
+    def critical(self) -> QuerySet[LogAnalysis]:
         """Filter critical severity log analyses."""
 
-        return self.by_severity(LogAnalysis.Severity.CRITICAL.value)
+        return self.by_severity(LogAnalysis.Severity.CRITICAL)
 
 
 class LogAnalysisManager(QuerySetManager["LogAnalysis", LogAnalysisQuerySet]):
@@ -67,34 +67,34 @@ class LogAnalysisManager(QuerySetManager["LogAnalysis", LogAnalysisQuerySet]):
     def __init__(self) -> None:
         super().__init__(LogAnalysisQuerySet)
 
-    def filter_by_date(self, analysis_date: date) -> LogAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> QuerySet[LogAnalysis]:
         return self.get_queryset().filter_by_date(analysis_date)
 
-    def older_than(self, days: int) -> LogAnalysisQuerySet:
+    def older_than(self, days: int) -> QuerySet[LogAnalysis]:
         return self.get_queryset().older_than(days)
 
-    def last_5_days(self, exclude_date: date | None = None) -> LogAnalysisQuerySet:
+    def last_5_days(self, exclude_date: date | None = None) -> QuerySet[LogAnalysis]:
         return self.get_queryset().last_5_days(exclude_date=exclude_date)
 
-    def unsent_emails(self) -> LogAnalysisQuerySet:
+    def unsent_emails(self) -> QuerySet[LogAnalysis]:
         return self.get_queryset().unsent_emails()
 
-    def by_severity(self, severity: str) -> LogAnalysisQuerySet:
+    def by_severity(self, severity: str) -> QuerySet[LogAnalysis]:
         return self.get_queryset().by_severity(severity)
 
-    def critical(self) -> LogAnalysisQuerySet:
+    def critical(self) -> QuerySet[LogAnalysis]:
         return self.get_queryset().critical()
 
 
 class SitemapAnalysisQuerySet(QuerySet["SitemapAnalysis"]):
     """Query helpers for sitemap analyses."""
 
-    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> QuerySet[SitemapAnalysis]:
         """Filter sitemap analyses for a specific analysis date."""
 
         return self.filter(analysis_date=analysis_date)
 
-    def older_than(self, days: int) -> SitemapAnalysisQuerySet:
+    def older_than(self, days: int) -> QuerySet[SitemapAnalysis]:
         """Filter sitemap analyses older than N days."""
 
         cutoff = date.today() - timedelta(days=days)
@@ -103,7 +103,7 @@ class SitemapAnalysisQuerySet(QuerySet["SitemapAnalysis"]):
     def last_5_days(
         self,
         exclude_date: date | None = None,
-    ) -> SitemapAnalysisQuerySet:
+    ) -> QuerySet[SitemapAnalysis]:
         """Return sitemap analyses from the last five days, newest first."""
 
         cutoff = date.today() - timedelta(days=5)
@@ -112,20 +112,20 @@ class SitemapAnalysisQuerySet(QuerySet["SitemapAnalysis"]):
             queryset = queryset.exclude(analysis_date=exclude_date)
         return queryset
 
-    def unsent_emails(self) -> SitemapAnalysisQuerySet:
+    def unsent_emails(self) -> QuerySet[SitemapAnalysis]:
         """Filter sitemap analyses where email has not been sent."""
 
         return self.filter(email_sent=False)
 
-    def by_severity(self, severity: str) -> SitemapAnalysisQuerySet:
+    def by_severity(self, severity: str) -> QuerySet[SitemapAnalysis]:
         """Filter sitemap analyses by severity."""
 
         return self.filter(severity=severity)
 
-    def critical(self) -> SitemapAnalysisQuerySet:
+    def critical(self) -> QuerySet[SitemapAnalysis]:
         """Filter critical severity sitemap analyses."""
 
-        return self.by_severity(SitemapAnalysis.Severity.CRITICAL.value)
+        return self.by_severity(SitemapAnalysis.Severity.CRITICAL)
 
 
 class SitemapAnalysisManager(QuerySetManager["SitemapAnalysis", SitemapAnalysisQuerySet]):
@@ -134,22 +134,22 @@ class SitemapAnalysisManager(QuerySetManager["SitemapAnalysis", SitemapAnalysisQ
     def __init__(self) -> None:
         super().__init__(SitemapAnalysisQuerySet)
 
-    def filter_by_date(self, analysis_date: date) -> SitemapAnalysisQuerySet:
+    def filter_by_date(self, analysis_date: date) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().filter_by_date(analysis_date)
 
-    def older_than(self, days: int) -> SitemapAnalysisQuerySet:
+    def older_than(self, days: int) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().older_than(days)
 
-    def last_5_days(self, exclude_date: date | None = None) -> SitemapAnalysisQuerySet:
+    def last_5_days(self, exclude_date: date | None = None) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().last_5_days(exclude_date=exclude_date)
 
-    def unsent_emails(self) -> SitemapAnalysisQuerySet:
+    def unsent_emails(self) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().unsent_emails()
 
-    def by_severity(self, severity: str) -> SitemapAnalysisQuerySet:
+    def by_severity(self, severity: str) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().by_severity(severity)
 
-    def critical(self) -> SitemapAnalysisQuerySet:
+    def critical(self) -> QuerySet[SitemapAnalysis]:
         return self.get_queryset().critical()
 
 
@@ -289,6 +289,50 @@ class LogAnalysis(DatabaseModel):
 
         self.email_sent = True
         await self.save(update_fields=["email_sent"])
+
+
+class LogAnalysisLLMCall(DatabaseModel):
+    """One persisted LLM/tool-loop decision from a log-analysis run."""
+
+    id = fields.IntField(primary_key=True)
+    trace_id = fields.CharField(
+        max_length=64,
+        db_index=True,
+        description="Run-local trace id grouping LLM calls from one command execution.",
+    )
+    analysis_date = fields.DateField(
+        null=True,
+        db_index=True,
+        description="Analysis date associated with this LLM call.",
+    )
+    workflow_name = fields.CharField(max_length=160, null=True, db_index=True)
+    mcp_session_id = fields.CharField(max_length=255, null=True)
+    iteration = fields.IntField(null=True, db_index=True)
+    step_type = fields.CharField(
+        max_length=80,
+        db_index=True,
+        description="Kind of agent-loop step, such as llm_action_received or mcp_tool_call.",
+    )
+    action = fields.CharField(max_length=80, null=True, db_index=True)
+    tool_name = fields.CharField(max_length=160, null=True, db_index=True)
+    skill_name = fields.CharField(max_length=160, null=True, db_index=True)
+    requested_tool_names_text = fields.TextField(default="")
+    requested_skill_names_text = fields.TextField(default="")
+    arguments_hash = fields.CharField(max_length=64, null=True, db_index=True)
+    arguments_text = fields.TextField(default="")
+    status = fields.CharField(max_length=40, null=True, db_index=True)
+    duplicate_skipped = fields.BooleanField(default=False, db_index=True)
+    started_at = fields.DatetimeField(null=True)
+    finished_at = fields.DatetimeField(null=True)
+    duration_ms = fields.IntField(null=True)
+    llm_response_text = fields.TextField(default="")
+    error_message = fields.TextField(default="")
+    result_summary = fields.TextField(default="")
+    created_at = fields.DatetimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        table = "log_analysis_llm_calls"
+        ordering = ["created_at", "id"]
 
 
 class SitemapAnalysis(DatabaseModel):

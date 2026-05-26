@@ -1,12 +1,22 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
-from db.models import LogAnalysis, SitemapAnalysis
-from repositories import LogAnalysisRepository, SitemapAnalysisRepository
-from schemas import LogAnalysisIn, LogAnalysisOut, SitemapAnalysisIn, SitemapAnalysisOut
+from db.models import LogAnalysis, LogAnalysisLLMCall, SitemapAnalysis
+from repositories import (
+    LLMCallRepository,
+    LogAnalysisRepository,
+    SitemapAnalysisRepository,
+)
+from schemas import (
+    LogAnalysisIn,
+    LogAnalysisLLMCallIn,
+    LogAnalysisOut,
+    SitemapAnalysisIn,
+    SitemapAnalysisOut,
+)
 from tests.factories import LogAnalysisFactory, SitemapAnalysisFactory
 
 
@@ -126,3 +136,52 @@ async def test_sitemap_analysis_repository_updates_contract_with_kwargs() -> Non
     assert updated.id == analysis.id
     assert updated.status == "succeeded"
     assert updated.summary == "Sitemap analysis service is ready."
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_llm_call_repository_creates_steps() -> None:
+    repository = LLMCallRepository(trace_id="trace-1")
+
+    await repository.create(
+        LogAnalysisLLMCallIn(
+            analysis_date=date(2026, 5, 19),
+            workflow_name="analyze_daily_log_bundle",
+            iteration=1,
+            step_type="llm_call",
+            action="call_tools",
+            llm_response_text='{"action": "call_tools"}',
+        )
+    )
+    await repository.create(
+        LogAnalysisLLMCallIn(
+            trace_id="trace-2",
+            step_type="llm_call",
+            action="final_report",
+        )
+    )
+    await repository.create(
+        LogAnalysisLLMCallIn(
+            analysis_date=date(2026, 5, 19),
+            workflow_name="analyze_daily_log_bundle",
+            iteration=1,
+            step_type="mcp_tool_call",
+            tool_name="inspect_proxy_activity",
+            arguments_hash="abc123",
+            arguments_text='{"project_name": "landingpage"}',
+            status="succeeded",
+            started_at=datetime(2026, 5, 19, 12, tzinfo=UTC),
+            finished_at=datetime(2026, 5, 19, 12, 0, 1, tzinfo=UTC),
+            duration_ms=1000,
+        )
+    )
+
+    steps: list[LogAnalysisLLMCall] = await LogAnalysisLLMCall.objects.filter(
+        trace_id="trace-1"
+    ).order_by("created_at", "id")
+
+    assert [step.step_type for step in steps] == ["llm_call", "mcp_tool_call"]
+    assert steps[0].action == "call_tools"
+    assert steps[0].llm_response_text == '{"action": "call_tools"}'
+    assert steps[1].tool_name == "inspect_proxy_activity"
+    assert steps[1].status == "succeeded"
+    assert steps[1].arguments_text == '{"project_name": "landingpage"}'

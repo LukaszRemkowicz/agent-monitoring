@@ -1,9 +1,13 @@
 doc/analysis/
 docs/analysis/
+infra/docs/analysis/
 
 # Local agent workspace
 .agent/
 .agents/
+
+# Private monitoring context
+private/
 
 # OS/editor files
 .DS_Store

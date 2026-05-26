@@ -5,9 +5,21 @@ from typing import Any
 
 from tortoise.queryset import QuerySet
 
-from db.models import LogAnalysis, SitemapAnalysis
+from db.models import (
+    LogAnalysis,
+    LogAnalysisLLMCall,
+    RunStatus,
+    SitemapAnalysis,
+)
 from logging_config import get_logger
-from schemas import LogAnalysisIn, LogAnalysisOut, SitemapAnalysisIn, SitemapAnalysisOut
+from schemas import (
+    LogAnalysisIn,
+    LogAnalysisLLMCallIn,
+    LogAnalysisLLMCallOut,
+    LogAnalysisOut,
+    SitemapAnalysisIn,
+    SitemapAnalysisOut,
+)
 
 logger = get_logger(__name__)
 
@@ -65,6 +77,21 @@ class LogAnalysisRepository:
             return None
         return LogAnalysisOut.from_model(analysis)
 
+    async def last_5_days(self, analysis_date: date) -> list[LogAnalysisOut]:
+        """Return successful analyses from the last five days excluding this date."""
+
+        logger.debug(
+            "fetching last five days of log analyses",
+            extra={
+                "event": "log_analysis_repository_last_5_days",
+                "analysis_date": str(analysis_date),
+            },
+        )
+        analyses: list[LogAnalysis] = await self.model.objects.last_5_days(
+            exclude_date=analysis_date
+        ).filter(status=RunStatus.SUCCEEDED.value)
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
 
 class SitemapAnalysisRepository:
     """Database access boundary for sitemap-analysis rows."""
@@ -118,3 +145,22 @@ class SitemapAnalysisRepository:
         if analysis is None:
             return None
         return SitemapAnalysisOut.from_model(analysis)
+
+
+class LLMCallRepository:
+    """Database access boundary for persisted LLM/tool-loop steps."""
+
+    model: type[LogAnalysisLLMCall] = LogAnalysisLLMCall
+
+    def __init__(self, *, trace_id: str = "") -> None:
+        self.trace_id = trace_id
+
+    async def create(
+        self,
+        data: LogAnalysisLLMCallIn,
+    ) -> LogAnalysisLLMCallOut:
+        create_data = data
+        if self.trace_id and not data.trace_id:
+            create_data = data.model_copy(update={"trace_id": self.trace_id})
+        step = await self.model.objects.create(**create_data.model_dump())
+        return LogAnalysisLLMCallOut.from_model(step)

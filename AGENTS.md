@@ -96,6 +96,10 @@ Mirror the MCP and landingpage workflow pattern:
 - MCP owns deterministic collection, snapshot, filtering, grouping, and
   workflow-bootstrap tools.
 - Pydantic schemas define contracts at boundaries.
+- Detailed private VPS architecture context belongs in this repo, not MCP. Keep
+  it in `private/vps_monitoring_context.md` or the path configured by
+  `MONITORING_PRIVATE_CONTEXT_PATH`; `private/` is ignored and must not be
+  published to GitHub. This context file is mandatory for log analysis.
 
 For log analysis, the MCP workflow starts with `analyze_daily_log_bundle`. That
 tool returns the workflow prompt, mandatory/optional skill inventory, and
@@ -166,6 +170,10 @@ simple concrete project type is available.
   confirming behavior.
 - If a proposed implementation seems risky, inconsistent, or likely incorrect,
   say so clearly and discuss it. Push back when needed.
+- If a task starts to feel complicated, broad, or naturally split across
+  independent questions/files, use subagents for bounded parallel exploration or
+  implementation work. Keep the immediate critical path local, and delegate only
+  concrete side tasks with clear ownership.
 - Keep command handlers thin.
 - Keep Tortoise calls inside repositories, managers, or querysets.
 - Keep MCP HTTP/JSON-RPC transport details inside `src/mcp.py`.

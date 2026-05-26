@@ -84,6 +84,12 @@ AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 Deploy behavior:
 
 - verifies the local image `prod-agent-monitoring:<TAG>` exists
+- creates the production Postgres host data directory before starting `db`;
+  default: `/var/lib/agent-monitoring/postgresql`, override with
+  `POSTGRES_DATA_DIR`
+- mounts the private monitoring context directory into the app container;
+  default: `private/`, override with `MONITORING_PRIVATE_CONTEXT_DIR`.
+  The app validates the mandatory context file at runtime.
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`
@@ -93,6 +99,17 @@ Deploy behavior:
 - runs the one-shot monitoring command, defaulting to `log_analysis`
 - records the deployed tag under the script state directory after the command
   succeeds
+
+Production Postgres data is a host bind mount, not a Compose-managed Docker
+volume. Normal Docker volume prune commands will not delete it. Deploy and prod
+backup commands expect this marker file to exist:
+
+```text
+$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION
+```
+
+For a brand-new environment only, initialize deliberately with
+`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` and usually `SKIP_BACKUP=true`.
 
 Dry run:
 

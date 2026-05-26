@@ -27,6 +27,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
+      - ./private:/app/private:ro
     depends_on:
       db:
         condition: service_healthy
@@ -57,6 +58,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
+      - ./private:/app/private:ro
     depends_on:
       db:
         condition: service_healthy

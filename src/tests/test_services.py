@@ -1,23 +1,35 @@
 from datetime import UTC, date, datetime
+from unittest.mock import ANY
 
 import pytest
 from llm_core.protocols import LLMProvider
 from llm_core.providers.mock import MockProvider
+from pytest_mock import MockerFixture
 
 from agents import MonitoringWorkflowAgent
-from conf import Settings
 from db.models import RunStatus
 from mcp import McpWorkflowClient
 from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
+    CollectLogsArtifact,
+    LogAnalysisAgentContext,
+    LogAnalysisFinalReport,
     LogAnalysisIn,
     LogAnalysisOut,
+    LogAnalysisPreparedPrompt,
+    LogAnalysisPromptContext,
+    LogCollectionWindow,
     McpServiceStatus,
+    ProjectManifestSummary,
     SitemapAnalysisIn,
     SitemapAnalysisOut,
+    SnapshotAccessGuidance,
     WorkflowBootstrap,
 )
 from services import LogAnalysisService, SitemapAnalysisService
+from tests.conftest import build_collect_logs_artifact_payload
+
+PRIVATE_MONITORING_CONTEXT = "# Private VPS Monitoring Context\n\nTest context."
 
 
 class FakeWorkflowAgent(MonitoringWorkflowAgent):
@@ -25,17 +37,109 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
         super().__init__(
             FakeMcpClient(),
             llm_provider=llm_provider or MockProvider(),
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
         )
         self.calls: int = 0
+        self.received_historical_context: str = ""
 
-    async def run_log_analysis(self) -> WorkflowBootstrap:
+    async def run_log_analysis(
+        self,
+        *,
+        analysis_date: date,
+        log_window: LogCollectionWindow,
+        historical_context: str = "",
+    ) -> LogAnalysisAgentContext:
         self.calls += 1
-        return WorkflowBootstrap(
+        self.received_historical_context = historical_context
+        workflow = WorkflowBootstrap(
             workflow_name="analyze_daily_log_bundle",
             prompt="Prompt",
             mandatory_skills=[],
             optional_skills=[],
             tools=[],
+        )
+        collect_logs = CollectLogsArtifact.model_validate(
+            build_collect_logs_artifact_payload(
+                requested_project_names=["landingpage", "shop"],
+                next_step_tips=[],
+                resolved_source_keys=["backend"],
+            )
+        )
+        prompt = LogAnalysisPreparedPrompt(
+            system_prompt="Prompt",
+            context=LogAnalysisPromptContext(
+                analysis_date=analysis_date,
+                workflow_name=workflow.workflow_name,
+                current_phase="final_report",
+                completed_steps=[
+                    "analyze_daily_log_bundle",
+                    "read_mandatory_skills",
+                    "list_projects",
+                    "collect_logs",
+                ],
+                allowed_actions=["call_tools", "read_skills", "final_report"],
+                next_required_action="call_tools",
+                final_report_allowed=False,
+                available_projects=[
+                    ProjectManifestSummary(
+                        project_name="landingpage",
+                        project_summary="Landingpage project.",
+                        source_keys=["backend"],
+                    ),
+                    ProjectManifestSummary(
+                        project_name="shop",
+                        project_summary="Shop project.",
+                        source_keys=["backend"],
+                    ),
+                ],
+                mandatory_skills=[],
+                optional_skills=[],
+                collection=collect_logs,
+                snapshot_access=SnapshotAccessGuidance(
+                    workspace="workflow",
+                    session_id=None,
+                    session_id_is_for_session_workspace_only=True,
+                    workflow_followup_arguments=["project_name", "archive_name"],
+                    instruction="Use project_name for workflow follow-up tools.",
+                ),
+                available_tools=[],
+                report_contract={
+                    "summary": "string",
+                    "severity": "INFO|WARNING|CRITICAL",
+                    "severity_rationale": "string",
+                    "key_findings": "list[string]",
+                    "evidence": "list[string]",
+                    "coverage_gaps": "list[string]",
+                    "recommendations": "string",
+                    "watch_only_items": "list[string]",
+                    "trend_summary": "string",
+                },
+                instructions=[
+                    "Use deterministic MCP snapshot tools before final report.",
+                ],
+            ),
+        )
+        return LogAnalysisAgentContext(
+            workflow=workflow,
+            collect_logs=collect_logs,
+            prompt=prompt,
+            final_report=LogAnalysisFinalReport(
+                action="final_report",
+                summary="Landingpage logs are healthy.",
+                severity="INFO",
+                severity_rationale="INFO because no service-impacting issue was found.",
+                key_findings=["No critical incidents found."],
+                evidence=["group_errors found no repeated errors."],
+                coverage_gaps=[],
+                recommendations="Keep watching the backend logs.",
+                watch_only_items=["Routine bot traffic."],
+                trend_summary="No prior trend data was available.",
+            ),
+            log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
+            log_window_until=datetime(2026, 5, 20, tzinfo=UTC),
+            llm_tokens_used=123,
+            llm_cost_usd=0.02,
+            llm_report_execution_time_seconds=4.32,
         )
 
 
@@ -44,9 +148,16 @@ class FailingWorkflowAgent(MonitoringWorkflowAgent):
         super().__init__(
             FakeMcpClient(),
             llm_provider=MockProvider(),
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
         )
 
-    async def run_log_analysis(self) -> WorkflowBootstrap:
+    async def run_log_analysis(
+        self,
+        *,
+        analysis_date: date,
+        log_window: LogCollectionWindow,
+        historical_context: str = "",
+    ) -> LogAnalysisAgentContext:
         raise RuntimeError("MCP unavailable")
 
 
@@ -70,9 +181,12 @@ class FakeMcpClient(McpWorkflowClient):
 
 class FakeLogAnalysisRepository(LogAnalysisRepository):
     def __init__(self, exists: bool = False) -> None:
+        super().__init__()
         self._has_existing = exists
         self.created: list[dict[str, object]] = []
         self.saved: list[dict[str, object]] = []
+        self.last_5_days_calls: list[date] = []
+        self._last_5_days: list[LogAnalysisOut] = []
 
     async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
         if self._has_existing:
@@ -84,6 +198,10 @@ class FakeLogAnalysisRepository(LogAnalysisRepository):
                 summary="Existing analysis.",
             )
         return None
+
+    async def last_5_days(self, analysis_date: date) -> list[LogAnalysisOut]:
+        self.last_5_days_calls.append(analysis_date)
+        return self._last_5_days
 
     async def create(self, data: LogAnalysisIn) -> LogAnalysisOut:
         self.created.append(data.model_dump())
@@ -156,48 +274,109 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     repository = FakeLogAnalysisRepository()
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
     result = await service.run_log_analysis(
         analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=False,
         send_email=True,
     )
 
     assert result.workflow.workflow_name == "analyze_daily_log_bundle"
     assert agent.calls == 1
+    assert repository.last_5_days_calls == [date(2026, 5, 19)]
+    assert agent.received_historical_context == ""
     assert repository.created[0]["analysis_date"] == date(2026, 5, 19)
     assert repository.created[0]["status"] == RunStatus.RUNNING.value
     assert repository.created[0]["summary"] == "Workflow preparation started."
     assert result.analysis.status == RunStatus.SUCCEEDED.value
-    assert result.analysis.mcp_artifact == result.workflow.model_dump(mode="json")
+    assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
+    assert result.analysis.log_window_since == datetime(2026, 5, 19, tzinfo=UTC)
+    assert result.analysis.log_window_until == datetime(2026, 5, 20, tzinfo=UTC)
+    assert '"analysis_date": "2026-05-19"' in result.prepared_prompt.user_prompt
+    assert result.prepared_prompt.context.collection.projects[0].snapshot_dir == (
+        "workflow/landingpage/latest"
+    )
     assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
-    assert repository.saved[0]["summary"] == (
-        "Workflow bundle loaded; analysis execution is not implemented yet."
+    assert repository.saved[0]["summary"] == "Landingpage logs are healthy."
+    assert repository.saved[0]["severity"] == "INFO"
+    assert repository.saved[0]["key_findings"] == ["No critical incidents found."]
+    assert repository.saved[0]["recommendations"] == "Keep watching the backend logs."
+    assert repository.saved[0]["trend_summary"] == "No prior trend data was available."
+    assert repository.saved[0]["gpt_tokens_used"] == 123
+    assert repository.saved[0]["gpt_cost_usd"] == 0.02
+    assert result.agent_context.llm_report_execution_time_seconds == 4.32
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
+    agent = FakeWorkflowAgent()
+    repository = FakeLogAnalysisRepository()
+    historical_run = LogAnalysisOut(
+        id=7,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status=RunStatus.SUCCEEDED,
+        summary="Previous run saw scanner noise only.",
+        severity="INFO",
+        key_findings=["No service impact."],
+        recommendations="No action needed.",
+        trend_summary="Scanner noise was stable.",
+    )
+    repository._last_5_days = [historical_run]
+    service = LogAnalysisService(
+        agent=agent,
+        repository=repository,
+    )
+
+    await service.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
+        force=False,
+        send_email=True,
+    )
+
+    assert repository.last_5_days_calls == [date(2026, 5, 19)]
+    assert agent.received_historical_context == (
+        "## 2026-05-18 — Severity: INFO\n"
+        "Summary: Previous run saw scanner noise only.\n"
+        "Key findings: ['No service impact.']\n"
+        "Recommendations: No action needed."
     )
 
 
 @pytest.mark.asyncio
-async def test_log_analysis_service_records_failure_state() -> None:
+async def test_log_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
     repository = FakeLogAnalysisRepository()
+    error_mock = mocker.patch("services.logger.error")
     service = LogAnalysisService(
         agent=FailingWorkflowAgent(),
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
     with pytest.raises(RuntimeError, match="MCP unavailable"):
         await service.run_log_analysis(
             analysis_date=date(2026, 5, 19),
+            log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
             force=False,
             send_email=True,
         )
 
     assert repository.saved[0]["status"] == RunStatus.FAILED.value
-    assert repository.saved[0]["failure_stage"] == "workflow_bootstrap"
+    assert repository.saved[0]["failure_stage"] == "log_analysis"
     assert repository.saved[0]["error_message"] == "MCP unavailable"
+    error_mock.assert_called_once_with(
+        "log-analysis workflow failed",
+        extra={
+            "event": "log_analysis_workflow_failed",
+            "analysis_date": "2026-05-19",
+            "failure_stage": "log_analysis",
+            "execution_time_seconds": ANY,
+            "error": "MCP unavailable",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -205,13 +384,13 @@ async def test_log_analysis_service_blocks_existing_date_without_force() -> None
     agent = FakeWorkflowAgent()
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=FakeLogAnalysisRepository(exists=True),
     )
 
     with pytest.raises(ValueError, match="already exists"):
         await service.run_log_analysis(
             analysis_date=date(2026, 5, 19),
+            log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
             force=False,
             send_email=True,
         )
@@ -222,54 +401,48 @@ async def test_log_analysis_service_blocks_existing_date_without_force() -> None
 @pytest.mark.asyncio
 async def test_log_analysis_service_allows_existing_date_with_force() -> None:
     agent = FakeWorkflowAgent()
+    repository = FakeLogAnalysisRepository(exists=True)
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
-        repository=FakeLogAnalysisRepository(exists=True),
+        repository=repository,
     )
 
     result = await service.run_log_analysis(
         analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=True,
         send_email=True,
     )
 
     assert result.workflow.workflow_name == "analyze_daily_log_bundle"
     assert agent.calls == 1
+    assert repository.created == []
+    assert repository.saved[0]["status"] == RunStatus.RUNNING.value
+    assert repository.saved[-1]["status"] == RunStatus.SUCCEEDED.value
 
 
 @pytest.mark.asyncio
-async def test_log_analysis_service_checks_mcp_status() -> None:
-    mcp_client = FakeMcpClient()
+async def test_log_analysis_service_records_execution_time(
+    mocker: MockerFixture,
+) -> None:
+    agent = FakeWorkflowAgent()
+    repository = FakeLogAnalysisRepository()
     service = LogAnalysisService(
-        agent=FakeWorkflowAgent(),
-        mcp_client=mcp_client,
-        repository=FakeLogAnalysisRepository(),
+        agent=agent,
+        repository=repository,
+    )
+    monotonic = mocker.patch("services.monotonic", side_effect=[100.0, 103.25])
+
+    result = await service.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
+        force=False,
+        send_email=True,
     )
 
-    status: McpServiceStatus = await service.check_mcp_status()
-
-    assert mcp_client.calls == ["get_service_status"]
-    assert status.name == "mcp-log-server"
-    assert status.status == "ok"
-
-
-def test_log_analysis_service_default_agent_uses_configured_llm_provider() -> None:
-    service = LogAnalysisService.create_default(
-        Settings(
-            {
-                "LOG_ANALYSIS_MCP_URL": "http://mcp.local/mcp",
-                "MCP_WORKFLOW_JWT": "jwt-token",
-                "OPENAI_API_KEY": "",
-                "OPENAI_BASE_URL": "",
-                "MONITORING_LLM_PROVIDER": "mock",
-                "MONITORING_LLM_FAST_MODEL": "gpt-4.1-mini",
-                "MONITORING_LLM_STRONG_MODEL": "gpt-5",
-            }
-        )
-    )
-
-    assert isinstance(service.agent.llm_provider, MockProvider)
+    assert monotonic.call_count == 2
+    assert result.analysis.execution_time_seconds == 3.25
+    assert repository.saved[-1]["execution_time_seconds"] == 3.25
 
 
 @pytest.mark.asyncio
@@ -297,8 +470,9 @@ async def test_sitemap_analysis_service_creates_workflow_record() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_service_records_failure_state() -> None:
+async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
     repository = FailingSitemapCompletionRepository()
+    error_mock = mocker.patch("services.logger.error")
     service = SitemapAnalysisService(
         repository=repository,
         root_sitemap_url="https://example.com/sitemap.xml",
@@ -315,6 +489,15 @@ async def test_sitemap_analysis_service_records_failure_state() -> None:
     assert repository.saved[0]["status"] == RunStatus.FAILED.value
     assert repository.saved[0]["failure_stage"] == "workflow_preparation"
     assert repository.saved[0]["error_message"] == "sitemap preparation failed"
+    error_mock.assert_called_once_with(
+        "sitemap-analysis workflow failed",
+        extra={
+            "event": "sitemap_analysis_workflow_failed",
+            "analysis_date": "2026-05-19",
+            "failure_stage": "workflow_preparation",
+            "error": "sitemap preparation failed",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -333,3 +516,23 @@ async def test_sitemap_analysis_service_blocks_existing_date_without_force() -> 
         )
 
     assert repository.created == []
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_service_allows_existing_date_with_force() -> None:
+    repository = FakeSitemapAnalysisRepository(exists=True)
+    service = SitemapAnalysisService(
+        repository=repository,
+        root_sitemap_url="https://example.com/sitemap.xml",
+    )
+
+    result = await service.run_sitemap_analysis(
+        analysis_date=date(2026, 5, 19),
+        force=True,
+        send_email=True,
+    )
+
+    assert result.analysis.status == RunStatus.SUCCEEDED.value
+    assert repository.created == []
+    assert repository.saved[0]["status"] == RunStatus.RUNNING.value
+    assert repository.saved[-1]["status"] == RunStatus.SUCCEEDED.value
