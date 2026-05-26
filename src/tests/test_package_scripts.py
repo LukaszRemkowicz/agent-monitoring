@@ -15,6 +15,7 @@ def test_console_scripts_are_standalone_commands() -> None:
     assert scripts["log_analysis"] == "scripts:log_analysis_entry"
     assert scripts["sitemap-analysis"] == "scripts:sitemap_analysis_entry"
     assert scripts["check-mcp"] == "scripts:check_mcp_entry"
+    assert scripts["shell"] == "scripts.shell:main"
     assert scripts["makemigrations"] == "db.cli:makemigrations"
     assert scripts["migrate"] == "db.cli:migrate"
 

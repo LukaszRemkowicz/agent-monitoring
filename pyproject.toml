@@ -9,6 +9,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "django-environ>=0.13.0",
     "httpx>=0.28.1",
+    "ipython>=9.0.0",
     "jinja2>=3.1.6",
     "llm-core[openai]",
     "pydantic>=2.13.4",
@@ -35,6 +36,7 @@ dev = [
 log_analysis = "scripts:log_analysis_entry"
 sitemap-analysis = "scripts:sitemap_analysis_entry"
 check-mcp = "scripts:check_mcp_entry"
+shell = "scripts.shell:main"
 makemigrations = "db.cli:makemigrations"
 migrate = "db.cli:migrate"
 test = "db.cli:test"
@@ -55,7 +57,7 @@ only-include = [
     "src/mcp.py",
     "src/repositories.py",
     "src/schemas.py",
-    "src/scripts.py",
+    "src/scripts",
     "src/services.py",
     "src/settings.py",
 ]
