@@ -47,6 +47,7 @@ def test_developer_shell_defaults_to_compose_host_database_port() -> None:
     env.pop("DATABASE_HOST", None)
     env.pop("DATABASE_PORT", None)
     env.pop("DATABASE_PORT_HOST", None)
+    expected_database_name = env.get("DATABASE_NAME", "monitoring")
 
     result = subprocess.run(
         [
@@ -60,7 +61,7 @@ def test_developer_shell_defaults_to_compose_host_database_port() -> None:
         text=True,
     )
 
-    assert "@127.0.0.1:5438/monitoring" in result.stdout
+    assert f"@127.0.0.1:5438/{expected_database_name}" in result.stdout
 
 
 def test_developer_shell_suppresses_ipython_cross_loop_close_error(
