@@ -7,7 +7,6 @@ from llm_core.providers.mock import MockProvider
 from pytest_mock import MockerFixture
 
 from agents import MonitoringWorkflowAgent
-from conf import Settings
 from db.models import RunStatus
 from mcp import McpWorkflowClient
 from repositories import LogAnalysisRepository, SitemapAnalysisRepository
@@ -182,6 +181,7 @@ class FakeMcpClient(McpWorkflowClient):
 
 class FakeLogAnalysisRepository(LogAnalysisRepository):
     def __init__(self, exists: bool = False) -> None:
+        super().__init__()
         self._has_existing = exists
         self.created: list[dict[str, object]] = []
         self.saved: list[dict[str, object]] = []
@@ -274,7 +274,6 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     repository = FakeLogAnalysisRepository()
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
@@ -329,7 +328,6 @@ async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
     repository._last_5_days = [historical_run]
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
@@ -355,7 +353,6 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
     error_mock = mocker.patch("services.logger.error")
     service = LogAnalysisService(
         agent=FailingWorkflowAgent(),
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
@@ -387,7 +384,6 @@ async def test_log_analysis_service_blocks_existing_date_without_force() -> None
     agent = FakeWorkflowAgent()
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=FakeLogAnalysisRepository(exists=True),
     )
 
@@ -408,7 +404,6 @@ async def test_log_analysis_service_allows_existing_date_with_force() -> None:
     repository = FakeLogAnalysisRepository(exists=True)
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
 
@@ -427,42 +422,6 @@ async def test_log_analysis_service_allows_existing_date_with_force() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_analysis_service_checks_mcp_status() -> None:
-    mcp_client = FakeMcpClient()
-    service = LogAnalysisService(
-        agent=FakeWorkflowAgent(),
-        mcp_client=mcp_client,
-        repository=FakeLogAnalysisRepository(),
-    )
-
-    status: McpServiceStatus = await service.check_mcp_status()
-
-    assert mcp_client.calls == ["get_service_status"]
-    assert status.name == "mcp-log-server"
-    assert status.status == "ok"
-
-
-def test_log_analysis_service_default_agent_uses_configured_llm_provider() -> None:
-    service = LogAnalysisService.create_default(
-        Settings(
-            {
-                "LOG_ANALYSIS_MCP_URL": "http://mcp.local/mcp",
-                "MCP_WORKFLOW_JWT": "jwt-token",
-                "MONITORING_PROJECT": "landingpage",
-                "OPENAI_API_KEY": "",
-                "OPENAI_BASE_URL": "",
-                "MONITORING_LLM_PROVIDER": "mock",
-                "MONITORING_LLM_FAST_MODEL": "gpt-4.1-mini",
-                "MONITORING_LLM_STRONG_MODEL": "gpt-5",
-                "MONITORING_PRIVATE_CONTEXT_PATH": __file__,
-            }
-        )
-    )
-
-    assert isinstance(service.agent.llm_provider, MockProvider)
-
-
-@pytest.mark.asyncio
 async def test_log_analysis_service_records_execution_time(
     mocker: MockerFixture,
 ) -> None:
@@ -470,7 +429,6 @@ async def test_log_analysis_service_records_execution_time(
     repository = FakeLogAnalysisRepository()
     service = LogAnalysisService(
         agent=agent,
-        mcp_client=FakeMcpClient(),
         repository=repository,
     )
     monotonic = mocker.patch("services.monotonic", side_effect=[100.0, 103.25])

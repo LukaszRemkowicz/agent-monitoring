@@ -4,28 +4,22 @@ from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import TYPE_CHECKING
 
-from agents import MonitoringWorkflowAgent
-from conf import settings
 from db.models import RunStatus
-from llm import get_monitoring_llm_provider
 from logging_config import get_logger
-from mcp import McpWorkflowClient
-from monitoring_context import load_private_monitoring_context
-from repositories import LogAnalysisRepository, SitemapAnalysisRepository
+from repositories import LLMCallRepository, LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
     LogAnalysisAgentContext,
     LogAnalysisIn,
     LogAnalysisOut,
     LogAnalysisWorkflowResult,
     LogCollectionWindow,
-    McpServiceStatus,
     SitemapAnalysisIn,
     SitemapAnalysisOut,
     SitemapAnalysisWorkflowResult,
 )
 
 if TYPE_CHECKING:
-    from conf import Settings
+    from agents import MonitoringWorkflowAgent
 
 logger = get_logger(__name__)
 LOG_WORKFLOW_STARTED_SUMMARY = "Workflow preparation started."
@@ -40,31 +34,12 @@ class LogAnalysisService:
         self,
         *,
         agent: MonitoringWorkflowAgent,
-        mcp_client: McpWorkflowClient,
         repository: LogAnalysisRepository,
+        llm_call_repository: LLMCallRepository | None = None,
     ) -> None:
         self.agent = agent
-        self.mcp_client = mcp_client
         self.repository = repository
-
-    async def check_mcp_status(self) -> McpServiceStatus:
-        """Return MCP service status for command-line diagnostics."""
-
-        logger.info(
-            "checking MCP service status",
-            extra={"event": "mcp_status_check_start"},
-        )
-        status: McpServiceStatus = await self.mcp_client.get_service_status()
-        logger.info(
-            "checked MCP service status",
-            extra={
-                "event": "mcp_status_check_done",
-                "status": status.status,
-                "environment": status.environment,
-                "client_type": status.client_type,
-            },
-        )
-        return status
+        self.agent.llm_call_repository = llm_call_repository
 
     async def run_log_analysis(
         self,
@@ -170,24 +145,6 @@ class LogAnalysisService:
             },
         )
         return LogAnalysisWorkflowResult(analysis=updated_analysis, agent_context=agent_context)
-
-    @classmethod
-    def create_default(cls, _settings: Settings = settings) -> LogAnalysisService:
-        mcp_client = McpWorkflowClient(
-            base_url=_settings.LOG_ANALYSIS_MCP_URL,
-            workflow_jwt=_settings.MCP_WORKFLOW_JWT,
-        )
-        return cls(
-            agent=MonitoringWorkflowAgent(
-                mcp_client,
-                llm_provider=get_monitoring_llm_provider(_settings),
-                private_monitoring_context=load_private_monitoring_context(
-                    _settings.MONITORING_PRIVATE_CONTEXT_PATH
-                ),
-            ),
-            mcp_client=mcp_client,
-            repository=LogAnalysisRepository(),
-        )
 
     @staticmethod
     def create_log_collection_window(analysis_date: date) -> LogCollectionWindow:
@@ -340,13 +297,6 @@ class SitemapAnalysisService:
             },
         )
         return SitemapAnalysisWorkflowResult(analysis=updated_analysis)
-
-    @classmethod
-    def create_default(cls, _settings: Settings = settings) -> SitemapAnalysisService:
-        return cls(
-            repository=SitemapAnalysisRepository(),
-            root_sitemap_url=_settings.SITEMAP_ROOT_URL,
-        )
 
 
 def _format_mcp_timestamp(value: datetime) -> str:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from time import monotonic
 from typing import Any
 
@@ -14,10 +14,12 @@ from assets_loader import load_markdown_bullets, load_markdown_mapping, load_tex
 from exceptions import McpClientError
 from logging_config import get_logger
 from mcp import McpWorkflowClient
+from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
     LogAnalysisFinalReport,
+    LogAnalysisLLMCallIn,
     LogAnalysisPreparedPrompt,
     LogAnalysisPromptContext,
     LogAnalysisSkillReadRequest,
@@ -31,6 +33,7 @@ from schemas import (
     WorkflowSkill,
     WorkflowSkillContent,
 )
+from utils.runtime import dump_arguments, elapsed_ms, hash_text
 
 logger = get_logger(__name__)
 MAX_LLM_TOOL_LOOP_ITERATIONS = 5
@@ -52,6 +55,7 @@ class MonitoringWorkflowAgent:
         self.mcp_client = mcp_client
         self.llm_provider = llm_provider
         self.private_monitoring_context = private_monitoring_context
+        self.llm_call_repository: LLMCallRepository | None = None
 
     async def run_log_analysis(
         self,
@@ -103,6 +107,7 @@ class MonitoringWorkflowAgent:
             prompt=prompt,
             workflow=workflow,
             analysis_date=analysis_date,
+            mcp_session_id=collect_logs.session_id,
         )
         llm_report_execution_time_seconds: float = round(monotonic() - llm_report_started_at, 3)
         logger.info(
@@ -254,6 +259,7 @@ class MonitoringWorkflowAgent:
         prompt: LogAnalysisPreparedPrompt,
         workflow: WorkflowBootstrap,
         analysis_date: date,
+        mcp_session_id: str | None = None,
     ) -> tuple[LogAnalysisFinalReport, list[LogAnalysisToolResult], int, float]:
         """Run the LLM action loop until a final report is produced."""
 
@@ -280,6 +286,17 @@ class MonitoringWorkflowAgent:
 
             payload: dict[str, Any] = self._extract_llm_payload(llm_response)
             action: object = payload.get("action")
+            await self._record_llm_step(
+                LogAnalysisLLMCallIn(
+                    analysis_date=analysis_date,
+                    workflow_name=workflow.workflow_name,
+                    mcp_session_id=mcp_session_id,
+                    iteration=iteration,
+                    step_type="llm_call",
+                    action=str(action or ""),
+                    llm_response_text=llm_response.text or "",
+                )
+            )
             self._log_llm_action_payload(
                 response=llm_response,
                 payload=payload,
@@ -295,6 +312,9 @@ class MonitoringWorkflowAgent:
                     tool_request=tool_request,
                     workflow=workflow,
                     executed_mcp_tool_calls=executed_mcp_tool_calls,
+                    iteration=iteration,
+                    analysis_date=analysis_date,
+                    mcp_session_id=mcp_session_id,
                 )
             elif action == "read_skills":
                 skill_request: LogAnalysisSkillReadRequest = self._build_skill_read_request(payload)
@@ -302,6 +322,9 @@ class MonitoringWorkflowAgent:
                     skill_request=skill_request,
                     workflow=workflow,
                     fetched_skill_names=fetched_skill_names,
+                    iteration=iteration,
+                    analysis_date=analysis_date,
+                    mcp_session_id=mcp_session_id,
                 )
             else:
                 raise ValueError("LLM action did not match expected shape.")
@@ -311,6 +334,23 @@ class MonitoringWorkflowAgent:
             if interpretation_result is not None:
                 tool_results.append(interpretation_result)
                 new_tool_results.append(interpretation_result)
+                await self._record_llm_step(
+                    _build_tool_call_entry(
+                        analysis_date=analysis_date,
+                        workflow_name=workflow.workflow_name,
+                        mcp_session_id=mcp_session_id,
+                        iteration=iteration,
+                        tool_name=interpretation_result.tool_name,
+                        arguments=interpretation_result.arguments,
+                        step_type="local_deterministic_interpretation",
+                        status="succeeded",
+                        result_summary=str(
+                            interpretation_result.structured_content.get(
+                                "recommendation_category", ""
+                            )
+                        ),
+                    )
+                )
             messages.append(
                 Message.from_text(
                     "user",
@@ -479,6 +519,13 @@ class MonitoringWorkflowAgent:
         )
         return self.llm_provider.generate(request)
 
+    async def _record_llm_step(self, entry: LogAnalysisLLMCallIn) -> None:
+        """Persist one LLM workflow step when DB recording is enabled."""
+
+        if self.llm_call_repository is None:
+            return
+        await self.llm_call_repository.create(entry)
+
     @staticmethod
     def _log_llm_action_payload(
         *,
@@ -525,6 +572,9 @@ class MonitoringWorkflowAgent:
         tool_request: LogAnalysisToolCallRequest,
         workflow: WorkflowBootstrap,
         executed_mcp_tool_calls: set[str],
+        iteration: int,
+        analysis_date: date,
+        mcp_session_id: str | None,
     ) -> list[LogAnalysisToolResult]:
         """Execute validated MCP tools requested by the LLM action."""
 
@@ -544,6 +594,20 @@ class MonitoringWorkflowAgent:
                         "tool_name": tool_call.tool_name,
                     },
                 )
+                await self._record_llm_step(
+                    _build_tool_call_entry(
+                        analysis_date=analysis_date,
+                        workflow_name=workflow.workflow_name,
+                        mcp_session_id=mcp_session_id,
+                        iteration=iteration,
+                        tool_name=tool_call.tool_name,
+                        arguments=tool_call.arguments,
+                        step_type="mcp_tool_call",
+                        status="skipped",
+                        duplicate_skipped=True,
+                        result_summary="Duplicate LLM-requested MCP tool call skipped.",
+                    )
+                )
                 tool_results.append(
                     LogAnalysisToolResult(
                         tool_name="duplicate_mcp_tool_call_skipped",
@@ -561,9 +625,46 @@ class MonitoringWorkflowAgent:
                 )
                 continue
             executed_mcp_tool_calls.add(tool_call_key)
-            structured_content: dict[str, Any] = await self.mcp_client.call_deterministic_tool(
-                tool_call.tool_name,
-                tool_call.arguments,
+            tool_started_at = datetime.now(UTC)
+            tool_started_monotonic = monotonic()
+            try:
+                structured_content: dict[str, Any] = await self.mcp_client.call_deterministic_tool(
+                    tool_call.tool_name,
+                    tool_call.arguments,
+                )
+            except McpClientError as exc:
+                await self._record_llm_step(
+                    _build_tool_call_entry(
+                        analysis_date=analysis_date,
+                        workflow_name=workflow.workflow_name,
+                        mcp_session_id=mcp_session_id,
+                        iteration=iteration,
+                        tool_name=tool_call.tool_name,
+                        arguments=tool_call.arguments,
+                        step_type="mcp_tool_call",
+                        status="failed",
+                        started_at=tool_started_at,
+                        finished_at=datetime.now(UTC),
+                        duration_ms=elapsed_ms(tool_started_monotonic),
+                        error_message=str(exc),
+                    )
+                )
+                raise
+            await self._record_llm_step(
+                _build_tool_call_entry(
+                    analysis_date=analysis_date,
+                    workflow_name=workflow.workflow_name,
+                    mcp_session_id=mcp_session_id,
+                    iteration=iteration,
+                    tool_name=tool_call.tool_name,
+                    arguments=tool_call.arguments,
+                    step_type="mcp_tool_call",
+                    status="succeeded",
+                    started_at=tool_started_at,
+                    finished_at=datetime.now(UTC),
+                    duration_ms=elapsed_ms(tool_started_monotonic),
+                    result_summary=str(structured_content.get("action", "")),
+                )
             )
             tool_results.append(
                 LogAnalysisToolResult(
@@ -593,6 +694,9 @@ class MonitoringWorkflowAgent:
         skill_request: LogAnalysisSkillReadRequest,
         workflow: WorkflowBootstrap,
         fetched_skill_names: set[str],
+        iteration: int,
+        analysis_date: date,
+        mcp_session_id: str | None,
     ) -> list[LogAnalysisToolResult]:
         """Read optional MCP workflow skill resources requested by the LLM action."""
 
@@ -611,6 +715,19 @@ class MonitoringWorkflowAgent:
                 raise ValueError(f"LLM requested already fetched optional skill: {skill.name}")
             content: str = await self.mcp_client.read_resource(skill.resource_uri)
             fetched_skill_names.add(skill.name)
+            await self._record_llm_step(
+                LogAnalysisLLMCallIn(
+                    analysis_date=analysis_date,
+                    workflow_name=workflow.workflow_name,
+                    mcp_session_id=mcp_session_id,
+                    iteration=iteration,
+                    step_type="skill_read",
+                    action="read_skills",
+                    skill_name=skill.name,
+                    status="succeeded",
+                    result_summary=skill.resource_uri,
+                )
+            )
             skill_contents.append(
                 {
                     "skill_name": skill.name,
@@ -685,3 +802,40 @@ def _to_int(value: object) -> int:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return 0
+
+
+def _build_tool_call_entry(
+    *,
+    analysis_date: date | None,
+    workflow_name: str | None,
+    mcp_session_id: str | None,
+    iteration: int | None,
+    tool_name: str,
+    arguments: dict[str, Any],
+    step_type: str,
+    status: str,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+    duration_ms: int | None = None,
+    duplicate_skipped: bool = False,
+    error_message: str = "",
+    result_summary: str = "",
+) -> LogAnalysisLLMCallIn:
+    arguments_text = dump_arguments(arguments)
+    return LogAnalysisLLMCallIn(
+        analysis_date=analysis_date,
+        workflow_name=workflow_name,
+        mcp_session_id=mcp_session_id,
+        iteration=iteration,
+        step_type=step_type,
+        tool_name=tool_name,
+        arguments_hash=hash_text(arguments_text),
+        arguments_text=arguments_text,
+        status=status,
+        started_at=started_at,
+        finished_at=finished_at,
+        duration_ms=duration_ms,
+        duplicate_skipped=duplicate_skipped,
+        error_message=error_message,
+        result_summary=result_summary,
+    )

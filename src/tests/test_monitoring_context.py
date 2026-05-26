@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from monitoring_context import load_private_monitoring_context
+from utils.monitoring_context import load_private_monitoring_context
 
 
 def test_load_private_monitoring_context_reads_local_file(tmp_path: Path) -> None:

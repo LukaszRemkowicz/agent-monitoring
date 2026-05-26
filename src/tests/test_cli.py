@@ -40,6 +40,70 @@ from tests.conftest import build_collect_logs_artifact_payload
 runner = CliRunner()
 
 
+def _patch_log_analysis_command_dependencies(
+    mocker: MockerFixture,
+    fake_service: object,
+) -> dict[str, Any]:
+    """Patch command-layer constructors while testing CLI argument handling."""
+
+    service_calls: list[dict[str, Any]] = []
+    original_service_class = main.LogAnalysisService
+
+    class FakeLogAnalysisServiceConstructor:
+        create_log_collection_window = staticmethod(
+            original_service_class.create_log_collection_window
+        )
+
+        def __new__(cls, **kwargs: Any) -> Any:
+            service_calls.append(kwargs)
+            return fake_service
+
+    dependencies = dict[str, Any](
+        mcp_client=object(),
+        agent=object(),
+        llm_provider=object(),
+        repository=object(),
+        llm_call_repository=object(),
+        service_calls=service_calls,
+    )
+    dependencies["mcp_client_constructor"] = mocker.patch.object(
+        main,
+        "McpWorkflowClient",
+        return_value=dependencies["mcp_client"],
+    )
+    dependencies["agent_constructor"] = mocker.patch.object(
+        main,
+        "MonitoringWorkflowAgent",
+        return_value=dependencies["agent"],
+    )
+    dependencies["llm_provider_factory"] = mocker.patch.object(
+        main,
+        "get_monitoring_llm_provider",
+        return_value=dependencies["llm_provider"],
+    )
+    dependencies["context_loader"] = mocker.patch.object(
+        main,
+        "load_private_monitoring_context",
+        return_value="Private VPS context",
+    )
+    dependencies["repository_constructor"] = mocker.patch.object(
+        main,
+        "LogAnalysisRepository",
+        return_value=dependencies["repository"],
+    )
+    dependencies["llm_call_repository_constructor"] = mocker.patch.object(
+        main,
+        "LLMCallRepository",
+        return_value=dependencies["llm_call_repository"],
+    )
+    mocker.patch.object(
+        main,
+        "LogAnalysisService",
+        FakeLogAnalysisServiceConstructor,
+    )
+    return dependencies
+
+
 def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
     return LogAnalysisOut(
         id=1,
@@ -187,11 +251,7 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             return _log_analysis_result(analysis_date)
 
     fake_service = FakeLogAnalysisService()
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
-    )
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
 
     result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
 
@@ -222,6 +282,11 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
         "force": False,
         "send_email": True,
     }
+    assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
+    assert (
+        dependencies["service_calls"][0]["llm_call_repository"]
+        is dependencies["llm_call_repository"]
+    )
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -256,11 +321,7 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
 
     fake_service = FakeLogAnalysisService()
     mocker.patch.object(main, "date", FakeDate)
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
-    )
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
 
     result = runner.invoke(main.app, ["log-analysis"])
 
@@ -273,17 +334,18 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
         "until_datetime": datetime(2026, 5, 21, tzinfo=UTC),
     }
     assert "analysis_date=2026-05-20" in result.output
+    assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
 
 
 def test_check_mcp_command_calls_mcp_service_status(
     mocker: MockerFixture,
 ) -> None:
-    class FakeLogAnalysisService:
+    class FakeMcpWorkflowClient:
         def __init__(self) -> None:
             self.calls: list[str] = []
 
-        async def check_mcp_status(self) -> McpServiceStatus:
-            self.calls.append("check_mcp_status")
+        async def get_service_status(self) -> McpServiceStatus:
+            self.calls.append("get_service_status")
             return McpServiceStatus(
                 name="mcp-log-server",
                 status="ok",
@@ -291,17 +353,21 @@ def test_check_mcp_command_calls_mcp_service_status(
                 client_type="workflow_agent",
             )
 
-    fake_service = FakeLogAnalysisService()
-    mocker.patch.object(
-        main.LogAnalysisService,
-        "create_default",
-        return_value=fake_service,
+    fake_client = FakeMcpWorkflowClient()
+    build_client = mocker.patch.object(
+        main,
+        "McpWorkflowClient",
+        return_value=fake_client,
     )
 
     result = runner.invoke(main.app, ["check-mcp"])
 
     assert result.exit_code == 0
-    assert fake_service.calls == ["check_mcp_status"]
+    assert fake_client.calls == ["get_service_status"]
+    assert build_client.call_args.kwargs == {
+        "base_url": main.settings.LOG_ANALYSIS_MCP_URL,
+        "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
+    }
     assert "MCP service is reachable" in result.output
     assert "name=mcp-log-server" in result.output
     assert "status=ok" in result.output
@@ -331,15 +397,16 @@ def test_sitemap_analysis_command_calls_sitemap_service(
             return SitemapAnalysisWorkflowResult(analysis=_sitemap_analysis_out(analysis_date))
 
     fake_service = FakeSitemapAnalysisService()
-    mocker.patch.object(
-        main.SitemapAnalysisService,
-        "create_default",
+    build_service = mocker.patch.object(
+        main,
+        "SitemapAnalysisService",
         return_value=fake_service,
     )
 
     result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
+    assert build_service.call_args.kwargs["root_sitemap_url"] == main.settings.SITEMAP_ROOT_URL
     assert "Prepared sitemap analysis record" in result.output
     assert fake_service.calls[0] == {
         "analysis_date": date(2026, 5, 19),

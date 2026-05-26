@@ -9,8 +9,10 @@ from llm_core.usage import Usage
 from pytest_mock import MockerFixture
 
 from agents import MonitoringWorkflowAgent
+from db.models import LogAnalysisLLMCall
 from exceptions import McpClientError
 from mcp import McpWorkflowClient
+from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
@@ -544,6 +546,89 @@ async def test_monitoring_workflow_agent_adds_probe_interpretation_result() -> N
 
 
 @pytest.mark.asyncio
+async def test_monitoring_workflow_agent_persists_llm_tool_usage_by_trace_id() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    mcp_client.tool_results.update(
+        {
+            "inspect_proxy_activity": {
+                "action": "inspect_proxy_activity",
+                "status_class_counts": {"4xx": 3, "5xx": 0},
+                "upstream_error_count": 0,
+            },
+            "inspect_live_fail2ban_activity": {
+                "action": "inspect_live_fail2ban_activity",
+                "active_jails": 1,
+            },
+        }
+    )
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "inspect_proxy_activity",
+                        "arguments": {"project_name": "landingpage"},
+                    },
+                    {
+                        "tool_name": "inspect_live_fail2ban_activity",
+                        "arguments": {"project_name": "vps-security"},
+                    },
+                ],
+            }
+        )
+    )
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Scanner traffic is blocked.",
+                "severity": "INFO",
+                "severity_rationale": "No service impact.",
+                "key_findings": ["Probe traffic only."],
+                "evidence": ["Proxy and fail2ban tools were used."],
+                "coverage_gaps": [],
+                "recommendations": "No action needed.",
+                "watch_only_items": ["Probe traffic."],
+                "trend_summary": "No trend data available.",
+            }
+        )
+    )
+    llm_call_repository = LLMCallRepository(trace_id="trace-tool-usage")
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+    agent.llm_call_repository = llm_call_repository
+
+    await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    steps: list[LogAnalysisLLMCall] = await LogAnalysisLLMCall.objects.filter(
+        trace_id="trace-tool-usage"
+    ).order_by("created_at", "id")
+    action_entries = [step for step in steps if step.step_type == "llm_call"]
+    assert action_entries[0].action == "call_tools"
+    assert action_entries[0].llm_response_text
+    llm_tool_calls = [step for step in steps if step.step_type == "mcp_tool_call"]
+    assert [tool_call.tool_name for tool_call in llm_tool_calls] == [
+        "inspect_proxy_activity",
+        "inspect_live_fail2ban_activity",
+    ]
+    assert all(tool_call.status == "succeeded" for tool_call in llm_tool_calls)
+    assert all(tool_call.arguments_hash for tool_call in llm_tool_calls)
+
+
+@pytest.mark.asyncio
 async def test_monitoring_workflow_agent_logs_llm_actions(
     mocker: MockerFixture,
 ) -> None:
@@ -618,6 +703,7 @@ async def test_monitoring_workflow_agent_logs_llm_actions(
     second_extra = action_log_calls[1].kwargs["extra"]
     assert second_extra["iteration"] == 2
     assert second_extra["action"] == "final_report"
+    assert second_extra["tool_call_count"] == 0
     assert second_extra["final_report_severity"] == "INFO"
     assert second_extra["final_report_key_finding_count"] == 1
     assert '"action": "final_report"' in second_extra["llm_response_text"]

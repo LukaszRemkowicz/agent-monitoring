@@ -558,6 +558,69 @@ class LogAnalysisOut(LogAnalysisIn):
         )
 
 
+class LogAnalysisLLMCallIn(BaseModel):
+    """Validated LLM/tool-loop step passed into the repository layer."""
+
+    trace_id: str = ""
+    analysis_date: date | None = None
+    workflow_name: str | None = None
+    mcp_session_id: str | None = None
+    iteration: int | None = None
+    step_type: str
+    action: str | None = None
+    tool_name: str | None = None
+    skill_name: str | None = None
+    requested_tool_names_text: str = ""
+    requested_skill_names_text: str = ""
+    arguments_hash: str | None = None
+    arguments_text: str = ""
+    status: str | None = None
+    duplicate_skipped: bool = False
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    llm_response_text: str = ""
+    error_message: str = ""
+    result_summary: str = ""
+
+
+class LogAnalysisLLMCallOut(LogAnalysisLLMCallIn):
+    """Validated LLM/tool-loop step returned by repositories."""
+
+    id: int
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, step: Any) -> LogAnalysisLLMCallOut:
+        return cls.model_validate(
+            {
+                "id": step.id,
+                "created_at": step.created_at,
+                "trace_id": step.trace_id,
+                "analysis_date": step.analysis_date,
+                "workflow_name": step.workflow_name,
+                "mcp_session_id": step.mcp_session_id,
+                "iteration": step.iteration,
+                "step_type": step.step_type,
+                "action": step.action,
+                "tool_name": step.tool_name,
+                "skill_name": step.skill_name,
+                "requested_tool_names_text": step.requested_tool_names_text,
+                "requested_skill_names_text": step.requested_skill_names_text,
+                "arguments_hash": step.arguments_hash,
+                "arguments_text": step.arguments_text,
+                "status": step.status,
+                "duplicate_skipped": step.duplicate_skipped,
+                "started_at": step.started_at,
+                "finished_at": step.finished_at,
+                "duration_ms": step.duration_ms,
+                "llm_response_text": step.llm_response_text,
+                "error_message": step.error_message,
+                "result_summary": step.result_summary,
+            }
+        )
+
+
 class SitemapAnalysisIn(BaseModel):
     """Validated data passed from services into the sitemap-analysis repository."""
 

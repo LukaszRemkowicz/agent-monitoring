@@ -247,6 +247,14 @@ class McpWorkflowClient:
                 mcp_url=self.base_url,
                 tool_name=name,
             )
+        logger.info(
+            "MCP workflow tool call completed",
+            extra={
+                "event": "mcp_tool_call_done",
+                "tool_name": name,
+                "mcp_url": self.base_url,
+            },
+        )
         return tool_response.result.structured_content
 
     async def read_resource(self, uri: str) -> str:
