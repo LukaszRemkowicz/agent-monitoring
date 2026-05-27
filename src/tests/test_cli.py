@@ -31,11 +31,10 @@ from schemas import (
     McpServiceStatus,
     ProjectManifestSummary,
     SitemapAnalysisOut,
-    SitemapAnalysisWorkflowResult,
     SnapshotAccessGuidance,
     WorkflowBootstrap,
 )
-from tests.conftest import build_collect_logs_artifact_payload
+from tests.conftest import build_collect_logs_artifact_payload, override_settings
 
 runner = CliRunner()
 
@@ -376,43 +375,76 @@ def test_check_mcp_command_calls_mcp_service_status(
 def test_sitemap_analysis_command_calls_sitemap_service(
     mocker: MockerFixture,
 ) -> None:
-    class FakeSitemapAnalysisService:
+    class FakeAnalysisRunner:
         def __init__(self) -> None:
             self.calls: list[dict[str, Any]] = []
 
-        async def run_sitemap_analysis(
+        async def run(
             self,
             *,
             analysis_date: date,
             force: bool,
-            send_email: bool,
-        ) -> SitemapAnalysisWorkflowResult:
+        ) -> SitemapAnalysisOut:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "force": force,
-                    "send_email": send_email,
                 }
             )
-            return SitemapAnalysisWorkflowResult(analysis=_sitemap_analysis_out(analysis_date))
+            return _sitemap_analysis_out(analysis_date)
 
-    fake_service = FakeSitemapAnalysisService()
-    build_service = mocker.patch.object(
+    fake_runner = FakeAnalysisRunner()
+    build_runner = mocker.patch.object(
         main,
-        "SitemapAnalysisService",
-        return_value=fake_service,
+        "AnalysisRunner",
+        return_value=fake_runner,
     )
 
-    result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
-    assert build_service.call_args.kwargs["root_sitemap_url"] == main.settings.SITEMAP_ROOT_URL
-    assert "Prepared sitemap analysis record" in result.output
-    assert fake_service.calls[0] == {
+    assert build_runner.call_args.kwargs["sitemap_url"] == "https://example.com/sitemap.xml"
+    crawler = build_runner.call_args.kwargs["crawler"]
+    assert isinstance(crawler, main.Crawler)
+    assert crawler.sitemap_url == "https://example.com/sitemap.xml"
+    assert crawler.sitemap_hostname == "example.com"
+    assert isinstance(
+        build_runner.call_args.kwargs["summary_builder"],
+        main.LLMSummaryBuilder,
+    )
+    assert "Completed sitemap analysis" in result.output
+    assert "severity=INFO" in result.output
+    assert "Summary: Sitemap analysis service is ready." in result.output
+    assert fake_runner.calls[0] == {
         "analysis_date": date(2026, 5, 19),
         "force": False,
-        "send_email": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_command_requires_site_domain(
+    mocker: MockerFixture,
+) -> None:
+    sitemap_analysis_command = cast(Any, main.sitemap_analysis)
+    build_runner = mocker.patch.object(main, "AnalysisRunner")
+    echo = mocker.patch.object(main.typer, "echo")
+
+    with override_settings(SITE_DOMAIN=""):
+        with pytest.raises(typer.Exit) as exc_info:
+            await sitemap_analysis_command.__wrapped__.__wrapped__(
+                analysis_date="2026-05-19",
+                force=False,
+                send_email=True,
+            )
+
+    assert exc_info.value.exit_code == 1
+    build_runner.assert_not_called()
+    echo.assert_called_once_with(
+        "SITE_DOMAIN is required to run sitemap analysis. "
+        "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+        err=True,
+    )
 
 
 def test_typer_commands_wrap_async_callbacks() -> None:
@@ -423,8 +455,23 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(log_analysis.__wrapped__)
     assert not inspect.iscoroutinefunction(main.sitemap_analysis)
     assert inspect.iscoroutinefunction(sitemap_analysis.__wrapped__)
+    assert inspect.iscoroutinefunction(sitemap_analysis.__wrapped__.__wrapped__)
     assert not inspect.iscoroutinefunction(main.check_mcp)
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
+
+
+def test_prod_compose_exports_site_domain_setting() -> None:
+    compose_text = Path("docker-compose.prod.yml").read_text()
+
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}" in compose_text
+    assert "SITEMAP_URL" not in compose_text
+
+
+def test_dev_compose_exports_site_domain_setting() -> None:
+    compose_text = Path("docker-compose.yaml").read_text()
+
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}" in compose_text
+    assert "SITEMAP_URL" not in compose_text
 
 
 def test_as_async_runs_coroutine_function() -> None:

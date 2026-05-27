@@ -133,6 +133,19 @@ class SitemapAnalysisRepository:
         await analysis_model.save(update_fields=list(update_data))
         return SitemapAnalysisOut.from_model(analysis_model)
 
+    async def update_or_create(
+        self,
+        *,
+        existing: SitemapAnalysisOut | None,
+        data: SitemapAnalysisIn,
+    ) -> SitemapAnalysisOut:
+        if existing is None:
+            return await self.create(data)
+        return await self.update(
+            existing,
+            **data.model_dump(exclude={"analysis_date"}),
+        )
+
     async def get_by_date(self, analysis_date: date) -> SitemapAnalysisOut | None:
         logger.debug(
             "fetching sitemap analysis by date",

@@ -1,3 +1,5 @@
+from collections import Counter
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 from unittest.mock import ANY
 
@@ -26,7 +28,13 @@ from schemas import (
     SnapshotAccessGuidance,
     WorkflowBootstrap,
 )
-from services import LogAnalysisService, SitemapAnalysisService
+from services.log_analyse import LogAnalysisService
+from services.sitemap import (
+    AnalysisRunner,
+    LLMSummaryBuilder,
+    SitemapAuditReport,
+    SitemapIssue,
+)
 from tests.conftest import build_collect_logs_artifact_payload
 
 PRIVATE_MONITORING_CONTEXT = "# Private VPS Monitoring Context\n\nTest context."
@@ -260,12 +268,55 @@ class FakeSitemapAnalysisRepository(SitemapAnalysisRepository):
         self.saved.append(updated.model_dump())
         return updated
 
+    async def update_or_create(
+        self,
+        *,
+        existing: SitemapAnalysisOut | None,
+        data: SitemapAnalysisIn,
+    ) -> SitemapAnalysisOut:
+        if existing is None:
+            return await self.create(data)
+        return await self.update(existing, **data.model_dump(exclude={"analysis_date"}))
 
-class FailingSitemapCompletionRepository(FakeSitemapAnalysisRepository):
-    async def update(self, analysis: SitemapAnalysisOut, **updates: object) -> SitemapAnalysisOut:
-        if updates.get("status") == RunStatus.SUCCEEDED:
-            raise RuntimeError("sitemap preparation failed")
-        return await super().update(analysis, **updates)
+
+class FakeCrawler:
+    def __init__(self, report: SitemapAuditReport) -> None:
+        self.report = report
+        self.calls = 0
+
+    async def audit(self) -> SitemapAuditReport:
+        self.calls += 1
+        return self.report
+
+    def summarize_issues(self, issues: Iterable[SitemapIssue]) -> dict[str, int]:
+        return dict(sorted(Counter(issue.category.value for issue in issues).items()))
+
+
+class FailingCrawler:
+    async def audit(self) -> SitemapAuditReport:
+        raise RuntimeError("sitemap preparation failed")
+
+    def summarize_issues(self, issues: Iterable[SitemapIssue]) -> dict[str, int]:
+        return {}
+
+
+class FakeLLMSummaryBuilder(LLMSummaryBuilder):
+    def __init__(self) -> None:
+        self.calls: list[tuple[SitemapAuditReport, dict[str, int]]] = []
+
+    def summarize(
+        self,
+        report: SitemapAuditReport,
+        issue_summary: dict[str, int],
+    ) -> dict[str, object]:
+        self.calls.append((report, issue_summary))
+        return {
+            "summary": "Sitemap summary service result.",
+            "severity": "WARNING",
+            "key_findings": ["Summary service was called."],
+            "recommendations": "Review summary service output.",
+            "trend_summary": "Trend from summary service.",
+        }
 
 
 @pytest.mark.asyncio
@@ -350,7 +401,7 @@ async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
 @pytest.mark.asyncio
 async def test_log_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
     repository = FakeLogAnalysisRepository()
-    error_mock = mocker.patch("services.logger.error")
+    error_mock = mocker.patch("services.log_analyse.logger.error")
     service = LogAnalysisService(
         agent=FailingWorkflowAgent(),
         repository=repository,
@@ -431,7 +482,7 @@ async def test_log_analysis_service_records_execution_time(
         agent=agent,
         repository=repository,
     )
-    monotonic = mocker.patch("services.monotonic", side_effect=[100.0, 103.25])
+    monotonic = mocker.patch("services.log_analyse.monotonic", side_effect=[100.0, 103.25])
 
     result = await service.run_log_analysis(
         analysis_date=date(2026, 5, 19),
@@ -448,53 +499,74 @@ async def test_log_analysis_service_records_execution_time(
 @pytest.mark.asyncio
 async def test_sitemap_analysis_service_creates_workflow_record() -> None:
     repository = FakeSitemapAnalysisRepository()
-    service = SitemapAnalysisService(
+    crawler = FakeCrawler(
+        SitemapAuditReport(
+            root_sitemap_url="https://example.com/sitemap.xml",
+            total_sitemaps=1,
+            total_urls=2,
+            issues=[],
+        )
+    )
+    summary_builder = FakeLLMSummaryBuilder()
+    runner = AnalysisRunner(
         repository=repository,
-        root_sitemap_url="https://example.com/sitemap.xml",
+        sitemap_url="https://example.com/sitemap.xml",
+        crawler=crawler,
+        summary_builder=summary_builder,
     )
 
-    result = await service.run_sitemap_analysis(
+    result = await runner.run(
         analysis_date=date(2026, 5, 19),
         force=False,
-        send_email=True,
     )
 
-    assert result.analysis.analysis_date == repository.created[0]["analysis_date"]
+    assert result.analysis_date == repository.created[0]["analysis_date"]
     assert repository.created[0]["analysis_date"] == date(2026, 5, 19)
     assert repository.created[0]["root_sitemap_url"] == "https://example.com/sitemap.xml"
-    assert repository.created[0]["status"] == RunStatus.RUNNING.value
-    assert repository.created[0]["summary"] == "Sitemap workflow preparation started."
-    assert result.analysis.status == RunStatus.SUCCEEDED.value
-    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
-    assert repository.saved[0]["summary"] == "Sitemap analysis workflow record prepared."
+    assert repository.created[0]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.created[0]["summary"] == "Sitemap summary service result."
+    assert crawler.calls == 1
+    assert len(summary_builder.calls) == 1
+    assert summary_builder.calls[0][1] == {}
+    assert result.status == RunStatus.SUCCEEDED.value
+    assert repository.created[0]["total_sitemaps"] == 1
+    assert repository.created[0]["total_urls"] == 2
+    assert repository.created[0]["issue_summary"] == {}
+    assert repository.created[0]["issues"] == []
+    assert repository.created[0]["severity"] == "WARNING"
+    assert repository.saved == []
 
 
 @pytest.mark.asyncio
 async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixture) -> None:
-    repository = FailingSitemapCompletionRepository()
-    error_mock = mocker.patch("services.logger.error")
-    service = SitemapAnalysisService(
+    repository = FakeSitemapAnalysisRepository()
+    error_mock = mocker.patch("services.sitemap.logger.error")
+    runner = AnalysisRunner(
         repository=repository,
-        root_sitemap_url="https://example.com/sitemap.xml",
+        sitemap_url="https://example.com/sitemap.xml",
+        crawler=FailingCrawler(),
+        summary_builder=FakeLLMSummaryBuilder(),
     )
 
-    with pytest.raises(RuntimeError, match="sitemap preparation failed"):
-        await service.run_sitemap_analysis(
-            analysis_date=date(2026, 5, 19),
-            force=False,
-            send_email=True,
-        )
+    result = await runner.run(
+        analysis_date=date(2026, 5, 19),
+        force=False,
+    )
 
-    assert repository.created[0]["status"] == RunStatus.RUNNING.value
-    assert repository.saved[0]["status"] == RunStatus.FAILED.value
-    assert repository.saved[0]["failure_stage"] == "workflow_preparation"
-    assert repository.saved[0]["error_message"] == "sitemap preparation failed"
+    assert repository.created[0]["status"] == RunStatus.FAILED.value
+    assert result.status == RunStatus.FAILED.value
+    assert repository.created[0]["failure_stage"] == "sitemap_analysis"
+    assert result.failure_stage == "sitemap_analysis"
+    assert repository.created[0]["error_message"] == "sitemap preparation failed"
+    assert result.error_message == "sitemap preparation failed"
+    assert repository.saved == []
     error_mock.assert_called_once_with(
         "sitemap-analysis workflow failed",
         extra={
             "event": "sitemap_analysis_workflow_failed",
             "analysis_date": "2026-05-19",
-            "failure_stage": "workflow_preparation",
+            "failure_stage": "sitemap_analysis",
+            "execution_time_seconds": ANY,
             "error": "sitemap preparation failed",
         },
     )
@@ -503,36 +575,61 @@ async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixt
 @pytest.mark.asyncio
 async def test_sitemap_analysis_service_blocks_existing_date_without_force() -> None:
     repository = FakeSitemapAnalysisRepository(exists=True)
-    service = SitemapAnalysisService(
+    crawler = FakeCrawler(
+        SitemapAuditReport(
+            root_sitemap_url="https://example.com/sitemap.xml",
+            total_sitemaps=0,
+            total_urls=0,
+            issues=[],
+        )
+    )
+    runner = AnalysisRunner(
         repository=repository,
-        root_sitemap_url="https://example.com/sitemap.xml",
+        sitemap_url="https://example.com/sitemap.xml",
+        crawler=crawler,
+        summary_builder=FakeLLMSummaryBuilder(),
     )
 
-    with pytest.raises(ValueError, match="already exists"):
-        await service.run_sitemap_analysis(
-            analysis_date=date(2026, 5, 19),
-            force=False,
-            send_email=True,
-        )
+    result = await runner.run(
+        analysis_date=date(2026, 5, 19),
+        force=False,
+    )
 
     assert repository.created == []
+    assert repository.saved == []
+    assert crawler.calls == 0
+    assert result.status == RunStatus.SUCCEEDED.value
+    assert result.summary == "Existing analysis."
+    assert result.failure_stage is None
+    assert result.error_message == ""
 
 
 @pytest.mark.asyncio
 async def test_sitemap_analysis_service_allows_existing_date_with_force() -> None:
     repository = FakeSitemapAnalysisRepository(exists=True)
-    service = SitemapAnalysisService(
+    crawler = FakeCrawler(
+        SitemapAuditReport(
+            root_sitemap_url="https://example.com/sitemap.xml",
+            total_sitemaps=1,
+            total_urls=1,
+            issues=[],
+        )
+    )
+    runner = AnalysisRunner(
         repository=repository,
-        root_sitemap_url="https://example.com/sitemap.xml",
+        sitemap_url="https://example.com/sitemap.xml",
+        crawler=crawler,
+        summary_builder=FakeLLMSummaryBuilder(),
     )
 
-    result = await service.run_sitemap_analysis(
+    result = await runner.run(
         analysis_date=date(2026, 5, 19),
         force=True,
-        send_email=True,
     )
 
-    assert result.analysis.status == RunStatus.SUCCEEDED.value
+    assert result.status == RunStatus.SUCCEEDED.value
     assert repository.created == []
-    assert repository.saved[0]["status"] == RunStatus.RUNNING.value
-    assert repository.saved[-1]["status"] == RunStatus.SUCCEEDED.value
+    assert crawler.calls == 1
+    assert len(repository.saved) == 1
+    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.saved[0]["summary"] == "Sitemap summary service result."

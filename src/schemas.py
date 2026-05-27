@@ -706,9 +706,3 @@ class LogAnalysisWorkflowResult(BaseModel):
     @property
     def prepared_prompt(self) -> LogAnalysisPreparedPrompt:
         return self.agent_context.prompt
-
-
-class SitemapAnalysisWorkflowResult(BaseModel):
-    """Service-level result returned by sitemap-analysis workflow preparation."""
-
-    analysis: SitemapAnalysisOut

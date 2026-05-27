@@ -58,7 +58,7 @@ only-include = [
     "src/repositories.py",
     "src/schemas.py",
     "src/scripts",
-    "src/services.py",
+    "src/services",
     "src/settings.py",
 ]
 sources = ["src"]

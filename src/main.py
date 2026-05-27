@@ -16,7 +16,15 @@ from repositories import (
     LogAnalysisRepository,
     SitemapAnalysisRepository,
 )
-from services import LogAnalysisService, SitemapAnalysisService
+from schemas import SitemapAnalysisOut
+from services.log_analyse import LogAnalysisService
+from services.sitemap import (
+    AnalysisRunner,
+    Crawler,
+    LLMSummaryBuilder,
+    SitemapHTTPClient,
+    build_sitemap_url,
+)
 from utils.monitoring_context import load_private_monitoring_context
 
 app = typer.Typer(
@@ -111,6 +119,7 @@ def _echo_list(label: str, values: list[str]) -> None:
 
 @app.command("sitemap-analysis")
 @as_async()
+@db
 async def sitemap_analysis(
     analysis_date: str | None = typer.Option(
         None,
@@ -128,21 +137,48 @@ async def sitemap_analysis(
         help="Send the sitemap email when the future job succeeds.",
     ),
 ) -> None:
-    """Prepare the sitemap analysis workflow record."""
-    parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
-    service = SitemapAnalysisService(
-        repository=SitemapAnalysisRepository(),
-        root_sitemap_url=settings.SITEMAP_ROOT_URL,
+    """Run the deterministic sitemap analysis job."""
+    parsed_analysis_date: date = (
+        date.fromisoformat(analysis_date) if analysis_date else date.today()
     )
-    await service.run_sitemap_analysis(
+    site_domain: str = settings.SITE_DOMAIN.strip()
+    if not site_domain:
+        typer.echo(
+            "SITE_DOMAIN is required to run sitemap analysis. "
+            "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    sitemap_url: str = build_sitemap_url(site_domain)
+    crawler: Crawler = Crawler(
+        client=SitemapHTTPClient(),
+        sitemap_url=sitemap_url,
+        site_domain=site_domain,
+    )
+    runner: AnalysisRunner = AnalysisRunner(
+        repository=SitemapAnalysisRepository(),
+        sitemap_url=sitemap_url,
+        crawler=crawler,
+        summary_builder=LLMSummaryBuilder(),
+    )
+    analysis: SitemapAnalysisOut = await runner.run(
         analysis_date=parsed_analysis_date,
         force=force,
-        send_email=send_email,
     )
     typer.echo(
-        "Prepared sitemap analysis record "
-        f"(analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
+        "Completed sitemap analysis "
+        f"(analysis_date={parsed_analysis_date}, "
+        f"severity={analysis.severity}, "
+        f"total_sitemaps={analysis.total_sitemaps}, "
+        f"total_urls={analysis.total_urls}, "
+        f"issues={len(analysis.issues)}, "
+        f"force={force}, email={send_email})."
     )
+    typer.echo(f"Summary: {analysis.summary}")
+    _echo_list("Key findings", analysis.key_findings)
+    typer.echo(f"Recommendations: {analysis.recommendations}")
+    typer.echo(f"Execution time: {analysis.execution_time_seconds:.2f}s")
 
 
 @app.command("check-mcp")
