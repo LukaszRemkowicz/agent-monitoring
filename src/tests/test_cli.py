@@ -497,7 +497,7 @@ def test_typer_commands_wrap_async_callbacks() -> None:
 def test_prod_compose_exports_site_domain_setting() -> None:
     compose_text = Path("docker-compose.prod.yml").read_text()
 
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}" in compose_text
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
     assert "SITEMAP_URL" not in compose_text
 
 
