@@ -49,6 +49,7 @@ class WorkflowSkill(BaseModel):
     name: str = Field(alias="skill_name")
     resource_uri: str
     description: str = ""
+    when_useful: str = ""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -394,6 +395,8 @@ class LogAnalysisPromptContext(BaseModel):
     workflow_name: str
     current_phase: Literal["inspect_collected_logs", "final_report"]
     completed_steps: list[str]
+    historical_context_available: bool = False
+    trend_summary_instruction: str = ""
     allowed_actions: list[Literal["call_tools", "read_skills", "final_report"]]
     next_required_action: Literal["call_tools", "final_report"]
     final_report_allowed: bool

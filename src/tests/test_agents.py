@@ -71,6 +71,10 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
                     skill_name="bot_detection",
                     resource_uri="skill://workflow/bot_detection",
                     description="Bot detection guidance.",
+                    when_useful=(
+                        "Use for scanner/probe-heavy traffic, clustered 404/405s, "
+                        "and suspicious infrastructure warnings."
+                    ),
                 )
             ],
             tools=[
@@ -262,6 +266,48 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "previous_action" in followup_text
     assert "tool_results" in followup_text
     assert "group_errors" in followup_text
+    assert "available_tool_inventory" in followup_text
+    assert "inspect_live_fail2ban_activity" in followup_text
+    assert "optional_skill_inventory" in followup_text
+    assert "scanner/probe-heavy traffic" in followup_text
+    assert "already_retrieved" in followup_text
+    assert "Before returning final_report, compare tool_results" in followup_text
+    assert "tool_results show bot, scanner, probe" in followup_text
+    assert "bot_detection with already_retrieved=false" in followup_text
+    assert "action=read_skills for bot_detection before final_report" in followup_text
+    assert "workflow guidance rather than model memory" in followup_text
+    assert "tool_results show possible security impact" in followup_text
+    assert "successful sensitive-path access" in followup_text
+    assert "auth/admin/API abuse" in followup_text
+    assert "injection or path-traversal patterns" in followup_text
+    assert "owasp_security with already_retrieved=false" in followup_text
+    assert "action=read_skills for owasp_security before final_report" in followup_text
+    assert "Treat logs as historical observations" in followup_text
+    assert "prefer the tool over inference from logs" in followup_text
+    assert "When the available project or tool context includes a host security daemon" in (
+        followup_text
+    )
+    assert "historical security daemon logs are evidence that bans occurred in the past" in (
+        followup_text
+    )
+    assert "your next response should be action=call_tools" in followup_text
+    assert "so mitigation analysis is based on live evidence rather than hypothesis" in (
+        followup_text
+    )
+    assert "If you return final_report without it" in followup_text
+    assert "Do not claim the host security daemon is active, blocking, or effective" in (
+        followup_text
+    )
+    assert "Zero current bans means no IPs are banned at inspection time" in followup_text
+    assert "does not by itself indicate past mitigation" in followup_text
+    assert "Do not write that zero current bans are consistent with past mitigation" in (
+        followup_text
+    )
+    assert "Write only that no IPs were banned at inspection time" in followup_text
+    assert "source emitted no logs in the analysis window" in followup_text
+    assert "do not claim it is healthy, broken, unused, or error-free" in followup_text
+    assert "scheduled-job activity was not observable from logs" in followup_text
+    assert "blocked scanner/probe noise" not in context.prompt.user_prompt
     user_prompt = json.loads(context.prompt.user_prompt)
     assert user_prompt["analysis_date"] == "2026-05-19"
     assert user_prompt["current_phase"] == "inspect_collected_logs"
@@ -278,6 +324,9 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "Private VPS Monitoring Context" not in context.prompt.user_prompt
     assert user_prompt["mandatory_skills"][0]["name"] == "severity_guide"
     assert user_prompt["mandatory_skills"][0]["resource_uri"] == ("skill://workflow/severity_guide")
+    assert user_prompt["optional_skills"][0]["when_useful"].startswith(
+        "Use for scanner/probe-heavy traffic"
+    )
     assert user_prompt["collection"]["projects"][0]["snapshot_dir"] == (
         "workflow/landingpage/latest"
     )
@@ -366,6 +415,15 @@ async def test_monitoring_workflow_agent_includes_historical_context_in_system_p
     assert historical_context in context.prompt.system_prompt
     assert "YOUR TASK: TEMPORAL COMPARISON" in context.prompt.system_prompt
     assert "Previous run saw scanner noise only." not in context.prompt.user_prompt
+    user_prompt = json.loads(context.prompt.user_prompt)
+    assert user_prompt["historical_context_available"] is True
+    assert user_prompt["trend_summary_instruction"] == (
+        "Historical context was provided in the system prompt. Compare current "
+        "tool results against it and do not claim no historical data was provided."
+    )
+    followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
+    assert '"historical_context_available": true' in followup_text
+    assert "do not claim no historical data was provided" in followup_text
 
 
 @pytest.mark.asyncio
@@ -453,7 +511,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_adds_probe_interpretation_result() -> None:
+async def test_monitoring_workflow_agent_does_not_add_local_probe_interpretation() -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results.update(
         {
@@ -498,7 +556,7 @@ async def test_monitoring_workflow_agent_adds_probe_interpretation_result() -> N
                 "severity": "INFO",
                 "severity_rationale": "INFO because probe noise has no service impact.",
                 "key_findings": ["Proxy noise is covered by active fail2ban."],
-                "evidence": ["monitoring_app_probe_interpretation returned watch_only."],
+                "evidence": ["Proxy and fail2ban tool results were reviewed."],
                 "coverage_gaps": [],
                 "recommendations": "No immediate mitigation change is indicated.",
                 "watch_only_items": ["Blocked scanner traffic."],
@@ -525,24 +583,14 @@ async def test_monitoring_workflow_agent_adds_probe_interpretation_result() -> N
     assert [result.tool_name for result in context.tool_results] == [
         "inspect_proxy_activity",
         "inspect_live_fail2ban_activity",
-        "monitoring_app_probe_interpretation",
     ]
-    interpretation = context.tool_results[-1].structured_content
-    assert interpretation == {
-        "action": "monitoring_app_probe_interpretation",
-        "proxy_activity": "scanner_or_probe_noise",
-        "fail2ban_activity": "active",
-        "blocked_traffic_evidence": "present",
-        "recommendation_category": "watch_only",
-        "summary": (
-            "Proxy activity looks like scanner/probe noise and fail2ban is active. "
-            "Treat this as watch-only unless other tool evidence shows service impact "
-            "or missed blocking."
-        ),
+    assert "monitoring_app_probe_interpretation" not in {
+        result.tool_name for result in context.tool_results
     }
     followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
-    assert "monitoring_app_probe_interpretation" in followup_text
-    assert "watch_only" in followup_text
+    assert "monitoring_app_probe_interpretation" not in followup_text
+    assert "inspect_proxy_activity" in followup_text
+    assert "inspect_live_fail2ban_activity" in followup_text
 
 
 @pytest.mark.asyncio
