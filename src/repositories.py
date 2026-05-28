@@ -89,7 +89,7 @@ class LogAnalysisRepository:
         )
         analyses: list[LogAnalysis] = await self.model.objects.last_5_days(
             exclude_date=analysis_date
-        ).filter(status=RunStatus.SUCCEEDED.value)
+        ).filter(status=RunStatus.SUCCEEDED)
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
 

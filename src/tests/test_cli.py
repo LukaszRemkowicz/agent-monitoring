@@ -399,6 +399,12 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         "AnalysisRunner",
         return_value=fake_runner,
     )
+    llm_provider = object()
+    get_llm_provider = mocker.patch.object(
+        main,
+        "get_monitoring_llm_provider",
+        return_value=llm_provider,
+    )
 
     with override_settings(SITE_DOMAIN="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
@@ -413,6 +419,8 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         build_runner.call_args.kwargs["summary_builder"],
         main.LLMSummaryBuilder,
     )
+    assert build_runner.call_args.kwargs["summary_builder"].llm_provider is llm_provider
+    get_llm_provider.assert_called_once()
     assert "Completed sitemap analysis" in result.output
     assert "severity=INFO" in result.output
     assert "Summary: Sitemap analysis service is ready." in result.output
@@ -447,6 +455,32 @@ async def test_sitemap_analysis_command_requires_site_domain(
     )
 
 
+@pytest.mark.asyncio
+async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
+    mocker: MockerFixture,
+) -> None:
+    sitemap_analysis_command = cast(Any, main.sitemap_analysis)
+    build_runner = mocker.patch.object(main, "AnalysisRunner")
+    echo = mocker.patch.object(main.typer, "echo")
+
+    with override_settings(SITE_DOMAIN="https://example.com/sitemap.xml"):
+        with pytest.raises(typer.Exit) as exc_info:
+            await sitemap_analysis_command.__wrapped__.__wrapped__(
+                analysis_date="2026-05-19",
+                force=False,
+                send_email=True,
+            )
+
+    assert exc_info.value.exit_code == 1
+    build_runner.assert_not_called()
+    echo.assert_called_once_with(
+        "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
+        "Set SITE_DOMAIN=example.com or "
+        "SITE_DOMAIN=https://example.com.",
+        err=True,
+    )
+
+
 def test_typer_commands_wrap_async_callbacks() -> None:
     assert not inspect.iscoroutinefunction(main.log_analysis)
     log_analysis = cast(Any, main.log_analysis)
@@ -470,7 +504,7 @@ def test_prod_compose_exports_site_domain_setting() -> None:
 def test_dev_compose_exports_site_domain_setting() -> None:
     compose_text = Path("docker-compose.yaml").read_text()
 
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}" in compose_text
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
     assert "SITEMAP_URL" not in compose_text
 
 

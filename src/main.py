@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import typer
@@ -149,8 +150,21 @@ async def sitemap_analysis(
             err=True,
         )
         raise typer.Exit(code=1)
+    parsed_site_domain = urlparse(site_domain if "://" in site_domain else f"https://{site_domain}")
+    if not parsed_site_domain.netloc or parsed_site_domain.path.rstrip("/"):
+        typer.echo(
+            "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
+            "Set SITE_DOMAIN=example.com or "
+            "SITE_DOMAIN=https://example.com.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     sitemap_url: str = build_sitemap_url(site_domain)
+    mcp_client = McpWorkflowClient(
+        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        workflow_jwt=settings.MCP_WORKFLOW_JWT,
+    )
     crawler: Crawler = Crawler(
         client=SitemapHTTPClient(),
         sitemap_url=sitemap_url,
@@ -160,7 +174,10 @@ async def sitemap_analysis(
         repository=SitemapAnalysisRepository(),
         sitemap_url=sitemap_url,
         crawler=crawler,
-        summary_builder=LLMSummaryBuilder(),
+        summary_builder=LLMSummaryBuilder(
+            llm_provider=get_monitoring_llm_provider(settings),
+            mcp_client=mcp_client,
+        ),
     )
     analysis: SitemapAnalysisOut = await runner.run(
         analysis_date=parsed_analysis_date,

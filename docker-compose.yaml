@@ -45,7 +45,7 @@ services:
       LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
       MONITORING_PROJECT: landingpage
       MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT}
-      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
     command: ["log_analysis"]
 
   migrate:
@@ -75,7 +75,7 @@ services:
       LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
       MONITORING_PROJECT: landingpage
       MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT}
-      SITE_DOMAIN: ${SITE_DOMAIN:?SITE_DOMAIN is required}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
     command: ["migrate"]
 
 volumes:

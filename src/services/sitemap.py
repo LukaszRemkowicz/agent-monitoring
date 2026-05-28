@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -7,16 +8,20 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
 from time import monotonic
-from typing import Protocol
+from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
 import httpx
+from llm_core.protocols import LLMProvider
+from llm_core.types import GenerationOptions, LLMRequest, LLMResponse, Message, ResponseFormat
+from pydantic import BaseModel, BeforeValidator, Field
 
 from db.models import RunStatus, SitemapAnalysis
 from logging_config import get_logger
+from mcp import McpWorkflowClient
 from repositories import SitemapAnalysisRepository
-from schemas import SitemapAnalysisIn, SitemapAnalysisOut
+from schemas import SitemapAnalysisIn, SitemapAnalysisOut, WorkflowBootstrap
 
 logger = get_logger(__name__)
 
@@ -80,6 +85,59 @@ class SitemapAuditReport:
     total_sitemaps: int
     total_urls: int
     issues: list[SitemapIssue]
+
+
+def _normalize_llm_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return " ".join(_normalize_llm_text(item) for item in value if item is not None).strip()
+    if isinstance(value, dict):
+        issue = value.get("issue")
+        url = value.get("url")
+        details = [
+            f"{_humanize_detail_key(key)}: {item}"
+            for key, item in value.items()
+            if key not in {"issue", "url"} and item is not None
+        ]
+        if issue and url:
+            issue_text = _normalize_llm_text(issue).rstrip(".:")
+            suffix = f" ({', '.join(details)})" if details else ""
+            return f"{issue_text}: {url}{suffix}"
+        return json.dumps(value, sort_keys=True, default=str, ensure_ascii=True)
+    return str(value).strip()
+
+
+def _normalize_key_findings(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [_normalize_llm_text(item) for item in value]
+    return [_normalize_llm_text(value)]
+
+
+def _humanize_detail_key(key: object) -> str:
+    if key == "canonical_url":
+        return "canonical URL"
+    if key == "final_url":
+        return "final URL"
+    if key == "status_code":
+        return "status code"
+    return str(key).replace("_", " ")
+
+
+class SitemapSummaryPayload(BaseModel):
+    """Validated LLM sitemap summary shape."""
+
+    summary: Annotated[str, BeforeValidator(_normalize_llm_text)]
+    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    key_findings: Annotated[list[str], BeforeValidator(_normalize_key_findings)] = Field(
+        default_factory=list
+    )
+    recommendations: Annotated[str, BeforeValidator(_normalize_llm_text)] = ""
+    trend_summary: Annotated[str, BeforeValidator(_normalize_llm_text)] = ""
 
 
 class SitemapCrawler(Protocol):
@@ -228,12 +286,13 @@ class Crawler:
 
         return discovered_urls, len(seen_sitemaps)
 
-    def summarize_issues(self, issues: Iterable[SitemapIssue]) -> dict[str, int]:
+    @staticmethod
+    def summarize_issues(issues: Iterable[SitemapIssue]) -> dict[str, int]:
         """Return issue counts by category."""
 
         issue_counts: dict[str, int] = {}
         for issue in issues:
-            category: str = issue.category.value
+            category: str = issue.category
             issue_counts[category] = issue_counts.get(category, 0) + 1
         return dict(sorted(issue_counts.items()))
 
@@ -375,56 +434,67 @@ class Crawler:
 
 
 class LLMSummaryBuilder:
-    """Summarize sitemap audit facts.
+    """Summarize deterministic sitemap audit facts with the configured LLM."""
 
-    This is the future LLM boundary for sitemap analysis. It currently returns
-    deterministic fallback text so the service flow is already shaped like the
-    final implementation: audit facts first, then summary interpretation.
-    """
+    def __init__(
+        self,
+        *,
+        llm_provider: LLMProvider,
+        mcp_client: McpWorkflowClient,
+    ) -> None:
+        self.llm_provider = llm_provider
+        self.mcp_client = mcp_client
 
-    def summarize(
+    async def summarize(
         self,
         report: SitemapAuditReport,
         issue_summary: dict[str, int],
     ) -> dict[str, object]:
         """Return summary fields for the persisted sitemap analysis."""
 
-        return self._build_summary_fields(report, issue_summary)
-
-    @staticmethod
-    def _build_summary_fields(
-        report: SitemapAuditReport,
-        issue_summary: dict[str, int],
-    ) -> dict[str, object]:
-        if not report.issues:
-            return {
-                "summary": "Sitemap audit completed with no issues detected.",
-                "severity": SitemapAnalysis.Severity.INFO.value,
-                "key_findings": ["All sitemap URLs resolved without deterministic issues."],
-                "recommendations": "No action needed.",
-                "trend_summary": "No sitemap issues were detected in this run.",
-            }
-
-        severity = SitemapAnalysis.Severity.WARNING.value
-        if any(
-            issue.category in {SitemapIssueCategory.BROKEN_URL, SitemapIssueCategory.FETCH_ERROR}
-            for issue in report.issues
-        ):
-            severity = SitemapAnalysis.Severity.CRITICAL.value
-
+        workflow: WorkflowBootstrap = await self.mcp_client.get_sitemap_workflow_bundle()
+        response: LLMResponse = self.llm_provider.generate(
+            LLMRequest(
+                messages=(
+                    Message.from_text(
+                        "system",
+                        workflow.prompt,
+                    ),
+                    Message.from_text(
+                        "user",
+                        json.dumps(
+                            {
+                                "root_sitemap_url": report.root_sitemap_url,
+                                "total_sitemaps": report.total_sitemaps,
+                                "total_urls": report.total_urls,
+                                "issue_count": len(report.issues),
+                                "issue_summary": issue_summary,
+                                "issues": [issue.as_dict() for issue in report.issues],
+                            },
+                            sort_keys=True,
+                            ensure_ascii=True,
+                        ),
+                    ),
+                ),
+                options=GenerationOptions(
+                    temperature=0.0,
+                    response_format=ResponseFormat.JSON_OBJECT,
+                ),
+                metadata={
+                    "workflow_name": workflow.workflow_name,
+                    "phase": "summary",
+                },
+            )
+        )
+        payload: Any = response.structured_output
+        if payload is None and response.text is not None:
+            payload = json.loads(response.text)
+        summary: SitemapSummaryPayload = SitemapSummaryPayload.model_validate(payload)
         return {
-            "summary": (
-                f"Sitemap audit completed with {len(report.issues)} issue(s) "
-                f"across {report.total_urls} URL(s)."
-            ),
-            "severity": severity,
-            "key_findings": [
-                f"{category.replace('_', ' ')}: {count}"
-                for category, count in sorted(issue_summary.items())
-            ],
-            "recommendations": "Review the deterministic sitemap issues and fix the affected URLs.",
-            "trend_summary": (
-                "Trend summary unavailable because sitemap LLM summary is not enabled."
+            **summary.model_dump(),
+            "gpt_tokens_used": response.usage.total_tokens if response.usage else 0,
+            "gpt_cost_usd": (
+                response.usage.cost_usd if response.usage and response.usage.cost_usd else 0.0
             ),
         }
 
@@ -459,6 +529,7 @@ class AnalysisRunner:
             extra={
                 "event": "sitemap_analysis_workflow_prepare_start",
                 "analysis_date": str(analysis_date),
+                "sitemap_url": self.sitemap_url,
                 "force": force,
             },
         )
@@ -469,6 +540,7 @@ class AnalysisRunner:
                 extra={
                     "event": "sitemap_analysis_workflow_prepare_skipped",
                     "analysis_date": str(analysis_date),
+                    "sitemap_url": self.sitemap_url,
                     "reason": "existing_analysis",
                 },
             )
@@ -480,7 +552,7 @@ class AnalysisRunner:
             report: SitemapAuditReport = await self.crawler.audit()
             fetch_duration_seconds: float = round(monotonic() - fetch_started_at, 3)
             issue_summary: dict[str, int] = self.crawler.summarize_issues(report.issues)
-            summary_fields: dict[str, object] = self.summary_builder.summarize(
+            summary_fields: dict[str, object] = await self.summary_builder.summarize(
                 report,
                 issue_summary,
             )
@@ -488,7 +560,7 @@ class AnalysisRunner:
             completed_analysis = SitemapAnalysisIn.model_validate(
                 {
                     "analysis_date": analysis_date,
-                    "status": RunStatus.SUCCEEDED.value,
+                    "status": RunStatus.SUCCEEDED,
                     "started_at": started_at,
                     "finished_at": datetime.now(UTC),
                     "fetch_duration_seconds": fetch_duration_seconds,
@@ -512,6 +584,7 @@ class AnalysisRunner:
                 extra={
                     "event": "sitemap_analysis_workflow_failed",
                     "analysis_date": str(analysis_date),
+                    "sitemap_url": self.sitemap_url,
                     "failure_stage": "sitemap_analysis",
                     "execution_time_seconds": execution_time_seconds,
                     "error": str(exc),
@@ -540,6 +613,7 @@ class AnalysisRunner:
             extra={
                 "event": "sitemap_analysis_workflow_prepare_done",
                 "analysis_date": str(analysis_date),
+                "sitemap_url": self.sitemap_url,
                 "severity": updated_analysis.severity,
                 "issue_count": len(updated_analysis.issues),
                 "execution_time_seconds": updated_analysis.execution_time_seconds,

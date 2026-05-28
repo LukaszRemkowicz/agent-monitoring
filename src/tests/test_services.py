@@ -288,23 +288,29 @@ class FakeCrawler:
         self.calls += 1
         return self.report
 
-    def summarize_issues(self, issues: Iterable[SitemapIssue]) -> dict[str, int]:
-        return dict(sorted(Counter(issue.category.value for issue in issues).items()))
+    @staticmethod
+    def summarize_issues(issues: Iterable[SitemapIssue]) -> dict[str, int]:
+        return dict(sorted(Counter(issue.category for issue in issues).items()))
 
 
 class FailingCrawler:
     async def audit(self) -> SitemapAuditReport:
         raise RuntimeError("sitemap preparation failed")
 
-    def summarize_issues(self, issues: Iterable[SitemapIssue]) -> dict[str, int]:
+    @staticmethod
+    def summarize_issues(issues: Iterable[SitemapIssue]) -> dict[str, int]:
         return {}
 
 
 class FakeLLMSummaryBuilder(LLMSummaryBuilder):
     def __init__(self) -> None:
+        super().__init__(
+            llm_provider=MockProvider(),
+            mcp_client=FakeMcpClient(),
+        )
         self.calls: list[tuple[SitemapAuditReport, dict[str, int]]] = []
 
-    def summarize(
+    async def summarize(
         self,
         report: SitemapAuditReport,
         issue_summary: dict[str, int],
@@ -316,6 +322,8 @@ class FakeLLMSummaryBuilder(LLMSummaryBuilder):
             "key_findings": ["Summary service was called."],
             "recommendations": "Review summary service output.",
             "trend_summary": "Trend from summary service.",
+            "gpt_tokens_used": 10,
+            "gpt_cost_usd": 0.0025,
         }
 
 
@@ -340,9 +348,9 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert repository.last_5_days_calls == [date(2026, 5, 19)]
     assert agent.received_historical_context == ""
     assert repository.created[0]["analysis_date"] == date(2026, 5, 19)
-    assert repository.created[0]["status"] == RunStatus.RUNNING.value
+    assert repository.created[0]["status"] == RunStatus.RUNNING
     assert repository.created[0]["summary"] == "Workflow preparation started."
-    assert result.analysis.status == RunStatus.SUCCEEDED.value
+    assert result.analysis.status == RunStatus.SUCCEEDED
     assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
     assert result.analysis.log_window_since == datetime(2026, 5, 19, tzinfo=UTC)
     assert result.analysis.log_window_until == datetime(2026, 5, 20, tzinfo=UTC)
@@ -350,7 +358,7 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert result.prepared_prompt.context.collection.projects[0].snapshot_dir == (
         "workflow/landingpage/latest"
     )
-    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED
     assert repository.saved[0]["summary"] == "Landingpage logs are healthy."
     assert repository.saved[0]["severity"] == "INFO"
     assert repository.saved[0]["key_findings"] == ["No critical incidents found."]
@@ -415,7 +423,7 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
             send_email=True,
         )
 
-    assert repository.saved[0]["status"] == RunStatus.FAILED.value
+    assert repository.saved[0]["status"] == RunStatus.FAILED
     assert repository.saved[0]["failure_stage"] == "log_analysis"
     assert repository.saved[0]["error_message"] == "MCP unavailable"
     error_mock.assert_called_once_with(
@@ -468,8 +476,8 @@ async def test_log_analysis_service_allows_existing_date_with_force() -> None:
     assert result.workflow.workflow_name == "analyze_daily_log_bundle"
     assert agent.calls == 1
     assert repository.created == []
-    assert repository.saved[0]["status"] == RunStatus.RUNNING.value
-    assert repository.saved[-1]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.saved[0]["status"] == RunStatus.RUNNING
+    assert repository.saved[-1]["status"] == RunStatus.SUCCEEDED
 
 
 @pytest.mark.asyncio
@@ -523,17 +531,19 @@ async def test_sitemap_analysis_service_creates_workflow_record() -> None:
     assert result.analysis_date == repository.created[0]["analysis_date"]
     assert repository.created[0]["analysis_date"] == date(2026, 5, 19)
     assert repository.created[0]["root_sitemap_url"] == "https://example.com/sitemap.xml"
-    assert repository.created[0]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.created[0]["status"] == RunStatus.SUCCEEDED
     assert repository.created[0]["summary"] == "Sitemap summary service result."
     assert crawler.calls == 1
     assert len(summary_builder.calls) == 1
     assert summary_builder.calls[0][1] == {}
-    assert result.status == RunStatus.SUCCEEDED.value
+    assert result.status == RunStatus.SUCCEEDED
     assert repository.created[0]["total_sitemaps"] == 1
     assert repository.created[0]["total_urls"] == 2
     assert repository.created[0]["issue_summary"] == {}
     assert repository.created[0]["issues"] == []
     assert repository.created[0]["severity"] == "WARNING"
+    assert repository.created[0]["gpt_tokens_used"] == 10
+    assert repository.created[0]["gpt_cost_usd"] == 0.0025
     assert repository.saved == []
 
 
@@ -553,8 +563,8 @@ async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixt
         force=False,
     )
 
-    assert repository.created[0]["status"] == RunStatus.FAILED.value
-    assert result.status == RunStatus.FAILED.value
+    assert repository.created[0]["status"] == RunStatus.FAILED
+    assert result.status == RunStatus.FAILED
     assert repository.created[0]["failure_stage"] == "sitemap_analysis"
     assert result.failure_stage == "sitemap_analysis"
     assert repository.created[0]["error_message"] == "sitemap preparation failed"
@@ -565,6 +575,7 @@ async def test_sitemap_analysis_service_records_failure_state(mocker: MockerFixt
         extra={
             "event": "sitemap_analysis_workflow_failed",
             "analysis_date": "2026-05-19",
+            "sitemap_url": "https://example.com/sitemap.xml",
             "failure_stage": "sitemap_analysis",
             "execution_time_seconds": ANY,
             "error": "sitemap preparation failed",
@@ -598,7 +609,7 @@ async def test_sitemap_analysis_service_blocks_existing_date_without_force() -> 
     assert repository.created == []
     assert repository.saved == []
     assert crawler.calls == 0
-    assert result.status == RunStatus.SUCCEEDED.value
+    assert result.status == RunStatus.SUCCEEDED
     assert result.summary == "Existing analysis."
     assert result.failure_stage is None
     assert result.error_message == ""
@@ -627,9 +638,9 @@ async def test_sitemap_analysis_service_allows_existing_date_with_force() -> Non
         force=True,
     )
 
-    assert result.status == RunStatus.SUCCEEDED.value
+    assert result.status == RunStatus.SUCCEEDED
     assert repository.created == []
     assert crawler.calls == 1
     assert len(repository.saved) == 1
-    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED.value
+    assert repository.saved[0]["status"] == RunStatus.SUCCEEDED
     assert repository.saved[0]["summary"] == "Sitemap summary service result."
