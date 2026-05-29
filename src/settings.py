@@ -7,6 +7,7 @@ from pathlib import Path
 import environ  # type: ignore[import-untyped]
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE_ROOT = REPOSITORY_ROOT / "src/templates"
 env = environ.Env(DEBUG=(bool, False))
 
 env_file = REPOSITORY_ROOT / ".env"
@@ -46,13 +47,16 @@ MONITORING_LLM_STRONG_MODEL = env.str("MONITORING_LLM_STRONG_MODEL", default="gp
 OPENAI_API_KEY = env.str("OPENAI_API_KEY", default="")
 OPENAI_BASE_URL = env.str("OPENAI_BASE_URL", default="")
 
-EMAIL_HOST = env.str("EMAIL_HOST", default="localhost")
-EMAIL_PORT = env.int("EMAIL_PORT", default=25)
+EMAIL_BACKEND = env.str("EMAIL_BACKEND", default="smtp")
+EMAIL_HOST = env.str("EMAIL_HOST", default="smtp.gmail.com")
+EMAIL_PORT = env.int("EMAIL_PORT", default=587)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_USERNAME = env.str("EMAIL_USERNAME", default="")
 EMAIL_PASSWORD = env.str("EMAIL_PASSWORD", default="")
 EMAIL_FROM = env.str("EMAIL_FROM", default="monitoring@example.com")
 EMAIL_TO = env.str("EMAIL_TO", default="")
 
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="")
+ADMIN_DOMAIN = env.str("ADMIN_DOMAIN", default="")
 SITEMAP_EMAIL_TO = env.str("SITEMAP_EMAIL_TO", default="")
 RETENTION_DAYS = env.int("RETENTION_DAYS", default=90)

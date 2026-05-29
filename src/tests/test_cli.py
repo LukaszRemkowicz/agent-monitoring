@@ -5,6 +5,7 @@ from pathlib import Path
 from socket import gaierror
 from types import TracebackType
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
@@ -47,6 +48,15 @@ def _patch_log_analysis_command_dependencies(
 
     service_calls: list[dict[str, Any]] = []
     original_service_class = main.LogAnalysisService
+    email_service = AsyncMock()
+
+    class FakeLogAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[LogAnalysisOut, dict[str, Any]]] = []
+
+        async def update(self, analysis: LogAnalysisOut, **updates: Any) -> LogAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
 
     class FakeLogAnalysisServiceConstructor:
         create_log_collection_window = staticmethod(
@@ -55,14 +65,16 @@ def _patch_log_analysis_command_dependencies(
 
         def __new__(cls, **kwargs: Any) -> Any:
             service_calls.append(kwargs)
+            setattr(fake_service, "repository", kwargs["repository"])
             return fake_service
 
     dependencies = dict[str, Any](
         mcp_client=object(),
         agent=object(),
         llm_provider=object(),
-        repository=object(),
+        repository=FakeLogAnalysisRepository(),
         llm_call_repository=object(),
+        email_service=email_service,
         service_calls=service_calls,
     )
     dependencies["mcp_client_constructor"] = mocker.patch.object(
@@ -94,6 +106,11 @@ def _patch_log_analysis_command_dependencies(
         main,
         "LLMCallRepository",
         return_value=dependencies["llm_call_repository"],
+    )
+    dependencies["email_service_factory"] = mocker.patch.object(
+        main.MonitoringEmailService,
+        "create_default",
+        return_value=dependencies["email_service"],
     )
     mocker.patch.object(
         main,
@@ -237,14 +254,12 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             analysis_date: date,
             log_window: LogCollectionWindow,
             force: bool,
-            send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "log_window": log_window.model_dump(),
                     "force": force,
-                    "send_email": send_email,
                 }
             )
             return _log_analysis_result(analysis_date)
@@ -279,13 +294,14 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             "until_datetime": datetime(2026, 5, 20, tzinfo=UTC),
         },
         "force": False,
-        "send_email": True,
     }
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
     assert (
         dependencies["service_calls"][0]["llm_call_repository"]
         is dependencies["llm_call_repository"]
     )
+    dependencies["email_service"].send_log_analysis.assert_awaited_once()
+    assert dependencies["repository"].updated[0][1] == {"email_sent": True}
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -306,14 +322,12 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
             analysis_date: date,
             log_window: LogCollectionWindow,
             force: bool,
-            send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "log_window": log_window.model_dump(),
                     "force": force,
-                    "send_email": send_email,
                 }
             )
             return _log_analysis_result(analysis_date)
@@ -334,6 +348,7 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
     }
     assert "analysis_date=2026-05-20" in result.output
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
+    dependencies["email_service"].send_log_analysis.assert_awaited_once()
 
 
 def test_check_mcp_command_calls_mcp_service_status(
@@ -375,6 +390,20 @@ def test_check_mcp_command_calls_mcp_service_status(
 def test_sitemap_analysis_command_calls_sitemap_service(
     mocker: MockerFixture,
 ) -> None:
+    class FakeSitemapAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[SitemapAnalysisOut, dict[str, Any]]] = []
+
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
+
+    fake_repository = FakeSitemapAnalysisRepository()
+
     class FakeAnalysisRunner:
         def __init__(self) -> None:
             self.calls: list[dict[str, Any]] = []
@@ -405,6 +434,9 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         "get_monitoring_llm_provider",
         return_value=llm_provider,
     )
+    email_service = AsyncMock()
+    mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
     with override_settings(SITE_DOMAIN="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
@@ -428,6 +460,8 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         "analysis_date": date(2026, 5, 19),
         "force": False,
     }
+    email_service.send_sitemap_analysis.assert_awaited_once()
+    assert fake_repository.updated[0][1] == {"email_sent": True}
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 from tortoise import fields
 from tortoise.queryset import QuerySet
 
-from conf import settings
+from utils.log_artifacts import format_log_artifact_size
 
 from .managers import DatabaseModel, QuerySetManager
 
@@ -268,21 +268,11 @@ class LogAnalysis(DatabaseModel):
 
         return f"{self.execution_time_seconds:.1f}"
 
-    def get_email_subject(self) -> str:
-        """Return the email subject for this log analysis."""
+    @property
+    def log_size(self) -> str:
+        """Return collected MCP log artifact size for display."""
 
-        environment = settings.ENVIRONMENT.upper()
-        return f"[{environment}][{self.severity}] Daily Log Analysis - {self.analysis_date}"
-
-    def get_email_context(self) -> dict[str, object]:
-        """Return template context for this log analysis email."""
-
-        return {
-            "environment": settings.ENVIRONMENT,
-            "monitoring_project": settings.MONITORING_PROJECT,
-            "log_analysis": self,
-            "execution_time": self.execution_time_formatted,
-        }
+        return format_log_artifact_size(self.mcp_artifact)
 
     async def mark_email_sent(self) -> None:
         """Mark this log analysis email as sent."""
@@ -474,22 +464,6 @@ class SitemapAnalysis(DatabaseModel):
         for category, count in sorted(self.issue_summary.items()):
             lines.append(f"{category.replace('_', ' ')}: {count}")
         return lines
-
-    def get_email_subject(self) -> str:
-        """Return the email subject for this sitemap analysis."""
-
-        environment = settings.ENVIRONMENT.upper()
-        return f"[{environment}][{self.severity}] Sitemap Analysis - {self.analysis_date}"
-
-    def get_email_context(self) -> dict[str, object]:
-        """Return template context for this sitemap analysis email."""
-
-        return {
-            "environment": settings.ENVIRONMENT,
-            "monitoring_project": settings.MONITORING_PROJECT,
-            "sitemap_analysis": self,
-            "execution_time": self.execution_time_formatted,
-        }
 
     async def mark_email_sent(self) -> None:
         """Mark this sitemap analysis email as sent."""

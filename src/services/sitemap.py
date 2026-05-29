@@ -22,6 +22,7 @@ from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import SitemapAnalysisRepository
 from schemas import SitemapAnalysisIn, SitemapAnalysisOut, WorkflowBootstrap
+from utils.llm_usage import usage_cost_usd
 
 logger = get_logger(__name__)
 
@@ -493,9 +494,7 @@ class LLMSummaryBuilder:
         return {
             **summary.model_dump(),
             "gpt_tokens_used": response.usage.total_tokens if response.usage else 0,
-            "gpt_cost_usd": (
-                response.usage.cost_usd if response.usage and response.usage.cost_usd else 0.0
-            ),
+            "gpt_cost_usd": usage_cost_usd(response.usage),
         }
 
 

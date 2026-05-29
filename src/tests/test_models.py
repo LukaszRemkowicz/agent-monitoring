@@ -12,6 +12,7 @@ from db.models import (
     SitemapAnalysisManager,
     SitemapAnalysisQuerySet,
 )
+from tests.conftest import build_collect_logs_artifact_payload
 from tests.factories import LogAnalysisFactory, SitemapAnalysisFactory
 
 
@@ -49,20 +50,24 @@ def test_log_analysis_uses_mcp_artifact_as_source_of_truth() -> None:
     assert "email_deliveries" not in SitemapAnalysis._meta.fields_map
 
 
-def test_log_analysis_email_helpers_use_monitoring_settings() -> None:
+def test_log_analysis_log_size_uses_nested_agent_collect_logs_artifact() -> None:
     analysis = LogAnalysis(
-        analysis_date=date(2026, 5, 19),
-        severity=LogAnalysis.Severity.CRITICAL.value,
-        execution_time_seconds=12.34,
+        mcp_artifact={
+            "collect_logs": build_collect_logs_artifact_payload(
+                include_unavailable_nginx=True,
+            )
+        }
     )
 
-    assert analysis.get_email_subject() == "[DEV][CRITICAL] Daily Log Analysis - 2026-05-19"
-    assert analysis.get_email_context() == {
-        "environment": "dev",
-        "monitoring_project": "landingpage",
-        "log_analysis": analysis,
-        "execution_time": "12.3",
-    }
+    assert analysis.log_size == "4.0 KB"
+
+
+def test_log_analysis_log_size_uses_mb_for_large_artifacts() -> None:
+    artifact = build_collect_logs_artifact_payload()
+    artifact["projects"][0]["sources"][0]["byte_count"] = 5 * 1024 * 1024
+    analysis = LogAnalysis(mcp_artifact=artifact)
+
+    assert analysis.log_size == "5.0 MB"
 
 
 @pytest.mark.asyncio
@@ -109,7 +114,7 @@ async def test_log_analysis_objects_use_domain_queryset() -> None:
     assert await queryset.last_5_days(exclude_date=today).count() == 1
 
 
-def test_sitemap_analysis_email_helpers_use_monitoring_settings() -> None:
+def test_sitemap_analysis_report_helpers_format_issue_summary() -> None:
     analysis = SitemapAnalysis(
         analysis_date=date(2026, 5, 19),
         severity=SitemapAnalysis.Severity.WARNING.value,
@@ -118,15 +123,8 @@ def test_sitemap_analysis_email_helpers_use_monitoring_settings() -> None:
         issues=[{"url": "https://example.com/broken"}],
     )
 
-    assert analysis.get_email_subject() == "[DEV][WARNING] Sitemap Analysis - 2026-05-19"
     assert analysis.issue_count == 1
     assert analysis.issue_summary_lines == ["broken links: 2", "missing lastmod: 1"]
-    assert analysis.get_email_context() == {
-        "environment": "dev",
-        "monitoring_project": "landingpage",
-        "sitemap_analysis": analysis,
-        "execution_time": "4.6",
-    }
 
 
 @pytest.mark.asyncio

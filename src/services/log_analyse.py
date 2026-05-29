@@ -42,7 +42,6 @@ class LogAnalysisService:
         analysis_date: date,
         log_window: LogCollectionWindow,
         force: bool,
-        send_email: bool,
     ) -> LogAnalysisWorkflowResult:
         """Run the log-analysis workflow through the monitoring agent."""
 
@@ -53,7 +52,6 @@ class LogAnalysisService:
                 "event": "log_analysis_workflow_prepare_start",
                 "analysis_date": str(analysis_date),
                 "force": force,
-                "send_email": send_email,
             },
         )
         existing: LogAnalysisOut | None = await self.repository.get_by_date(analysis_date)

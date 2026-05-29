@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from utils.log_artifacts import format_log_artifact_size
+
 
 class McpToolError(BaseModel):
     """JSON-RPC error body returned by the MCP HTTP endpoint.
@@ -524,6 +526,10 @@ class LogAnalysisIn(BaseModel):
     gpt_cost_usd: float = 0.0
     email_sent: bool = False
     error_message: str = ""
+
+    @property
+    def log_size(self) -> str:
+        return format_log_artifact_size(self.mcp_artifact)
 
 
 class LogAnalysisOut(LogAnalysisIn):

@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 from llm_core.providers.mock import MockProvider
-from llm_core.types import ResponseFormat, TextPart, Usage
+from llm_core.types import LLMResponse, ResponseFormat, TextPart, Usage
 
 from mcp import McpWorkflowClient
 from schemas import WorkflowBootstrap
@@ -288,6 +288,42 @@ async def test_llm_summary_builder_uses_provider_structured_output() -> None:
     assert "https://example.com/missing" in user_part.text
     assert '"issue_count": 1' in user_part.text
     assert workflow_client.calls == 1
+
+
+async def test_llm_summary_builder_estimates_cost_when_provider_omits_cost() -> None:
+    provider = MockProvider()
+    provider.queue_response(
+        LLMResponse(
+            text='{"summary":"LLM summary"}',
+            structured_output={
+                "summary": "LLM summary",
+                "severity": "INFO",
+                "key_findings": [],
+                "recommendations": "No action needed.",
+                "trend_summary": "No previous trend was available.",
+            },
+            usage=Usage(
+                prompt_tokens=1_000_000,
+                completion_tokens=500_000,
+                total_tokens=1_500_000,
+            ),
+        )
+    )
+    builder = LLMSummaryBuilder(
+        llm_provider=provider,
+        mcp_client=FakeSitemapWorkflowClient(),
+    )
+    report = SitemapAuditReport(
+        root_sitemap_url="https://example.com/sitemap.xml",
+        total_sitemaps=1,
+        total_urls=0,
+        issues=[],
+    )
+
+    result = await builder.summarize(report, {})
+
+    assert result["gpt_tokens_used"] == 1_500_000
+    assert result["gpt_cost_usd"] == 7.5
 
 
 async def test_llm_summary_builder_normalizes_rich_provider_fields() -> None:

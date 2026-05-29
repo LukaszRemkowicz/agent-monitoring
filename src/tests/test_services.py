@@ -340,7 +340,6 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
         analysis_date=date(2026, 5, 19),
         log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=False,
-        send_email=True,
     )
 
     assert result.workflow.workflow_name == "analyze_daily_log_bundle"
@@ -351,6 +350,7 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert repository.created[0]["status"] == RunStatus.RUNNING
     assert repository.created[0]["summary"] == "Workflow preparation started."
     assert result.analysis.status == RunStatus.SUCCEEDED
+    assert result.analysis.email_sent is False
     assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
     assert result.analysis.log_window_since == datetime(2026, 5, 19, tzinfo=UTC)
     assert result.analysis.log_window_until == datetime(2026, 5, 20, tzinfo=UTC)
@@ -394,7 +394,6 @@ async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
         analysis_date=date(2026, 5, 19),
         log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=False,
-        send_email=True,
     )
 
     assert repository.last_5_days_calls == [date(2026, 5, 19)]
@@ -420,7 +419,6 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
             analysis_date=date(2026, 5, 19),
             log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
             force=False,
-            send_email=True,
         )
 
     assert repository.saved[0]["status"] == RunStatus.FAILED
@@ -451,7 +449,6 @@ async def test_log_analysis_service_blocks_existing_date_without_force() -> None
             analysis_date=date(2026, 5, 19),
             log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
             force=False,
-            send_email=True,
         )
 
     assert agent.calls == 0
@@ -470,7 +467,6 @@ async def test_log_analysis_service_allows_existing_date_with_force() -> None:
         analysis_date=date(2026, 5, 19),
         log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=True,
-        send_email=True,
     )
 
     assert result.workflow.workflow_name == "analyze_daily_log_bundle"
@@ -496,7 +492,6 @@ async def test_log_analysis_service_records_execution_time(
         analysis_date=date(2026, 5, 19),
         log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
         force=False,
-        send_email=True,
     )
 
     assert monotonic.call_count == 2

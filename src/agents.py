@@ -33,6 +33,7 @@ from schemas import (
     WorkflowSkill,
     WorkflowSkillContent,
 )
+from utils.llm_usage import usage_cost_usd
 from utils.runtime import dump_arguments, elapsed_ms, hash_text
 
 logger = get_logger(__name__)
@@ -285,8 +286,7 @@ class MonitoringWorkflowAgent:
             )
             if llm_response.usage is not None:
                 llm_tokens_used += llm_response.usage.total_tokens
-                if llm_response.usage.cost_usd is not None:
-                    llm_cost_usd += llm_response.usage.cost_usd
+                llm_cost_usd += usage_cost_usd(llm_response.usage)
 
             payload: dict[str, Any] = self._extract_llm_payload(llm_response)
             action: object = payload.get("action")

@@ -18,6 +18,7 @@ from repositories import (
     SitemapAnalysisRepository,
 )
 from schemas import SitemapAnalysisOut
+from services.email import MonitoringEmailService
 from services.log_analyse import LogAnalysisService
 from services.sitemap import (
     AnalysisRunner,
@@ -55,7 +56,7 @@ async def log_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the analysis email when the future job succeeds.",
+        help="Send the analysis email when the job succeeds.",
     ),
 ) -> None:
     """Prepare the MCP workflow bundle for the scheduled log analysis job."""
@@ -66,6 +67,7 @@ async def log_analysis(
         base_url=settings.LOG_ANALYSIS_MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
+    log_analysis_repository = LogAnalysisRepository()
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
@@ -74,15 +76,25 @@ async def log_analysis(
                 settings.MONITORING_PRIVATE_CONTEXT_PATH
             ),
         ),
-        repository=LogAnalysisRepository(),
+        repository=log_analysis_repository,
         llm_call_repository=LLMCallRepository(trace_id=trace_id),
     )
     result = await service.run_log_analysis(
         analysis_date=parsed_analysis_date,
         log_window=log_window,
         force=force,
-        send_email=send_email,
     )
+    if send_email:
+        email_service = MonitoringEmailService.create_default()
+        await email_service.send_log_analysis(result.analysis)
+        result = result.model_copy(
+            update={
+                "analysis": await log_analysis_repository.update(
+                    result.analysis,
+                    email_sent=True,
+                )
+            }
+        )
     workflow = result.workflow
     collect_logs = result.collect_logs
     final_report = result.agent_context.final_report
@@ -135,7 +147,7 @@ async def sitemap_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the sitemap email when the future job succeeds.",
+        help="Send the sitemap email when the job succeeds.",
     ),
 ) -> None:
     """Run the deterministic sitemap analysis job."""
@@ -170,8 +182,9 @@ async def sitemap_analysis(
         sitemap_url=sitemap_url,
         site_domain=site_domain,
     )
+    sitemap_repository = SitemapAnalysisRepository()
     runner: AnalysisRunner = AnalysisRunner(
-        repository=SitemapAnalysisRepository(),
+        repository=sitemap_repository,
         sitemap_url=sitemap_url,
         crawler=crawler,
         summary_builder=LLMSummaryBuilder(
@@ -183,6 +196,10 @@ async def sitemap_analysis(
         analysis_date=parsed_analysis_date,
         force=force,
     )
+    if send_email:
+        email_service = MonitoringEmailService.create_default()
+        await email_service.send_sitemap_analysis(analysis)
+        analysis = await sitemap_repository.update(analysis, email_sent=True)
     typer.echo(
         "Completed sitemap analysis "
         f"(analysis_date={parsed_analysis_date}, "
