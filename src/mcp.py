@@ -97,6 +97,12 @@ class McpWorkflowClient:
         structured_content: StructuredContent = await self.call_tool("analyze_daily_log_bundle")
         return WorkflowBootstrap.model_validate(structured_content.model_dump())
 
+    async def get_sitemap_workflow_bundle(self) -> WorkflowBootstrap:
+        """Return the sitemap workflow bootstrap bundle from MCP."""
+
+        structured_content: StructuredContent = await self.call_tool("analyze_sitemap_bundle")
+        return WorkflowBootstrap.model_validate(structured_content.model_dump())
+
     async def collect_logs(
         self,
         *,

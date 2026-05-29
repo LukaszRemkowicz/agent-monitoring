@@ -6,16 +6,13 @@ from typing import TYPE_CHECKING
 
 from db.models import RunStatus
 from logging_config import get_logger
-from repositories import LLMCallRepository, LogAnalysisRepository, SitemapAnalysisRepository
+from repositories import LLMCallRepository, LogAnalysisRepository
 from schemas import (
     LogAnalysisAgentContext,
     LogAnalysisIn,
     LogAnalysisOut,
     LogAnalysisWorkflowResult,
     LogCollectionWindow,
-    SitemapAnalysisIn,
-    SitemapAnalysisOut,
-    SitemapAnalysisWorkflowResult,
 )
 
 if TYPE_CHECKING:
@@ -23,8 +20,6 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 LOG_WORKFLOW_STARTED_SUMMARY = "Workflow preparation started."
-SITEMAP_WORKFLOW_STARTED_SUMMARY = "Sitemap workflow preparation started."
-SITEMAP_WORKFLOW_READY_SUMMARY = "Sitemap analysis workflow record prepared."
 
 
 class LogAnalysisService:
@@ -47,7 +42,6 @@ class LogAnalysisService:
         analysis_date: date,
         log_window: LogCollectionWindow,
         force: bool,
-        send_email: bool,
     ) -> LogAnalysisWorkflowResult:
         """Run the log-analysis workflow through the monitoring agent."""
 
@@ -58,7 +52,6 @@ class LogAnalysisService:
                 "event": "log_analysis_workflow_prepare_start",
                 "analysis_date": str(analysis_date),
                 "force": force,
-                "send_email": send_email,
             },
         )
         existing: LogAnalysisOut | None = await self.repository.get_by_date(analysis_date)
@@ -202,101 +195,6 @@ class HistoricalContextBuilder:
                 f"Recommendations: {record.recommendations}"
             )
         return "\n\n".join(lines)
-
-
-class SitemapAnalysisService:
-    """Business service for the sitemap-analysis command flow."""
-
-    def __init__(
-        self,
-        *,
-        repository: SitemapAnalysisRepository,
-        root_sitemap_url: str,
-    ) -> None:
-        self.repository = repository
-        self.root_sitemap_url = root_sitemap_url
-
-    async def run_sitemap_analysis(
-        self,
-        *,
-        analysis_date: date,
-        force: bool,
-        send_email: bool,
-    ) -> SitemapAnalysisWorkflowResult:
-        """Create the sitemap-analysis workflow record."""
-
-        logger.info(
-            "preparing sitemap-analysis workflow",
-            extra={
-                "event": "sitemap_analysis_workflow_prepare_start",
-                "analysis_date": str(analysis_date),
-                "force": force,
-                "send_email": send_email,
-            },
-        )
-        existing: SitemapAnalysisOut | None = await self.repository.get_by_date(analysis_date)
-        if existing is not None and not force:
-            logger.info(
-                "sitemap analysis already exists for analysis date",
-                extra={
-                    "event": "sitemap_analysis_workflow_prepare_skipped",
-                    "analysis_date": str(analysis_date),
-                    "reason": "existing_analysis",
-                },
-            )
-            msg = (
-                f"Sitemap analysis already exists for {analysis_date}. "
-                "Use --force to prepare a new workflow record."
-            )
-            raise ValueError(msg)
-
-        analysis_input: SitemapAnalysisIn = SitemapAnalysisIn(
-            analysis_date=analysis_date,
-            status=RunStatus.RUNNING,
-            started_at=datetime.now(UTC),
-            root_sitemap_url=self.root_sitemap_url,
-            summary=SITEMAP_WORKFLOW_STARTED_SUMMARY,
-        )
-        if existing is not None:
-            analysis: SitemapAnalysisOut = await self.repository.update(
-                existing,
-                **analysis_input.model_dump(exclude={"analysis_date"}),
-            )
-        else:
-            analysis = await self.repository.create(analysis_input)
-        try:
-            updated_analysis: SitemapAnalysisOut = await self.repository.update(
-                analysis,
-                status=RunStatus.SUCCEEDED,
-                finished_at=datetime.now(UTC),
-                summary=SITEMAP_WORKFLOW_READY_SUMMARY,
-            )
-        except Exception as exc:
-            logger.error(
-                "sitemap-analysis workflow failed",
-                extra={
-                    "event": "sitemap_analysis_workflow_failed",
-                    "analysis_date": str(analysis_date),
-                    "failure_stage": "workflow_preparation",
-                    "error": str(exc),
-                },
-            )
-            await self.repository.update(
-                analysis,
-                status=RunStatus.FAILED,
-                finished_at=datetime.now(UTC),
-                failure_stage="workflow_preparation",
-                error_message=str(exc),
-            )
-            raise
-        logger.info(
-            "prepared sitemap-analysis workflow",
-            extra={
-                "event": "sitemap_analysis_workflow_prepare_done",
-                "analysis_date": str(analysis_date),
-            },
-        )
-        return SitemapAnalysisWorkflowResult(analysis=updated_analysis)
 
 
 def _format_mcp_timestamp(value: datetime) -> str:

@@ -5,6 +5,7 @@ from pathlib import Path
 from socket import gaierror
 from types import TracebackType
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
@@ -31,11 +32,10 @@ from schemas import (
     McpServiceStatus,
     ProjectManifestSummary,
     SitemapAnalysisOut,
-    SitemapAnalysisWorkflowResult,
     SnapshotAccessGuidance,
     WorkflowBootstrap,
 )
-from tests.conftest import build_collect_logs_artifact_payload
+from tests.conftest import build_collect_logs_artifact_payload, override_settings
 
 runner = CliRunner()
 
@@ -48,6 +48,15 @@ def _patch_log_analysis_command_dependencies(
 
     service_calls: list[dict[str, Any]] = []
     original_service_class = main.LogAnalysisService
+    email_service = AsyncMock()
+
+    class FakeLogAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[LogAnalysisOut, dict[str, Any]]] = []
+
+        async def update(self, analysis: LogAnalysisOut, **updates: Any) -> LogAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
 
     class FakeLogAnalysisServiceConstructor:
         create_log_collection_window = staticmethod(
@@ -56,14 +65,16 @@ def _patch_log_analysis_command_dependencies(
 
         def __new__(cls, **kwargs: Any) -> Any:
             service_calls.append(kwargs)
+            setattr(fake_service, "repository", kwargs["repository"])
             return fake_service
 
     dependencies = dict[str, Any](
         mcp_client=object(),
         agent=object(),
         llm_provider=object(),
-        repository=object(),
+        repository=FakeLogAnalysisRepository(),
         llm_call_repository=object(),
+        email_service=email_service,
         service_calls=service_calls,
     )
     dependencies["mcp_client_constructor"] = mocker.patch.object(
@@ -95,6 +106,11 @@ def _patch_log_analysis_command_dependencies(
         main,
         "LLMCallRepository",
         return_value=dependencies["llm_call_repository"],
+    )
+    dependencies["email_service_factory"] = mocker.patch.object(
+        main.MonitoringEmailService,
+        "create_default",
+        return_value=dependencies["email_service"],
     )
     mocker.patch.object(
         main,
@@ -238,14 +254,12 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             analysis_date: date,
             log_window: LogCollectionWindow,
             force: bool,
-            send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "log_window": log_window.model_dump(),
                     "force": force,
-                    "send_email": send_email,
                 }
             )
             return _log_analysis_result(analysis_date)
@@ -280,13 +294,14 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
             "until_datetime": datetime(2026, 5, 20, tzinfo=UTC),
         },
         "force": False,
-        "send_email": True,
     }
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
     assert (
         dependencies["service_calls"][0]["llm_call_repository"]
         is dependencies["llm_call_repository"]
     )
+    dependencies["email_service"].send_log_analysis.assert_awaited_once()
+    assert dependencies["repository"].updated[0][1] == {"email_sent": True}
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -307,14 +322,12 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
             analysis_date: date,
             log_window: LogCollectionWindow,
             force: bool,
-            send_email: bool,
         ) -> LogAnalysisWorkflowResult:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "log_window": log_window.model_dump(),
                     "force": force,
-                    "send_email": send_email,
                 }
             )
             return _log_analysis_result(analysis_date)
@@ -335,6 +348,7 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
     }
     assert "analysis_date=2026-05-20" in result.output
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
+    dependencies["email_service"].send_log_analysis.assert_awaited_once()
 
 
 def test_check_mcp_command_calls_mcp_service_status(
@@ -376,43 +390,129 @@ def test_check_mcp_command_calls_mcp_service_status(
 def test_sitemap_analysis_command_calls_sitemap_service(
     mocker: MockerFixture,
 ) -> None:
-    class FakeSitemapAnalysisService:
+    class FakeSitemapAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[SitemapAnalysisOut, dict[str, Any]]] = []
+
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
+
+    fake_repository = FakeSitemapAnalysisRepository()
+
+    class FakeAnalysisRunner:
         def __init__(self) -> None:
             self.calls: list[dict[str, Any]] = []
 
-        async def run_sitemap_analysis(
+        async def run(
             self,
             *,
             analysis_date: date,
             force: bool,
-            send_email: bool,
-        ) -> SitemapAnalysisWorkflowResult:
+        ) -> SitemapAnalysisOut:
             self.calls.append(
                 {
                     "analysis_date": analysis_date,
                     "force": force,
-                    "send_email": send_email,
                 }
             )
-            return SitemapAnalysisWorkflowResult(analysis=_sitemap_analysis_out(analysis_date))
+            return _sitemap_analysis_out(analysis_date)
 
-    fake_service = FakeSitemapAnalysisService()
-    build_service = mocker.patch.object(
+    fake_runner = FakeAnalysisRunner()
+    build_runner = mocker.patch.object(
         main,
-        "SitemapAnalysisService",
-        return_value=fake_service,
+        "AnalysisRunner",
+        return_value=fake_runner,
     )
+    llm_provider = object()
+    get_llm_provider = mocker.patch.object(
+        main,
+        "get_monitoring_llm_provider",
+        return_value=llm_provider,
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
-    assert build_service.call_args.kwargs["root_sitemap_url"] == main.settings.SITEMAP_ROOT_URL
-    assert "Prepared sitemap analysis record" in result.output
-    assert fake_service.calls[0] == {
+    assert build_runner.call_args.kwargs["sitemap_url"] == "https://example.com/sitemap.xml"
+    crawler = build_runner.call_args.kwargs["crawler"]
+    assert isinstance(crawler, main.Crawler)
+    assert crawler.sitemap_url == "https://example.com/sitemap.xml"
+    assert crawler.sitemap_hostname == "example.com"
+    assert isinstance(
+        build_runner.call_args.kwargs["summary_builder"],
+        main.LLMSummaryBuilder,
+    )
+    assert build_runner.call_args.kwargs["summary_builder"].llm_provider is llm_provider
+    get_llm_provider.assert_called_once()
+    assert "Completed sitemap analysis" in result.output
+    assert "severity=INFO" in result.output
+    assert "Summary: Sitemap analysis service is ready." in result.output
+    assert fake_runner.calls[0] == {
         "analysis_date": date(2026, 5, 19),
         "force": False,
-        "send_email": True,
     }
+    email_service.send_sitemap_analysis.assert_awaited_once()
+    assert fake_repository.updated[0][1] == {"email_sent": True}
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_command_requires_site_domain(
+    mocker: MockerFixture,
+) -> None:
+    sitemap_analysis_command = cast(Any, main.sitemap_analysis)
+    build_runner = mocker.patch.object(main, "AnalysisRunner")
+    echo = mocker.patch.object(main.typer, "echo")
+
+    with override_settings(SITE_DOMAIN=""):
+        with pytest.raises(typer.Exit) as exc_info:
+            await sitemap_analysis_command.__wrapped__.__wrapped__(
+                analysis_date="2026-05-19",
+                force=False,
+                send_email=True,
+            )
+
+    assert exc_info.value.exit_code == 1
+    build_runner.assert_not_called()
+    echo.assert_called_once_with(
+        "SITE_DOMAIN is required to run sitemap analysis. "
+        "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+        err=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
+    mocker: MockerFixture,
+) -> None:
+    sitemap_analysis_command = cast(Any, main.sitemap_analysis)
+    build_runner = mocker.patch.object(main, "AnalysisRunner")
+    echo = mocker.patch.object(main.typer, "echo")
+
+    with override_settings(SITE_DOMAIN="https://example.com/sitemap.xml"):
+        with pytest.raises(typer.Exit) as exc_info:
+            await sitemap_analysis_command.__wrapped__.__wrapped__(
+                analysis_date="2026-05-19",
+                force=False,
+                send_email=True,
+            )
+
+    assert exc_info.value.exit_code == 1
+    build_runner.assert_not_called()
+    echo.assert_called_once_with(
+        "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
+        "Set SITE_DOMAIN=example.com or "
+        "SITE_DOMAIN=https://example.com.",
+        err=True,
+    )
 
 
 def test_typer_commands_wrap_async_callbacks() -> None:
@@ -423,8 +523,23 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(log_analysis.__wrapped__)
     assert not inspect.iscoroutinefunction(main.sitemap_analysis)
     assert inspect.iscoroutinefunction(sitemap_analysis.__wrapped__)
+    assert inspect.iscoroutinefunction(sitemap_analysis.__wrapped__.__wrapped__)
     assert not inspect.iscoroutinefunction(main.check_mcp)
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
+
+
+def test_prod_compose_exports_site_domain_setting() -> None:
+    compose_text = Path("docker-compose.prod.yml").read_text()
+
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
+    assert "SITEMAP_URL" not in compose_text
+
+
+def test_dev_compose_exports_site_domain_setting() -> None:
+    compose_text = Path("docker-compose.yaml").read_text()
+
+    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
+    assert "SITEMAP_URL" not in compose_text
 
 
 def test_as_async_runs_coroutine_function() -> None:

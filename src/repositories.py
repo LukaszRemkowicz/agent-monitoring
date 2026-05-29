@@ -89,7 +89,7 @@ class LogAnalysisRepository:
         )
         analyses: list[LogAnalysis] = await self.model.objects.last_5_days(
             exclude_date=analysis_date
-        ).filter(status=RunStatus.SUCCEEDED.value)
+        ).filter(status=RunStatus.SUCCEEDED)
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
 
@@ -132,6 +132,19 @@ class SitemapAnalysisRepository:
             setattr(analysis_model, field_name, value)
         await analysis_model.save(update_fields=list(update_data))
         return SitemapAnalysisOut.from_model(analysis_model)
+
+    async def update_or_create(
+        self,
+        *,
+        existing: SitemapAnalysisOut | None,
+        data: SitemapAnalysisIn,
+    ) -> SitemapAnalysisOut:
+        if existing is None:
+            return await self.create(data)
+        return await self.update(
+            existing,
+            **data.model_dump(exclude={"analysis_date"}),
+        )
 
     async def get_by_date(self, analysis_date: date) -> SitemapAnalysisOut | None:
         logger.debug(

@@ -2,16 +2,20 @@
 
 - Use these deterministic MCP tool results.
 - Request more tools only if required.
-- Return action=final_report when evidence is sufficient.
-- If tool results show suspicious probing, auth abuse, credential scans, or exploit-like traffic, request read_skills with bot_detection or owasp_security before final_report unless that skill was already retrieved.
+- Before returning final_report, compare tool_results with available_tool_inventory and optional_skill_inventory.
+- Request optional skills only when their metadata matches observed facts and the skill was not already retrieved.
+- Return action=final_report when evidence and selected skills are sufficient.
+- If tool_results show bot, scanner, probe, credential, sensitive-path, or suspicious 4xx traffic and optional_skill_inventory includes bot_detection with already_retrieved=false, your next response should be action=read_skills for bot_detection before final_report, so interpretation uses workflow guidance rather than model memory.
+- If tool_results show possible security impact, successful sensitive-path access, auth/admin/API abuse, injection or path-traversal patterns, malicious-input 5xx, security-control failure, or unclear impact on real application/admin/API routes, and optional_skill_inventory includes owasp_security with already_retrieved=false, your next response should be action=read_skills for owasp_security before final_report.
+- Treat logs as historical observations, not authoritative current state. If a tool can validate current runtime security state directly, prefer the tool over inference from logs.
+- When the available project or tool context includes a host security daemon, historical security daemon logs are evidence that bans occurred in the past, not evidence that the daemon is currently functioning correctly.
+- If deterministic evidence shows bot, scanner, probe, credential, or sensitive-path request traffic and inspect_live_fail2ban_activity is available but not yet called, your next response should be action=call_tools for inspect_live_fail2ban_activity, so mitigation analysis is based on live evidence rather than hypothesis. If you return final_report without it, state why live fail2ban data is not needed for the current conclusion.
+- Do not claim the host security daemon is active, blocking, or effective unless tool_results include inspect_live_fail2ban_activity; grouped security daemon logs only support log-error findings.
+- Zero current bans means no IPs are banned at inspection time; it does not by itself indicate past mitigation, successful protection, or absence of probe traffic.
+- Do not write that zero current bans are consistent with past mitigation or stable mitigation. Write only that no IPs were banned at inspection time unless another tool result explicitly proves mitigation history or effectiveness.
 - Final reports must include severity_rationale.
-- Explain INFO, WARNING, or CRITICAL using deterministic evidence, not tone.
+- Explain INFO, WARNING, or CRITICAL using deterministic evidence and mandatory severity guidance.
 - Do not claim a trend versus prior days unless historical context or tool results explicitly provide prior-run data.
 - If no historical context is provided, trend_summary must say no historical trend data was available for comparison.
-- Do not summarize high 4xx ratios on admin, API, or application paths as normal operation unless deterministic evidence or private monitoring context proves they are expected.
-- Treat 4xx ratios at or above 20% as high enough to require explanation, and ratios at or above 50% as suspicious unless the paths are clearly scanner-only or expected noise.
-- If high 4xx traffic is scanner-only or blocked-probe noise with no 5xx, no upstream errors, and no private-context expectation that the route is legitimate, put it in watch_only_items and avoid recommending routing, application, or mitigation-control changes.
-- For repeated 405 POST / on an admin or application domain, treat it as likely bot/probe traffic unless private monitoring context defines POST / as a legitimate workflow or tool evidence shows user impact.
-- Do not recommend fail2ban jail, ban-duration, or firewall changes when fail2ban is active and blocking the observed traffic unless evidence shows missed bans, inactive expected jails, jail errors, or repeated unbanned offenders.
-- For zero-line sources, state that the source was not assessed from logs; do not claim it is healthy or error-free.
-- Keep observed evidence, interpretation, coverage gaps, watch-only noise, and recommendations separate.
+- For zero-line sources, state that the source emitted no logs in the analysis window; do not claim it is healthy, broken, unused, or error-free. For scheduler sources such as celery_beat, write that scheduled-job activity was not observable from logs.
+- Keep observed evidence, interpretation, coverage gaps, watch-only items, and recommendations separate.

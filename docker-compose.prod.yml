@@ -3,9 +3,9 @@ services:
     image: postgres:18
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DATABASE_NAME:?DATABASE_NAME is required}
-      POSTGRES_USER: ${DATABASE_USER:?DATABASE_USER is required}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      POSTGRES_DB: ${DATABASE_NAME:-}
+      POSTGRES_USER: ${DATABASE_USER:-}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - ${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}:/var/lib/postgresql
@@ -34,19 +34,22 @@ services:
       PYTHONPATH: /app/src
       DATABASE_HOST: db
       DATABASE_PORT: 5432
-      DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME is required}
-      DATABASE_USER: ${DATABASE_USER:?DATABASE_USER is required}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
-      LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:?LOG_ANALYSIS_MCP_URL is required}
-      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:?MCP_WORKFLOW_JWT is required}
-      MONITORING_PROJECT: ${MONITORING_PROJECT:-landingpage}
-      EMAIL_HOST: ${EMAIL_HOST:?EMAIL_HOST is required}
-      EMAIL_PORT: ${EMAIL_PORT:-25}
+      DATABASE_NAME: ${DATABASE_NAME:-}
+      DATABASE_USER: ${DATABASE_USER:-}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-}
+      LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-}
+      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
+      MONITORING_PROJECT: ${MONITORING_PROJECT:-}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
       EMAIL_USERNAME: ${EMAIL_USERNAME:-}
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
-      EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required}
-      EMAIL_TO: ${EMAIL_TO:?EMAIL_TO is required}
-      SITEMAP_ROOT_URL: ${SITEMAP_ROOT_URL:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
     volumes:

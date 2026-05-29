@@ -101,6 +101,45 @@ async def test_mcp_workflow_client_get_workflow_bundle_uses_bootstrap_tool() -> 
 
 
 @pytest.mark.asyncio
+async def test_mcp_workflow_client_get_sitemap_workflow_bundle_uses_bootstrap_tool() -> None:
+    tool_names: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = httpx.Request(
+            "POST",
+            "http://mcp.local/mcp",
+            content=request.content,
+        ).read()
+        tool_names.append(payload.decode())
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": {
+                        "workflow_name": "analyze_sitemap_bundle",
+                        "prompt": "Sitemap Summary Instructions",
+                        "mandatory_skills": [],
+                        "optional_skills": [],
+                        "tools": [],
+                    },
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+    )
+
+    workflow = await client.get_sitemap_workflow_bundle()
+
+    assert workflow.workflow_name == "analyze_sitemap_bundle"
+    assert workflow.prompt == "Sitemap Summary Instructions"
+    assert '"name":"analyze_sitemap_bundle"' in tool_names[0]
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_get_service_status_uses_status_tool() -> None:
     tool_names: list[str] = []
 

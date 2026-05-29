@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import typer
@@ -16,7 +17,16 @@ from repositories import (
     LogAnalysisRepository,
     SitemapAnalysisRepository,
 )
-from services import LogAnalysisService, SitemapAnalysisService
+from schemas import SitemapAnalysisOut
+from services.email import MonitoringEmailService
+from services.log_analyse import LogAnalysisService
+from services.sitemap import (
+    AnalysisRunner,
+    Crawler,
+    LLMSummaryBuilder,
+    SitemapHTTPClient,
+    build_sitemap_url,
+)
 from utils.monitoring_context import load_private_monitoring_context
 
 app = typer.Typer(
@@ -46,7 +56,7 @@ async def log_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the analysis email when the future job succeeds.",
+        help="Send the analysis email when the job succeeds.",
     ),
 ) -> None:
     """Prepare the MCP workflow bundle for the scheduled log analysis job."""
@@ -57,6 +67,7 @@ async def log_analysis(
         base_url=settings.LOG_ANALYSIS_MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
+    log_analysis_repository = LogAnalysisRepository()
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
@@ -65,15 +76,25 @@ async def log_analysis(
                 settings.MONITORING_PRIVATE_CONTEXT_PATH
             ),
         ),
-        repository=LogAnalysisRepository(),
+        repository=log_analysis_repository,
         llm_call_repository=LLMCallRepository(trace_id=trace_id),
     )
     result = await service.run_log_analysis(
         analysis_date=parsed_analysis_date,
         log_window=log_window,
         force=force,
-        send_email=send_email,
     )
+    if send_email:
+        email_service = MonitoringEmailService.create_default()
+        await email_service.send_log_analysis(result.analysis)
+        result = result.model_copy(
+            update={
+                "analysis": await log_analysis_repository.update(
+                    result.analysis,
+                    email_sent=True,
+                )
+            }
+        )
     workflow = result.workflow
     collect_logs = result.collect_logs
     final_report = result.agent_context.final_report
@@ -111,6 +132,7 @@ def _echo_list(label: str, values: list[str]) -> None:
 
 @app.command("sitemap-analysis")
 @as_async()
+@db
 async def sitemap_analysis(
     analysis_date: str | None = typer.Option(
         None,
@@ -125,24 +147,72 @@ async def sitemap_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the sitemap email when the future job succeeds.",
+        help="Send the sitemap email when the job succeeds.",
     ),
 ) -> None:
-    """Prepare the sitemap analysis workflow record."""
-    parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
-    service = SitemapAnalysisService(
-        repository=SitemapAnalysisRepository(),
-        root_sitemap_url=settings.SITEMAP_ROOT_URL,
+    """Run the deterministic sitemap analysis job."""
+    parsed_analysis_date: date = (
+        date.fromisoformat(analysis_date) if analysis_date else date.today()
     )
-    await service.run_sitemap_analysis(
+    site_domain: str = settings.SITE_DOMAIN.strip()
+    if not site_domain:
+        typer.echo(
+            "SITE_DOMAIN is required to run sitemap analysis. "
+            "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    parsed_site_domain = urlparse(site_domain if "://" in site_domain else f"https://{site_domain}")
+    if not parsed_site_domain.netloc or parsed_site_domain.path.rstrip("/"):
+        typer.echo(
+            "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
+            "Set SITE_DOMAIN=example.com or "
+            "SITE_DOMAIN=https://example.com.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    sitemap_url: str = build_sitemap_url(site_domain)
+    mcp_client = McpWorkflowClient(
+        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        workflow_jwt=settings.MCP_WORKFLOW_JWT,
+    )
+    crawler: Crawler = Crawler(
+        client=SitemapHTTPClient(),
+        sitemap_url=sitemap_url,
+        site_domain=site_domain,
+    )
+    sitemap_repository = SitemapAnalysisRepository()
+    runner: AnalysisRunner = AnalysisRunner(
+        repository=sitemap_repository,
+        sitemap_url=sitemap_url,
+        crawler=crawler,
+        summary_builder=LLMSummaryBuilder(
+            llm_provider=get_monitoring_llm_provider(settings),
+            mcp_client=mcp_client,
+        ),
+    )
+    analysis: SitemapAnalysisOut = await runner.run(
         analysis_date=parsed_analysis_date,
         force=force,
-        send_email=send_email,
     )
+    if send_email:
+        email_service = MonitoringEmailService.create_default()
+        await email_service.send_sitemap_analysis(analysis)
+        analysis = await sitemap_repository.update(analysis, email_sent=True)
     typer.echo(
-        "Prepared sitemap analysis record "
-        f"(analysis_date={parsed_analysis_date}, force={force}, email={send_email})."
+        "Completed sitemap analysis "
+        f"(analysis_date={parsed_analysis_date}, "
+        f"severity={analysis.severity}, "
+        f"total_sitemaps={analysis.total_sitemaps}, "
+        f"total_urls={analysis.total_urls}, "
+        f"issues={len(analysis.issues)}, "
+        f"force={force}, email={send_email})."
     )
+    typer.echo(f"Summary: {analysis.summary}")
+    _echo_list("Key findings", analysis.key_findings)
+    typer.echo(f"Recommendations: {analysis.recommendations}")
+    typer.echo(f"Execution time: {analysis.execution_time_seconds:.2f}s")
 
 
 @app.command("check-mcp")

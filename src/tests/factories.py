@@ -25,7 +25,7 @@ class LogAnalysisFactory(TortoiseModelFactory):
 
     analysis_date = factory.Sequence(lambda n: date(2026, 5, 19) + timedelta(days=n))
     mcp_artifact = factory.LazyFunction(dict)
-    status = RunStatus.PENDING.value
+    status = RunStatus.PENDING
     started_at = None
     finished_at = None
     failure_stage = None
@@ -49,7 +49,7 @@ class SitemapAnalysisFactory(TortoiseModelFactory):
         model = SitemapAnalysis
 
     analysis_date = factory.Sequence(lambda n: date(2026, 5, 19) + timedelta(days=n))
-    status = RunStatus.PENDING.value
+    status = RunStatus.PENDING
     started_at = None
     finished_at = None
     failure_stage = None

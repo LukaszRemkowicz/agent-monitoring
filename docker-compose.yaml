@@ -44,7 +44,18 @@ services:
       LOG_COLOR: always
       LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
       MONITORING_PROJECT: landingpage
-      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT}
+      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
+      SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
     command: ["log_analysis"]
 
   migrate:
@@ -73,7 +84,18 @@ services:
       LOG_COLOR: always
       LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
       MONITORING_PROJECT: landingpage
-      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT}
+      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
+      SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
     command: ["migrate"]
 
 volumes:

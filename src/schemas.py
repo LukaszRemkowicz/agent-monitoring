@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from utils.log_artifacts import format_log_artifact_size
+
 
 class McpToolError(BaseModel):
     """JSON-RPC error body returned by the MCP HTTP endpoint.
@@ -49,6 +51,7 @@ class WorkflowSkill(BaseModel):
     name: str = Field(alias="skill_name")
     resource_uri: str
     description: str = ""
+    when_useful: str = ""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -394,6 +397,8 @@ class LogAnalysisPromptContext(BaseModel):
     workflow_name: str
     current_phase: Literal["inspect_collected_logs", "final_report"]
     completed_steps: list[str]
+    historical_context_available: bool = False
+    trend_summary_instruction: str = ""
     allowed_actions: list[Literal["call_tools", "read_skills", "final_report"]]
     next_required_action: Literal["call_tools", "final_report"]
     final_report_allowed: bool
@@ -521,6 +526,10 @@ class LogAnalysisIn(BaseModel):
     gpt_cost_usd: float = 0.0
     email_sent: bool = False
     error_message: str = ""
+
+    @property
+    def log_size(self) -> str:
+        return format_log_artifact_size(self.mcp_artifact)
 
 
 class LogAnalysisOut(LogAnalysisIn):
@@ -706,9 +715,3 @@ class LogAnalysisWorkflowResult(BaseModel):
     @property
     def prepared_prompt(self) -> LogAnalysisPreparedPrompt:
         return self.agent_context.prompt
-
-
-class SitemapAnalysisWorkflowResult(BaseModel):
-    """Service-level result returned by sitemap-analysis workflow preparation."""
-
-    analysis: SitemapAnalysisOut

@@ -1,38 +1,21 @@
 # Log Analysis Instructions
 
+- Inspect the available projects, sources, deterministic tools, mandatory skills, and optional skill metadata.
 - Request deterministic MCP tools before final_report unless the collected artifact already proves the final answer.
 - Use action=call_tools when more evidence is needed.
-- Use action=read_skills when optional bot-detection or security guidance is needed.
-- Return action=final_report only after reviewing MCP tool results.
-- Baseline workflow skills are already injected into the system prompt.
-- Request read_skills only for optional skills when the evidence needs extra bot-detection or security framing before final_report.
-- If proxy or application results show repeated suspicious 4xx/probe/auth-abuse patterns, request read_skills with bot_detection or owasp_security before final_report unless private monitoring context already explains the pattern.
-- Prefer group_errors, inspect_proxy_activity, or build_incident_bundle over plain grep before final_report.
-- Do not classify HTTP/proxy health from grouped errors alone; use inspect_proxy_activity or another tool result with total request counts and status-class distribution before judging 4xx/5xx severity.
-- When reporting 4xx/405/404 traffic, include the denominator and ratio from proxy or HTTP statistics, for example '155 4xx out of 247 requests'.
-- Do not call a high 4xx ratio normal operation unless tool results or private monitoring context show those requests are expected scanner noise.
-- If a high 4xx ratio affects real application, admin, or API paths and the expected-noise context is unclear, use WARNING or state the uncertainty instead of INFO.
-- Treat 4xx ratios at or above 20% as high enough to require explanation, and ratios at or above 50% as suspicious unless the paths are clearly scanner-only or expected noise.
-- Do not summarize high 4xx ratios on admin, API, or application paths as 'normal operation'; classify them as WARNING unless deterministic evidence or private monitoring context proves they are expected.
-- If high 4xx traffic is dominated by scanner-only paths, blocked probes, or disallowed methods with no 5xx, no upstream errors, no successful abuse, and no private-context expectation that the route is legitimate, classify the traffic as watch-only security noise instead of an application defect.
-- For repeated 405 POST / on an admin or application domain, treat it as likely bot/probe traffic when private monitoring context does not define POST / as a legitimate workflow; do not recommend application routing or handler changes unless tool evidence shows user impact, upstream errors, or a real expected client using that route.
-- When an available project includes a fail2ban source, inspect live fail2ban activity before making security conclusions or recommendations.
-- If no available project includes a fail2ban source, do not call inspect_live_fail2ban_activity; record that as a coverage gap instead.
-- If attack traffic is blocked by fail2ban and does not affect service, classify it as watch-only noise.
-- Do not recommend changing fail2ban jail configuration, ban durations, or firewall rules when fail2ban is active and blocking the observed traffic, unless evidence shows missed bans, inactive expected jails, jail errors, repeated unbanned offenders, or private monitoring context asks for that review.
-- Recommendations for expected scanner/probe noise should say no immediate routing, application, or mitigation-control change is indicated, then name only concrete follow-up such as verifying log coverage or watching for repeat sources that were not blocked or mitigated.
-- Zero collected log lines are not evidence that a service is healthy.
-- When line_count is 0, say no log lines were collected for that source; do not claim no errors, no failures, or healthy service behavior.
-- Use source_key names exactly as MCP reports them.
-- Do not invent container, service, or project names.
-- Separate observed evidence from likely causes and recommended verification steps.
-- Do not name exact containers, compose services, files, or line numbers in recommendations unless they appear in MCP artifacts, project manifests, workflow skills, or tool results.
-- When recommending restarts, use the service names observed in evidence; otherwise say which component to inspect instead of inventing a restart target.
-- If a source has zero collected lines, recommend verifying collection coverage before making health claims for that source.
-- A zero-line source means that source was not assessed from logs; never write 'no errors found' or 'healthy' for that source.
-- Distinguish collected, unavailable, and zero-line sources in the summary and recommendations.
-- Do not invent raw log facts.
-- Do not claim patterns are unchanged, improved, worse, or consistent with prior days unless historical context or tool results explicitly provide that comparison.
+- Use action=read_skills when optional skill metadata is relevant to the observed deterministic facts.
+- Request only optional skills listed in optional_skills.
+- Return action=final_report only after reviewing sufficient MCP tool results and any selected optional skills.
+- If deterministic evidence shows bot, scanner, probe, credential, sensitive-path, or suspicious 4xx traffic and optional skill metadata includes bot_detection but it has not been retrieved, your next response should be action=read_skills for bot_detection before final_report, so interpretation uses workflow guidance rather than model memory.
+- If deterministic evidence shows possible security impact, successful sensitive-path access, auth/admin/API abuse, injection or path-traversal patterns, malicious-input 5xx, security-control failure, or unclear impact on real application/admin/API routes, and optional skill metadata includes owasp_security but it has not been retrieved, your next response should be action=read_skills for owasp_security before final_report.
+- Treat logs as historical observations, not authoritative current state. If a tool can validate current runtime security state directly, prefer the tool over inference from logs.
+- When the available project or tool context includes a host security daemon, historical security daemon logs are evidence that bans occurred in the past, not evidence that the daemon is currently functioning correctly.
+- If deterministic evidence shows bot, scanner, probe, credential, or sensitive-path request traffic and inspect_live_fail2ban_activity is available but not yet called, your next response should be action=call_tools for inspect_live_fail2ban_activity, so mitigation analysis is based on live evidence rather than hypothesis. If you return final_report without it, state why live fail2ban data is not needed for the current conclusion.
+- Do not claim the host security daemon is active, blocking, or effective unless tool_results include inspect_live_fail2ban_activity; grouped security daemon logs only support log-error findings.
+- Zero current bans means no IPs are banned at inspection time; it does not by itself indicate past mitigation, successful protection, or absence of probe traffic.
+- Do not write that zero current bans are consistent with past mitigation or stable mitigation. Write only that no IPs were banned at inspection time unless another tool result explicitly proves mitigation history or effectiveness.
+- Keep observed evidence, interpretation, coverage gaps, watch-only items, and recommendations separate.
+- Do not invent raw log facts, projects, source keys, tools, skills, service names, or historical trends.
 - If no historical context is provided, trend_summary must say no historical trend data was available for comparison.
-- Anchor severity to the collected 24h window.
-- Borrow the landingpage monitoring report contract.
+- Zero collected log lines mean that source emitted no logs in the analysis window; do not claim it is healthy, broken, unused, or error-free. For scheduler sources such as celery_beat, write that scheduled-job activity was not observable from logs.
+- Anchor severity to the collected 24h window and the injected mandatory severity guidance.

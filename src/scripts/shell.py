@@ -15,7 +15,8 @@ from db.lifecycle import close_database, initialize_database
 from db.models import LogAnalysis, LogAnalysisLLMCall, RunStatus, SitemapAnalysis
 from repositories import LLMCallRepository, LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import LogAnalysisIn, LogAnalysisLLMCallIn, SitemapAnalysisIn
-from services import LogAnalysisService, SitemapAnalysisService
+from services.log_analyse import LogAnalysisService
+from services.sitemap import AnalysisRunner
 
 SHELL_EXIT_AFTER_BOOT_ENV = "MONITORING_SHELL_EXIT_AFTER_BOOT"
 
@@ -25,7 +26,8 @@ SHELL_IMPORT_LINES = [
     "from db.models import LogAnalysis, LogAnalysisLLMCall, RunStatus, SitemapAnalysis",
     "from repositories import LLMCallRepository, LogAnalysisRepository, SitemapAnalysisRepository",
     "from schemas import LogAnalysisIn, LogAnalysisLLMCallIn, SitemapAnalysisIn",
-    "from services import LogAnalysisService, SitemapAnalysisService",
+    "from services.log_analyse import LogAnalysisService",
+    "from services.sitemap import AnalysisRunner",
 ]
 
 
@@ -46,7 +48,7 @@ def build_shell_namespace() -> dict[str, Any]:
         "SitemapAnalysis": SitemapAnalysis,
         "SitemapAnalysisIn": SitemapAnalysisIn,
         "SitemapAnalysisRepository": SitemapAnalysisRepository,
-        "SitemapAnalysisService": SitemapAnalysisService,
+        "AnalysisRunner": AnalysisRunner,
     }
 
 
