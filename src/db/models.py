@@ -233,6 +233,28 @@ class LogAnalysis(DatabaseModel):
         default="",
         description="LLM-generated trend comparison against prior analyses.",
     )
+    deterministic_fingerprint: fields.JSONField[dict[str, Any]] = fields.JSONField(
+        default=dict,
+        description="Compact deterministic facts derived from MCP artifacts and tool results.",
+    )
+    evidence_fingerprints: fields.JSONField[list[str]] = fields.JSONField(
+        default=list,
+        description="Stable evidence fingerprints used for baseline comparison.",
+    )
+    known_patterns: fields.JSONField[list[dict[str, Any]]] = fields.JSONField(
+        default=list,
+        description="Known recurring log patterns available to future runs.",
+    )
+    coverage_snapshot: fields.JSONField[dict[str, Any]] = fields.JSONField(
+        default=dict,
+        description="Source coverage snapshot used to compare current and baseline runs.",
+    )
+    fingerprint_version = fields.CharField(
+        max_length=40,
+        default="",
+        db_index=True,
+        description="Version of the structured history fingerprint format.",
+    )
     execution_time_seconds = fields.FloatField(
         default=0.0,
         description="Total wall-clock execution time for this log analysis job.",

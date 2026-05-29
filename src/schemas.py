@@ -521,6 +521,11 @@ class LogAnalysisIn(BaseModel):
     key_findings: list[str] = Field(default_factory=list)
     recommendations: str = ""
     trend_summary: str = ""
+    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    evidence_fingerprints: list[str] = Field(default_factory=list)
+    known_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_snapshot: dict[str, Any] = Field(default_factory=dict)
+    fingerprint_version: str = ""
     execution_time_seconds: float = 0.0
     gpt_tokens_used: int = 0
     gpt_cost_usd: float = 0.0
@@ -558,6 +563,11 @@ class LogAnalysisOut(LogAnalysisIn):
                 "key_findings": analysis.key_findings,
                 "recommendations": analysis.recommendations,
                 "trend_summary": analysis.trend_summary,
+                "deterministic_fingerprint": analysis.deterministic_fingerprint,
+                "evidence_fingerprints": analysis.evidence_fingerprints,
+                "known_patterns": analysis.known_patterns,
+                "coverage_snapshot": analysis.coverage_snapshot,
+                "fingerprint_version": analysis.fingerprint_version,
                 "execution_time_seconds": analysis.execution_time_seconds,
                 "gpt_tokens_used": analysis.gpt_tokens_used,
                 "gpt_cost_usd": analysis.gpt_cost_usd,

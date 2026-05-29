@@ -78,6 +78,54 @@ async def test_log_analysis_repository_updates_contract_with_kwargs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_analysis_repository_get_latest_before_date_returns_previous_success() -> None:
+    repository = LogAnalysisRepository()
+    await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 17),
+        status="succeeded",
+        summary="Older recurring scanner noise.",
+        fingerprint_version="log-history-v1",
+    )
+    latest = await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 18),
+        status="succeeded",
+        summary="Latest recurring scanner noise.",
+        fingerprint_version="log-history-v1",
+        deterministic_fingerprint={"status_totals": {"404": 12}},
+        evidence_fingerprints=["scanner-family:generic-env-probe"],
+        known_patterns=[{"family": "scanner", "status": "watch_only"}],
+        coverage_snapshot={"landingpage": {"backend": "collected"}},
+    )
+    await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 19),
+        status="succeeded",
+        summary="Current run must be excluded.",
+        fingerprint_version="log-history-v1",
+    )
+    await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 16),
+        status="failed",
+        summary="Failed run must not be used.",
+        fingerprint_version="log-history-v1",
+    )
+    await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 15),
+        status="succeeded",
+        summary="No structured history must not be used.",
+    )
+
+    baseline = await repository.get_latest_before_date(date(2026, 5, 19))
+
+    assert baseline is not None
+    assert baseline.id == latest.id
+    assert baseline.summary == "Latest recurring scanner noise."
+    assert baseline.deterministic_fingerprint == {"status_totals": {"404": 12}}
+    assert baseline.evidence_fingerprints == ["scanner-family:generic-env-probe"]
+    assert baseline.known_patterns == [{"family": "scanner", "status": "watch_only"}]
+    assert baseline.coverage_snapshot == {"landingpage": {"backend": "collected"}}
+
+
+@pytest.mark.asyncio
 async def test_sitemap_analysis_repository_filters_with_model_manager() -> None:
     repository = SitemapAnalysisRepository()
     analysis = await SitemapAnalysisFactory.create(severity=SitemapAnalysis.Severity.WARNING.value)

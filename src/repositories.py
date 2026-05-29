@@ -92,6 +92,32 @@ class LogAnalysisRepository:
         ).filter(status=RunStatus.SUCCEEDED)
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
+    async def get_latest_before_date(
+        self,
+        analysis_date: date,
+    ) -> LogAnalysisOut | None:
+        """Return the latest successful log analysis before the given date."""
+
+        logger.debug(
+            "fetching latest structured log-analysis history baseline",
+            extra={
+                "event": "log_analysis_repository_get_latest_before_date",
+                "analysis_date": str(analysis_date),
+            },
+        )
+        analysis = (
+            await self.filter(
+                analysis_date__lt=analysis_date,
+                status=RunStatus.SUCCEEDED,
+            )
+            .exclude(fingerprint_version="")
+            .order_by("-analysis_date")
+            .first()
+        )
+        if analysis is None:
+            return None
+        return LogAnalysisOut.from_model(analysis)
+
 
 class SitemapAnalysisRepository:
     """Database access boundary for sitemap-analysis rows."""

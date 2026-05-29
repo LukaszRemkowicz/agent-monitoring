@@ -43,6 +43,29 @@ def test_model_fields_include_descriptions() -> None:
     )
 
 
+def test_log_analysis_includes_structured_history_contract_fields() -> None:
+    assert (
+        LogAnalysis._meta.fields_map["deterministic_fingerprint"].description
+        == "Compact deterministic facts derived from MCP artifacts and tool results."
+    )
+    assert (
+        LogAnalysis._meta.fields_map["evidence_fingerprints"].description
+        == "Stable evidence fingerprints used for baseline comparison."
+    )
+    assert (
+        LogAnalysis._meta.fields_map["known_patterns"].description
+        == "Known recurring log patterns available to future runs."
+    )
+    assert (
+        LogAnalysis._meta.fields_map["coverage_snapshot"].description
+        == "Source coverage snapshot used to compare current and baseline runs."
+    )
+    assert (
+        LogAnalysis._meta.fields_map["fingerprint_version"].description
+        == "Version of the structured history fingerprint format."
+    )
+
+
 def test_log_analysis_uses_mcp_artifact_as_source_of_truth() -> None:
     assert "mcp_artifact" in LogAnalysis._meta.fields_map
     assert "sources" not in LogAnalysis._meta.fields_map
