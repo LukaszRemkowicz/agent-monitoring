@@ -9,11 +9,13 @@ from logging_config import get_logger
 from repositories import LLMCallRepository, LogAnalysisRepository
 from schemas import (
     LogAnalysisAgentContext,
+    LogAnalysisFingerprintPacket,
     LogAnalysisIn,
     LogAnalysisOut,
     LogAnalysisWorkflowResult,
     LogCollectionWindow,
 )
+from services.log_fingerprints import LogAnalysisFingerprintBuilder
 
 if TYPE_CHECKING:
     from agents import MonitoringWorkflowAgent
@@ -112,6 +114,13 @@ class LogAnalysisService:
             )
             raise
         execution_time_seconds = round(monotonic() - execution_started_at, 3)
+        fingerprint_packet: LogAnalysisFingerprintPacket = LogAnalysisFingerprintBuilder.build(
+            collect_logs=agent_context.collect_logs,
+            tool_results=agent_context.tool_results,
+            final_report=agent_context.final_report,
+            log_window_since=agent_context.log_window_since,
+            log_window_until=agent_context.log_window_until,
+        )
         updated_analysis: LogAnalysisOut = await self.repository.update(
             analysis,
             status=RunStatus.SUCCEEDED,
@@ -126,6 +135,11 @@ class LogAnalysisService:
             log_window_until=log_window.until_datetime,
             gpt_tokens_used=agent_context.llm_tokens_used,
             gpt_cost_usd=agent_context.llm_cost_usd,
+            deterministic_fingerprint=fingerprint_packet.deterministic_fingerprint,
+            evidence_fingerprints=fingerprint_packet.evidence_fingerprints,
+            known_patterns=fingerprint_packet.known_patterns,
+            coverage_snapshot=fingerprint_packet.coverage_snapshot,
+            fingerprint_version=fingerprint_packet.fingerprint_version,
             execution_time_seconds=execution_time_seconds,
         )
         logger.info(

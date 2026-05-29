@@ -504,6 +504,16 @@ class LogAnalysisAgentContext(BaseModel):
     llm_report_execution_time_seconds: float = 0.0
 
 
+class LogAnalysisFingerprintPacket(BaseModel):
+    """Compact structured comparison data derived from one log-analysis run."""
+
+    fingerprint_version: str
+    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    evidence_fingerprints: list[str] = Field(default_factory=list)
+    known_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 class LogAnalysisIn(BaseModel):
     """Validated data passed from services into the log-analysis repository."""
 

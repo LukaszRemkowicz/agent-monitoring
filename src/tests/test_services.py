@@ -1,6 +1,7 @@
 from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, date, datetime
+from typing import Any, cast
 from unittest.mock import ANY
 
 import pytest
@@ -29,6 +30,7 @@ from schemas import (
     WorkflowBootstrap,
 )
 from services.log_analyse import LogAnalysisService
+from services.log_fingerprints import LOG_ANALYSIS_FINGERPRINT_VERSION
 from services.sitemap import (
     AnalysisRunner,
     LLMSummaryBuilder,
@@ -366,6 +368,34 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert repository.saved[0]["trend_summary"] == "No prior trend data was available."
     assert repository.saved[0]["gpt_tokens_used"] == 123
     assert repository.saved[0]["gpt_cost_usd"] == 0.02
+    assert repository.saved[0]["fingerprint_version"] == LOG_ANALYSIS_FINGERPRINT_VERSION
+    coverage_snapshot = cast(dict[str, Any], repository.saved[0]["coverage_snapshot"])
+    assert coverage_snapshot["totals"] == {
+        "projects": 1,
+        "sources": 1,
+        "collected_sources": 1,
+        "unavailable_sources": 0,
+        "zero_line_sources": 0,
+    }
+    deterministic_fingerprint = cast(
+        dict[str, Any],
+        repository.saved[0]["deterministic_fingerprint"],
+    )
+    assert deterministic_fingerprint["report"] == {
+        "severity": "INFO",
+        "key_finding_count": 1,
+        "evidence_count": 1,
+        "coverage_gap_count": 0,
+        "watch_only_count": 1,
+    }
+    assert repository.saved[0]["known_patterns"] == [
+        {
+            "source": "final_report.watch_only_items",
+            "pattern": "Routine bot traffic.",
+        }
+    ]
+    evidence_fingerprints = cast(list[str], repository.saved[0]["evidence_fingerprints"])
+    assert len(evidence_fingerprints) == 1
     assert result.agent_context.llm_report_execution_time_seconds == 4.32
 
 
