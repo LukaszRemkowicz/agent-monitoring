@@ -385,6 +385,118 @@ class SnapshotAccessGuidance(BaseModel):
     instruction: str
 
 
+LogAnalysisCoverageTotals = dict[str, int]
+
+
+class LogAnalysisCoverageSnapshotSource(BaseModel):
+    """Coverage state for one collected log source."""
+
+    source_key: str
+    source_type: str = ""
+    status: str = ""
+    line_count: int = 0
+    byte_count: int = 0
+    zero_lines: bool = False
+    has_output_file: bool = False
+    error: str | None = None
+
+
+class LogAnalysisCoverageSnapshotProject(BaseModel):
+    """Coverage state for one collected project."""
+
+    project_name: str
+    snapshot_dir: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    sources: list[LogAnalysisCoverageSnapshotSource] = Field(default_factory=list)
+
+
+class LogAnalysisCoverageSnapshot(BaseModel):
+    """Full source-level coverage snapshot used for deterministic comparison."""
+
+    projects: list[LogAnalysisCoverageSnapshotProject] = Field(default_factory=list)
+    totals: LogAnalysisCoverageTotals = Field(default_factory=dict)
+
+
+class LogAnalysisCompactCoverageSnapshot(BaseModel):
+    """Prompt-safe coverage snapshot with source-level details removed."""
+
+    totals: LogAnalysisCoverageTotals = Field(default_factory=dict)
+
+
+class PreviousLogAnalysisContext(BaseModel):
+    """Compact previous successful run data included for current-run comparison."""
+
+    analysis_date: date
+    summary: str
+    severity: str
+    trend_summary: str = ""
+    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    evidence_fingerprints: list[str] = Field(default_factory=list)
+    known_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_snapshot: LogAnalysisCoverageSnapshot = Field(
+        default_factory=LogAnalysisCoverageSnapshot
+    )
+    fingerprint_version: str
+
+    @classmethod
+    def from_analysis(cls, analysis: Any) -> PreviousLogAnalysisContext:
+        return cls.model_validate(
+            {
+                "analysis_date": analysis.analysis_date,
+                "summary": analysis.summary,
+                "severity": analysis.severity,
+                "trend_summary": analysis.trend_summary,
+                "deterministic_fingerprint": analysis.deterministic_fingerprint,
+                "evidence_fingerprints": analysis.evidence_fingerprints,
+                "known_patterns": analysis.known_patterns,
+                "coverage_snapshot": analysis.coverage_snapshot,
+                "fingerprint_version": analysis.fingerprint_version,
+            }
+        )
+
+
+class PreviousLogAnalysisPromptContext(BaseModel):
+    """Prompt-safe previous run context with source-level coverage removed."""
+
+    analysis_date: date
+    summary: str
+    severity: str
+    trend_summary: str = ""
+    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    evidence_fingerprints: list[str] = Field(default_factory=list)
+    known_patterns: list[dict[str, Any]] = Field(default_factory=list)
+    coverage_snapshot: LogAnalysisCompactCoverageSnapshot = Field(
+        default_factory=LogAnalysisCompactCoverageSnapshot
+    )
+    fingerprint_version: str
+
+
+class LogAnalysisHistoryComparison(BaseModel):
+    """Small deterministic hint comparing current collection coverage to history."""
+
+    available: bool
+    coverage_changed: bool = False
+    changed_sources: list[str] = Field(default_factory=list)
+    recommended_action: Literal["final_report", "call_tools"]
+    rationale: str
+
+
+class LogAnalysisCurrentCoverage(BaseModel):
+    """Current-run collection coverage facts for report coverage gaps."""
+
+    zero_line_sources: list[str] = Field(default_factory=list)
+    unavailable_sources: list[str] = Field(default_factory=list)
+
+
+LogAnalysisEvidenceMode = Literal[
+    "mcp_tool_results_required",
+    "metadata_and_previous_analysis_only",
+    "history_changed_requires_tools",
+    "current_tool_results_available",
+]
+LogAnalysisNextRequiredAction = Literal["call_tools", "final_report"]
+
+
 class LogAnalysisPromptContext(BaseModel):
     """Structured request context for the future log-analysis LLM call.
 
@@ -398,9 +510,14 @@ class LogAnalysisPromptContext(BaseModel):
     current_phase: Literal["inspect_collected_logs", "final_report"]
     completed_steps: list[str]
     historical_context_available: bool = False
+    previous_analysis: PreviousLogAnalysisPromptContext | None = None
+    history_comparison: LogAnalysisHistoryComparison | None = None
+    current_coverage: LogAnalysisCurrentCoverage
+    evidence_mode: LogAnalysisEvidenceMode
+    current_tool_result_count: int = 0
     trend_summary_instruction: str = ""
     allowed_actions: list[Literal["call_tools", "read_skills", "final_report"]]
-    next_required_action: Literal["call_tools", "final_report"]
+    next_required_action: LogAnalysisNextRequiredAction
     final_report_allowed: bool
     available_projects: list[ProjectManifestSummary] = Field(default_factory=list)
     mandatory_skills: list[WorkflowSkillContent]

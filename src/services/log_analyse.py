@@ -87,10 +87,14 @@ class LogAnalysisService:
             analysis = await self.repository.create(analysis_input)
         try:
             historical_context: str = await self._build_historical_context(analysis_date)
+            previous_analysis: LogAnalysisOut | None = await self.repository.get_latest_before_date(
+                analysis_date
+            )
             agent_context: LogAnalysisAgentContext = await self.agent.run_log_analysis(
                 analysis_date=analysis_date,
                 log_window=log_window,
                 historical_context=historical_context,
+                previous_analysis=previous_analysis,
             )
         except Exception as exc:
             execution_time_seconds: float = round(monotonic() - execution_started_at, 3)

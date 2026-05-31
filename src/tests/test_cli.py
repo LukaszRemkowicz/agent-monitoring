@@ -23,6 +23,7 @@ from exceptions import McpClientError, PrivateMonitoringContextError
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisCurrentCoverage,
     LogAnalysisFinalReport,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
@@ -167,6 +168,9 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                         "collect_logs",
                     ],
                     allowed_actions=["call_tools", "read_skills", "final_report"],
+                    evidence_mode="current_tool_results_available",
+                    current_tool_result_count=1,
+                    current_coverage=LogAnalysisCurrentCoverage(),
                     next_required_action="final_report",
                     final_report_allowed=True,
                     available_projects=[

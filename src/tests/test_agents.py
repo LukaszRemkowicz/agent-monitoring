@@ -16,6 +16,7 @@ from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisOut,
     LogCollectionWindow,
     ProjectManifestSummary,
     WorkflowBootstrap,
@@ -272,9 +273,28 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "scanner/probe-heavy traffic" in followup_text
     assert "already_retrieved" in followup_text
     assert "Before returning final_report, compare tool_results" in followup_text
+    assert "evidence_mode controls evidence wording" in followup_text
+    assert "evidence_mode=metadata_and_previous_analysis_only" in followup_text
+    assert "coverage_gaps must describe current_coverage only" in followup_text
     assert "tool_results show bot, scanner, probe" in followup_text
     assert "bot_detection with already_retrieved=false" in followup_text
-    assert "action=read_skills for bot_detection before final_report" in followup_text
+    assert "unless previous_analysis shows the same known watch-only pattern" in followup_text
+    assert "do not automatically read optional skills" in followup_text
+    assert "do not automatically call live mitigation tools" in followup_text
+    assert "If you skip a tool because previous_analysis is sufficient" in followup_text
+    assert "do not cite that skipped tool" in followup_text
+    assert "Use previous_analysis or collected snapshot metadata" in followup_text
+    assert "available_tool_inventory is an inventory of capabilities, not evidence" in followup_text
+    assert "Do not write inspect_proxy_activity results" in followup_text
+    assert "unless current tool_results contain those outputs" in followup_text
+    assert "When no current tool_results are present" in followup_text
+    assert "consistent with previous_analysis" in followup_text
+    assert "avoid fresh-detection wording" in followup_text
+    assert "Line counts are coverage metadata only" in followup_text
+    assert "A line count does not prove status codes" in followup_text
+    assert "Forbidden zero-tool current-run claims" in followup_text
+    assert "logs show mostly 2xx/3xx" in followup_text
+    assert "Use previous_analysis reported" in followup_text
     assert "workflow guidance rather than model memory" in followup_text
     assert "tool_results show possible security impact" in followup_text
     assert "successful sensitive-path access" in followup_text
@@ -290,7 +310,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "historical security daemon logs are evidence that bans occurred in the past" in (
         followup_text
     )
-    assert "your next response should be action=call_tools" in followup_text
+    assert "use action=call_tools for inspect_live_fail2ban_activity" in followup_text
     assert "so mitigation analysis is based on live evidence rather than hypothesis" in (
         followup_text
     )
@@ -340,6 +360,51 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert isinstance(instructions, list)
     assert instructions
     assert all(isinstance(instruction, str) for instruction in instructions)
+    joined_instructions = "\n".join(instructions)
+    assert "evidence_mode controls evidence wording" in joined_instructions
+    assert "evidence_mode=metadata_and_previous_analysis_only" in joined_instructions
+    assert "do not describe current log content beyond collection coverage" in joined_instructions
+    assert "If history_comparison.recommended_action=call_tools" in joined_instructions
+    assert "call deterministic MCP tools before final_report" in joined_instructions
+    assert "previous_analysis severity is WARNING or CRITICAL" in joined_instructions
+    assert "do not preserve the previous severity by inertia" in joined_instructions
+    assert "scanner/probe 4xx responses or intended 403 access restrictions remain INFO" in (
+        joined_instructions
+    )
+    assert "coverage_gaps must describe current_coverage only" in joined_instructions
+    assert "Do not copy previous_analysis coverage_snapshot" in joined_instructions
+    assert "history_comparison.changed_sources belong in trend_summary or evidence" in (
+        joined_instructions
+    )
+    assert "previous_analysis shows the same known watch-only pattern" in joined_instructions
+    assert "do not automatically read optional skills" in joined_instructions
+    assert "do not automatically call live mitigation tools" in joined_instructions
+    assert "Optional skills and live mitigation tools are for new, changed, worse" in (
+        joined_instructions
+    )
+    assert "If you skip a tool because previous_analysis is sufficient" in joined_instructions
+    assert "do not cite that skipped tool" in joined_instructions
+    assert "do not claim live runtime state" in joined_instructions
+    assert "Use previous_analysis or collected snapshot metadata" in joined_instructions
+    assert "available_tools is an inventory of capabilities, not evidence" in joined_instructions
+    assert "Do not write inspect_proxy_activity results" in joined_instructions
+    assert "unless current tool_results contain those outputs" in joined_instructions
+    assert "When no current tool_results are present" in joined_instructions
+    assert "consistent with previous_analysis" in joined_instructions
+    assert "avoid fresh-detection wording" in joined_instructions
+    assert "detected, found, grouped, active, currently banning" in joined_instructions
+    assert "unless current tool_results explicitly prove it" in joined_instructions
+    assert "Line counts are coverage metadata only" in joined_instructions
+    assert "A line count does not prove status codes" in joined_instructions
+    assert "routes, paths, bans, upstream errors" in joined_instructions
+    assert "no service impact" in joined_instructions
+    assert "If only line counts and previous_analysis are available" in joined_instructions
+    assert "Forbidden zero-tool current-run claims" in joined_instructions
+    assert "logs show mostly 2xx/3xx" in joined_instructions
+    assert "logs show scanner/probe traffic" in joined_instructions
+    assert "Fail2ban is active" in joined_instructions
+    assert "no 5xx or upstream errors were detected" in joined_instructions
+    assert "Use previous_analysis reported" in joined_instructions
     assert set(user_prompt["report_contract"]) == {
         "summary",
         "severity",
@@ -352,6 +417,9 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
         "trend_summary",
     }
     assert all(user_prompt["report_contract"].values())
+    assert "current MCP tool results when present" in user_prompt["report_contract"]["evidence"]
+    assert "collected snapshot metadata" in user_prompt["report_contract"]["evidence"]
+    assert "previous_analysis" in user_prompt["report_contract"]["evidence"]
     assert "analysis_date:" not in context.prompt.user_prompt
 
 
@@ -424,6 +492,337 @@ async def test_monitoring_workflow_agent_includes_historical_context_in_system_p
     followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     assert '"historical_context_available": true' in followup_text
     assert "do not claim no historical data was provided" in followup_text
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prompt() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "group_errors",
+                        "arguments": {"project_name": "landingpage"},
+                    }
+                ],
+            }
+        )
+    )
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Logs match previous scanner noise.",
+                "severity": "INFO",
+                "severity_rationale": "INFO because no new service impact was found.",
+                "key_findings": ["Known scanner noise persisted."],
+                "evidence": ["group_errors matched prior clean backend pattern."],
+                "coverage_gaps": [],
+                "recommendations": "Continue monitoring.",
+                "watch_only_items": ["Routine bot traffic."],
+                "trend_summary": "No material change from the previous run.",
+            }
+        )
+    )
+    previous_analysis = LogAnalysisOut(
+        id=8,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status="succeeded",
+        summary="Known scanner noise only.",
+        severity="INFO",
+        trend_summary="Scanner noise was stable.",
+        deterministic_fingerprint={"report": {"severity": "INFO"}},
+        evidence_fingerprints=["evidence:abc"],
+        known_patterns=[{"pattern": "Routine bot traffic."}],
+        coverage_snapshot={
+            "totals": {
+                "project_count": 1,
+                "source_count": 2,
+                "zero_line_sources": 1,
+            },
+            "projects": [
+                {
+                    "project_name": "landingpage",
+                    "sources": [
+                        {
+                            "source_key": "backend",
+                            "status": "collected",
+                            "line_count": 120,
+                            "zero_lines": False,
+                        },
+                        {
+                            "source_key": "nginx",
+                            "status": "unavailable",
+                            "line_count": 0,
+                            "zero_lines": True,
+                        },
+                    ],
+                }
+            ],
+        },
+        fingerprint_version="log-analysis-fingerprint-v1",
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+        previous_analysis=previous_analysis,
+    )
+
+    user_prompt = json.loads(context.prompt.user_prompt)
+    assert user_prompt["next_required_action"] == "final_report"
+    assert user_prompt["final_report_allowed"] is True
+    assert user_prompt["evidence_mode"] == "metadata_and_previous_analysis_only"
+    assert user_prompt["current_tool_result_count"] == 0
+    assert user_prompt["current_coverage"] == {
+        "zero_line_sources": [],
+        "unavailable_sources": ["landingpage.nginx"],
+    }
+    assert user_prompt["history_comparison"] == {
+        "available": True,
+        "coverage_changed": False,
+        "changed_sources": [],
+        "recommended_action": "final_report",
+        "rationale": "Previous and current source coverage metadata match.",
+    }
+    assert user_prompt["previous_analysis"] == {
+        "analysis_date": "2026-05-18",
+        "summary": "Known scanner noise only.",
+        "severity": "INFO",
+        "trend_summary": "Scanner noise was stable.",
+        "deterministic_fingerprint": {"report": {"severity": "INFO"}},
+        "evidence_fingerprints": ["evidence:abc"],
+        "known_patterns": [{"pattern": "Routine bot traffic."}],
+        "coverage_snapshot": {
+            "totals": {
+                "project_count": 1,
+                "source_count": 2,
+                "zero_line_sources": 1,
+            }
+        },
+        "fingerprint_version": "log-analysis-fingerprint-v1",
+    }
+    assert "projects" not in user_prompt["previous_analysis"]["coverage_snapshot"]
+    followup_prompt = json.loads(
+        cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
+    )
+    assert followup_prompt["previous_analysis"] == user_prompt["previous_analysis"]
+    assert followup_prompt["history_comparison"] == user_prompt["history_comparison"]
+    assert followup_prompt["current_coverage"] == user_prompt["current_coverage"]
+    assert followup_prompt["evidence_mode"] == "current_tool_results_available"
+    assert followup_prompt["current_tool_result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_flags_changed_history_coverage() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Coverage changed.",
+                "severity": "INFO",
+                "severity_rationale": "Coverage changed but no report was escalated.",
+                "key_findings": ["Coverage changed."],
+                "evidence": ["history_comparison showed changed coverage."],
+                "coverage_gaps": [],
+                "recommendations": "Inspect changed coverage.",
+                "watch_only_items": [],
+                "trend_summary": "Coverage changed.",
+            }
+        )
+    )
+    previous_analysis = LogAnalysisOut(
+        id=8,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status="succeeded",
+        summary="Known scanner noise only.",
+        severity="INFO",
+        deterministic_fingerprint={},
+        evidence_fingerprints=[],
+        known_patterns=[],
+        coverage_snapshot={
+            "totals": {
+                "project_count": 1,
+                "source_count": 2,
+                "zero_line_sources": 2,
+            },
+            "projects": [
+                {
+                    "project_name": "landingpage",
+                    "sources": [
+                        {
+                            "source_key": "backend",
+                            "status": "collected",
+                            "line_count": 0,
+                            "zero_lines": True,
+                        },
+                        {
+                            "source_key": "nginx",
+                            "status": "collected",
+                            "line_count": 0,
+                            "zero_lines": True,
+                        },
+                    ],
+                }
+            ],
+        },
+        fingerprint_version="log-analysis-fingerprint-v1",
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+        previous_analysis=previous_analysis,
+    )
+
+    user_prompt = json.loads(context.prompt.user_prompt)
+    assert user_prompt["history_comparison"] == {
+        "available": True,
+        "coverage_changed": True,
+        "changed_sources": ["landingpage.backend"],
+        "recommended_action": "call_tools",
+        "rationale": (
+            "Previous and current source coverage differ; call deterministic tools "
+            "before final_report."
+        ),
+    }
+    assert user_prompt["current_coverage"] == {
+        "zero_line_sources": [],
+        "unavailable_sources": ["landingpage.nginx"],
+    }
+    assert user_prompt["previous_analysis"]["coverage_snapshot"] == {
+        "totals": {
+            "project_count": 1,
+            "source_count": 2,
+            "zero_line_sources": 2,
+        }
+    }
+    assert "projects" not in user_prompt["previous_analysis"]["coverage_snapshot"]
+    assert user_prompt["next_required_action"] == "call_tools"
+    assert user_prompt["final_report_allowed"] is False
+    assert user_prompt["evidence_mode"] == "history_changed_requires_tools"
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_requires_tools_for_previous_warning() -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Previous warning requires tools.",
+                "severity": "WARNING",
+                "severity_rationale": "Prior warning should be verified.",
+                "key_findings": ["Previous run had 500s."],
+                "evidence": ["history_comparison required tools."],
+                "coverage_gaps": [],
+                "recommendations": "Verify with deterministic tools.",
+                "watch_only_items": [],
+                "trend_summary": "Previous warning persisted.",
+            }
+        )
+    )
+    previous_analysis = LogAnalysisOut(
+        id=8,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status="succeeded",
+        summary="Backend and frontend had HTTP 500 errors.",
+        severity="WARNING",
+        deterministic_fingerprint={
+            "status_signals": {
+                "landingpage.backend": {"status_500_count": 7},
+                "landingpage.frontend": {"status_500_count": 5},
+            }
+        },
+        evidence_fingerprints=[
+            "simulated:landingpage.backend:http_500:count_7",
+            "simulated:landingpage.frontend:http_500:count_5",
+        ],
+        known_patterns=[],
+        coverage_snapshot={
+            "projects": [
+                {
+                    "project_name": "landingpage",
+                    "sources": [
+                        {
+                            "source_key": "backend",
+                            "status": "collected",
+                            "line_count": 120,
+                            "zero_lines": False,
+                        },
+                        {
+                            "source_key": "nginx",
+                            "status": "unavailable",
+                            "line_count": 0,
+                            "zero_lines": True,
+                        },
+                    ],
+                }
+            ]
+        },
+        fingerprint_version="log-analysis-fingerprint-v1",
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+        previous_analysis=previous_analysis,
+    )
+
+    user_prompt = json.loads(context.prompt.user_prompt)
+    assert user_prompt["history_comparison"] == {
+        "available": True,
+        "coverage_changed": False,
+        "changed_sources": [],
+        "recommended_action": "call_tools",
+        "rationale": (
+            "Previous analysis severity was WARNING; call deterministic tools before "
+            "final_report to verify whether the prior warning or critical condition "
+            "is still present."
+        ),
+    }
+    assert user_prompt["next_required_action"] == "call_tools"
+    assert user_prompt["final_report_allowed"] is False
+    assert user_prompt["evidence_mode"] == "history_changed_requires_tools"
 
 
 @pytest.mark.asyncio

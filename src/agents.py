@@ -18,8 +18,14 @@ from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisCompactCoverageSnapshot,
+    LogAnalysisCurrentCoverage,
+    LogAnalysisEvidenceMode,
     LogAnalysisFinalReport,
+    LogAnalysisHistoryComparison,
     LogAnalysisLLMCallIn,
+    LogAnalysisNextRequiredAction,
+    LogAnalysisOut,
     LogAnalysisPreparedPrompt,
     LogAnalysisPromptContext,
     LogAnalysisSkillReadRequest,
@@ -27,6 +33,8 @@ from schemas import (
     LogAnalysisToolCallRequest,
     LogAnalysisToolResult,
     LogCollectionWindow,
+    PreviousLogAnalysisContext,
+    PreviousLogAnalysisPromptContext,
     ProjectManifestSummary,
     SnapshotAccessGuidance,
     WorkflowBootstrap,
@@ -64,6 +72,7 @@ class MonitoringWorkflowAgent:
         analysis_date: date,
         log_window: LogCollectionWindow,
         historical_context: str = "",
+        previous_analysis: LogAnalysisOut | None = None,
     ) -> LogAnalysisAgentContext:
         """Prepare deterministic context before the first log-analysis LLM call."""
 
@@ -98,6 +107,7 @@ class MonitoringWorkflowAgent:
             collect_logs=collect_logs,
             private_monitoring_context=self.private_monitoring_context,
             historical_context=historical_context,
+            previous_analysis=previous_analysis,
         )
         llm_report_started_at: float = monotonic()
         final_report: LogAnalysisFinalReport
@@ -160,8 +170,8 @@ class MonitoringWorkflowAgent:
             )
         return skill_contents
 
-    @staticmethod
     def _build_log_analysis_prompt(
+        self,
         *,
         analysis_date: date,
         workflow: WorkflowBootstrap,
@@ -170,11 +180,47 @@ class MonitoringWorkflowAgent:
         collect_logs: CollectLogsArtifact,
         private_monitoring_context: str,
         historical_context: str,
+        previous_analysis: LogAnalysisOut | None,
     ) -> LogAnalysisPreparedPrompt:
         """Build the structured prompt context that will be sent to the LLM later."""
 
+        previous_analysis_context = (
+            PreviousLogAnalysisContext.from_analysis(previous_analysis)
+            if previous_analysis is not None
+            else None
+        )
+        history_comparison: LogAnalysisHistoryComparison | None = (
+            self._build_history_comparison(
+                previous_analysis=previous_analysis_context,
+                collect_logs=collect_logs,
+            )
+            if previous_analysis_context is not None
+            else None
+        )
+        prompt_previous_analysis_context = (
+            self._compact_previous_analysis_for_prompt(previous_analysis_context)
+            if previous_analysis_context is not None
+            else None
+        )
+        history_requires_tools: bool = (
+            history_comparison is not None and history_comparison.recommended_action == "call_tools"
+        )
+        evidence_mode: LogAnalysisEvidenceMode
+        if history_requires_tools:
+            evidence_mode = "history_changed_requires_tools"
+        elif previous_analysis_context is not None:
+            evidence_mode = "metadata_and_previous_analysis_only"
+        else:
+            evidence_mode = "mcp_tool_results_required"
+
+        next_required_action: LogAnalysisNextRequiredAction
+        if previous_analysis_context is not None and not history_requires_tools:
+            next_required_action = "final_report"
+        else:
+            next_required_action = "call_tools"
+
         return LogAnalysisPreparedPrompt(
-            system_prompt=MonitoringWorkflowAgent._build_system_prompt_with_mandatory_skills(
+            system_prompt=self._build_system_prompt_with_mandatory_skills(
                 workflow=workflow,
                 mandatory_skills=mandatory_skills,
                 private_monitoring_context=private_monitoring_context,
@@ -191,12 +237,18 @@ class MonitoringWorkflowAgent:
                     "collect_logs",
                 ],
                 historical_context_available=bool(historical_context),
+                previous_analysis=prompt_previous_analysis_context,
+                history_comparison=history_comparison,
+                current_coverage=self._build_current_coverage(collect_logs),
+                evidence_mode=evidence_mode,
+                current_tool_result_count=0,
                 trend_summary_instruction=_build_trend_summary_instruction(
                     historical_context_available=bool(historical_context)
                 ),
                 allowed_actions=["call_tools", "read_skills", "final_report"],
-                next_required_action="call_tools",
-                final_report_allowed=False,
+                next_required_action=next_required_action,
+                final_report_allowed=previous_analysis_context is not None
+                and not history_requires_tools,
                 available_projects=available_projects,
                 mandatory_skills=mandatory_skills,
                 optional_skills=workflow.optional_skills,
@@ -216,6 +268,26 @@ class MonitoringWorkflowAgent:
                 report_contract=LOG_ANALYSIS_REPORT_CONTRACT,
                 instructions=LOG_ANALYSIS_INSTRUCTIONS,
             ),
+        )
+
+    @staticmethod
+    def _compact_previous_analysis_for_prompt(
+        previous_analysis: PreviousLogAnalysisContext,
+    ) -> PreviousLogAnalysisPromptContext:
+        """Remove source-level previous coverage before sending history to the LLM."""
+
+        return PreviousLogAnalysisPromptContext(
+            analysis_date=previous_analysis.analysis_date,
+            summary=previous_analysis.summary,
+            severity=previous_analysis.severity,
+            trend_summary=previous_analysis.trend_summary,
+            deterministic_fingerprint=previous_analysis.deterministic_fingerprint,
+            evidence_fingerprints=previous_analysis.evidence_fingerprints,
+            known_patterns=previous_analysis.known_patterns,
+            coverage_snapshot=LogAnalysisCompactCoverageSnapshot(
+                totals=previous_analysis.coverage_snapshot.totals
+            ),
+            fingerprint_version=previous_analysis.fingerprint_version,
         )
 
     @staticmethod
@@ -364,6 +436,25 @@ class MonitoringWorkflowAgent:
                             "historical_context_available": (
                                 prompt.context.historical_context_available
                             ),
+                            "previous_analysis": (
+                                prompt.context.previous_analysis.model_dump(mode="json")
+                                if prompt.context.previous_analysis is not None
+                                else None
+                            ),
+                            "history_comparison": (
+                                prompt.context.history_comparison.model_dump(mode="json")
+                                if prompt.context.history_comparison is not None
+                                else None
+                            ),
+                            "current_coverage": prompt.context.current_coverage.model_dump(
+                                mode="json"
+                            ),
+                            "evidence_mode": (
+                                "current_tool_results_available"
+                                if tool_results
+                                else prompt.context.evidence_mode
+                            ),
+                            "current_tool_result_count": len(tool_results),
                             "trend_summary_instruction": (prompt.context.trend_summary_instruction),
                             "instructions": LOG_ANALYSIS_FOLLOWUP_INSTRUCTIONS,
                         },
@@ -574,6 +665,100 @@ class MonitoringWorkflowAgent:
             },
             sort_keys=True,
             default=str,
+        )
+
+    @staticmethod
+    def _build_history_comparison(
+        *,
+        previous_analysis: PreviousLogAnalysisContext,
+        collect_logs: CollectLogsArtifact,
+    ) -> LogAnalysisHistoryComparison:
+        """Decide whether previous analysis is enough or tools must run.
+
+        The cheap path is allowed only when the previous run was safe and the
+        current collection coverage matches the previous source coverage. Any
+        WARNING/CRITICAL history, unavailable-source change, or zero-line-source
+        change forces deterministic MCP tools before the LLM can report.
+        """
+
+        previous_has_missing_logs_by_source: dict[str, bool] = {}
+        for previous_project in previous_analysis.coverage_snapshot.projects:
+            for previous_source in previous_project.sources:
+                source_name: str = f"{previous_project.project_name}.{previous_source.source_key}"
+                previous_has_missing_logs_by_source[source_name] = (
+                    previous_source.zero_lines or previous_source.status == "unavailable"
+                )
+
+        current_has_missing_logs_by_source: dict[str, bool] = {}
+        for project in collect_logs.projects:
+            project_name: str = project.project_name
+            for source in project.sources:
+                source_key: str = source.source_key
+                if not project_name or not source_key:
+                    continue
+                current_has_missing_logs_by_source[f"{project_name}.{source_key}"] = (
+                    source.line_count == 0 or source.status == "unavailable"
+                )
+
+        changed_sources: list[str] = [
+            source_name
+            for source_name in sorted(
+                set(previous_has_missing_logs_by_source) & set(current_has_missing_logs_by_source)
+            )
+            if previous_has_missing_logs_by_source[source_name]
+            != current_has_missing_logs_by_source[source_name]
+        ]
+        if previous_analysis.severity in {"WARNING", "CRITICAL"}:
+            return LogAnalysisHistoryComparison(
+                available=True,
+                coverage_changed=bool(changed_sources),
+                changed_sources=changed_sources,
+                recommended_action="call_tools",
+                rationale=(
+                    f"Previous analysis severity was {previous_analysis.severity}; "
+                    "call deterministic tools before final_report to verify whether "
+                    "the prior warning or critical condition is still present."
+                ),
+            )
+        if changed_sources:
+            return LogAnalysisHistoryComparison(
+                available=True,
+                coverage_changed=True,
+                changed_sources=changed_sources,
+                recommended_action="call_tools",
+                rationale=(
+                    "Previous and current source coverage differ; call deterministic tools "
+                    "before final_report."
+                ),
+            )
+        return LogAnalysisHistoryComparison(
+            available=True,
+            coverage_changed=False,
+            changed_sources=[],
+            recommended_action="final_report",
+            rationale="Previous and current source coverage metadata match.",
+        )
+
+    @staticmethod
+    def _build_current_coverage(
+        collect_logs: CollectLogsArtifact,
+    ) -> LogAnalysisCurrentCoverage:
+        """Build current coverage facts the LLM may cite in coverage gaps."""
+
+        zero_line_sources: list[str] = []
+        unavailable_sources: list[str] = []
+        for project in collect_logs.projects:
+            project_name: str = project.project_name
+            for source in project.sources:
+                source_key: str = source.source_key
+                source_name: str = f"{project_name}.{source_key}"
+                if source.status == "unavailable":
+                    unavailable_sources.append(source_name)
+                elif source.line_count == 0:
+                    zero_line_sources.append(source_name)
+        return LogAnalysisCurrentCoverage(
+            zero_line_sources=zero_line_sources,
+            unavailable_sources=unavailable_sources,
         )
 
     async def _execute_requested_skill_reads(
