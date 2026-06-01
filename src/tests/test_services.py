@@ -5,6 +5,7 @@ from typing import Any, cast
 from unittest.mock import ANY
 
 import pytest
+from llm_core.exceptions import ProviderExecutionError
 from llm_core.protocols import LLMProvider
 from llm_core.providers.mock import MockProvider
 from pytest_mock import MockerFixture
@@ -177,6 +178,37 @@ class FailingWorkflowAgent(MonitoringWorkflowAgent):
         previous_analysis: LogAnalysisOut | None = None,
     ) -> LogAnalysisAgentContext:
         raise RuntimeError("MCP unavailable")
+
+
+class FailingAfterCollectLogsAgent(FakeWorkflowAgent):
+    async def run_log_analysis(
+        self,
+        *,
+        analysis_date: date,
+        log_window: LogCollectionWindow,
+        historical_context: str = "",
+        previous_analysis: LogAnalysisOut | None = None,
+    ) -> LogAnalysisAgentContext:
+        from exceptions import LogAnalysisAgentError
+
+        context: LogAnalysisAgentContext = await super().run_log_analysis(
+            analysis_date=analysis_date,
+            log_window=log_window,
+            historical_context=historical_context,
+            previous_analysis=previous_analysis,
+        )
+        try:
+            try:
+                raise RuntimeError("Rate limit reached for gpt-4.1-mini")
+            except RuntimeError as exc:
+                raise ProviderExecutionError("OpenAI provider request failed") from exc
+        except ProviderExecutionError as exc:
+            raise LogAnalysisAgentError(
+                "OpenAI provider request failed",
+                workflow=context.workflow,
+                collect_logs=context.collect_logs,
+                prompt=context.prompt,
+            ) from exc
 
 
 class FakeMcpClient(McpWorkflowClient):
@@ -370,6 +402,7 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert result.analysis.status == RunStatus.SUCCEEDED
     assert result.analysis.email_sent is False
     assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
+    assert result.analysis.mcp_collect_logs_id == "workflow/landingpage/latest"
     assert result.analysis.log_window_since == datetime(2026, 5, 19, tzinfo=UTC)
     assert result.analysis.log_window_until == datetime(2026, 5, 20, tzinfo=UTC)
     assert '"analysis_date": "2026-05-19"' in result.prepared_prompt.user_prompt
@@ -505,6 +538,35 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
 
     assert repository.saved[0]["status"] == RunStatus.FAILED
     assert repository.saved[0]["failure_stage"] == "log_analysis"
+    assert repository.saved[0]["severity"] == "CRITICAL"
+    assert repository.saved[0]["summary"] == (
+        "Log-analysis workflow failed before a final report was produced."
+    )
+    assert repository.saved[0]["key_findings"] == [
+        "log_analysis failed with RuntimeError: MCP unavailable",
+    ]
+    assert repository.saved[0]["recommendations"] == (
+        "Inspect command logs, MCP availability, and persisted failure details; "
+        "rerun with --force after the underlying issue is fixed."
+    )
+    assert repository.saved[0]["trend_summary"] == (
+        "No trend summary is available because the workflow failed."
+    )
+    assert repository.saved[0]["log_window_since"] == datetime(2026, 5, 19, tzinfo=UTC)
+    assert repository.saved[0]["log_window_until"] == datetime(2026, 5, 20, tzinfo=UTC)
+    assert repository.saved[0]["mcp_artifact"] == {
+        "analysis_date": "2026-05-19",
+        "log_window": {
+            "since": "2026-05-19T00:00:00Z",
+            "until": "2026-05-20T00:00:00Z",
+        },
+        "error": {
+            "stage": "log_analysis",
+            "type": "RuntimeError",
+            "message": "MCP unavailable",
+            "detail": "MCP unavailable",
+        },
+    }
     assert repository.saved[0]["error_message"] == "MCP unavailable"
     error_mock.assert_called_once_with(
         "log-analysis workflow failed",
@@ -516,6 +578,54 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
             "error": "MCP unavailable",
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_service_records_partial_collection_on_agent_failure() -> None:
+    repository = FakeLogAnalysisRepository(exists=True)
+    service = LogAnalysisService(
+        agent=FailingAfterCollectLogsAgent(),
+        repository=repository,
+    )
+
+    with pytest.raises(RuntimeError, match="OpenAI provider request failed"):
+        await service.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
+            force=True,
+        )
+
+    running_update = repository.saved[0]
+    failure_update = repository.saved[1]
+    assert running_update["status"] == RunStatus.RUNNING
+    assert failure_update["status"] == RunStatus.FAILED
+    assert failure_update["severity"] == "CRITICAL"
+    assert failure_update["mcp_collect_logs_id"] == "workflow/landingpage/latest"
+    failure_artifact = cast(dict[str, object], failure_update["mcp_artifact"])
+    assert failure_artifact["error"] == {
+        "stage": "log_analysis",
+        "type": "LogAnalysisAgentError",
+        "message": "OpenAI provider request failed",
+        "detail": (
+            "OpenAI provider request failed\nCaused by: ProviderExecutionError: "
+            "OpenAI provider request failed\nCaused by: RuntimeError: "
+            "Rate limit reached for gpt-4.1-mini"
+        ),
+    }
+    assert failure_update["error_message"] == (
+        "OpenAI provider request failed\nCaused by: ProviderExecutionError: "
+        "OpenAI provider request failed\nCaused by: RuntimeError: "
+        "Rate limit reached for gpt-4.1-mini"
+    )
+    assert "collect_logs" in failure_artifact
+    coverage_snapshot = cast(dict[str, object], failure_update["coverage_snapshot"])
+    assert coverage_snapshot["totals"] == {
+        "projects": 1,
+        "sources": 1,
+        "collected_sources": 1,
+        "unavailable_sources": 0,
+        "zero_line_sources": 0,
+    }
 
 
 @pytest.mark.asyncio

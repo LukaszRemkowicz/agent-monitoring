@@ -11,7 +11,7 @@ from llm_core.types import GenerationOptions, LLMRequest, LLMResponse, Message, 
 from pydantic import ValidationError
 
 from assets_loader import load_markdown_bullets, load_markdown_mapping, load_text
-from exceptions import McpClientError
+from exceptions import LogAnalysisAgentError, McpClientError
 from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import LLMCallRepository
@@ -22,13 +22,13 @@ from schemas import (
     LogAnalysisCurrentCoverage,
     LogAnalysisEvidenceMode,
     LogAnalysisFinalReport,
-    LogAnalysisHistoryComparison,
     LogAnalysisLLMCallIn,
     LogAnalysisNextRequiredAction,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
     LogAnalysisPromptContext,
     LogAnalysisSkillReadRequest,
+    LogAnalysisSourceMissingLogsComparison,
     LogAnalysisToolCall,
     LogAnalysisToolCallRequest,
     LogAnalysisToolResult,
@@ -114,12 +114,20 @@ class MonitoringWorkflowAgent:
         tool_results: list[LogAnalysisToolResult]
         llm_tokens_used: int
         llm_cost_usd: float
-        final_report, tool_results, llm_tokens_used, llm_cost_usd = await self._run_tool_loop(
-            prompt=prompt,
-            workflow=workflow,
-            analysis_date=analysis_date,
-            mcp_session_id=collect_logs.session_id,
-        )
+        try:
+            final_report, tool_results, llm_tokens_used, llm_cost_usd = await self._run_tool_loop(
+                prompt=prompt,
+                workflow=workflow,
+                analysis_date=analysis_date,
+                mcp_session_id=collect_logs.session_id,
+            )
+        except Exception as exc:
+            raise LogAnalysisAgentError(
+                str(exc),
+                workflow=workflow,
+                collect_logs=collect_logs,
+                prompt=prompt,
+            ) from exc
         llm_report_execution_time_seconds: float = round(monotonic() - llm_report_started_at, 3)
         logger.info(
             "completed log-analysis LLM tool loop",
@@ -189,8 +197,8 @@ class MonitoringWorkflowAgent:
             if previous_analysis is not None
             else None
         )
-        history_comparison: LogAnalysisHistoryComparison | None = (
-            self._build_history_comparison(
+        source_missing_logs_comparison: LogAnalysisSourceMissingLogsComparison | None = (
+            self._build_source_missing_logs_comparison(
                 previous_analysis=previous_analysis_context,
                 collect_logs=collect_logs,
             )
@@ -202,19 +210,20 @@ class MonitoringWorkflowAgent:
             if previous_analysis_context is not None
             else None
         )
-        history_requires_tools: bool = (
-            history_comparison is not None and history_comparison.recommended_action == "call_tools"
+        source_missing_logs_requires_tools: bool = (
+            source_missing_logs_comparison is not None
+            and source_missing_logs_comparison.recommended_action == "call_tools"
         )
         evidence_mode: LogAnalysisEvidenceMode
-        if history_requires_tools:
-            evidence_mode = "history_changed_requires_tools"
+        if source_missing_logs_requires_tools:
+            evidence_mode = "source_missing_logs_changed_requires_tools"
         elif previous_analysis_context is not None:
             evidence_mode = "metadata_and_previous_analysis_only"
         else:
             evidence_mode = "mcp_tool_results_required"
 
         next_required_action: LogAnalysisNextRequiredAction
-        if previous_analysis_context is not None and not history_requires_tools:
+        if previous_analysis_context is not None and not source_missing_logs_requires_tools:
             next_required_action = "final_report"
         else:
             next_required_action = "call_tools"
@@ -238,7 +247,7 @@ class MonitoringWorkflowAgent:
                 ],
                 historical_context_available=bool(historical_context),
                 previous_analysis=prompt_previous_analysis_context,
-                history_comparison=history_comparison,
+                source_missing_logs_comparison=source_missing_logs_comparison,
                 current_coverage=self._build_current_coverage(collect_logs),
                 evidence_mode=evidence_mode,
                 current_tool_result_count=0,
@@ -248,7 +257,7 @@ class MonitoringWorkflowAgent:
                 allowed_actions=["call_tools", "read_skills", "final_report"],
                 next_required_action=next_required_action,
                 final_report_allowed=previous_analysis_context is not None
-                and not history_requires_tools,
+                and not source_missing_logs_requires_tools,
                 available_projects=available_projects,
                 mandatory_skills=mandatory_skills,
                 optional_skills=workflow.optional_skills,
@@ -274,7 +283,7 @@ class MonitoringWorkflowAgent:
     def _compact_previous_analysis_for_prompt(
         previous_analysis: PreviousLogAnalysisContext,
     ) -> PreviousLogAnalysisPromptContext:
-        """Remove source-level previous coverage before sending history to the LLM."""
+        """Remove old source-level coverage rows before sending history to the LLM."""
 
         return PreviousLogAnalysisPromptContext(
             analysis_date=previous_analysis.analysis_date,
@@ -441,9 +450,11 @@ class MonitoringWorkflowAgent:
                                 if prompt.context.previous_analysis is not None
                                 else None
                             ),
-                            "history_comparison": (
-                                prompt.context.history_comparison.model_dump(mode="json")
-                                if prompt.context.history_comparison is not None
+                            "source_missing_logs_comparison": (
+                                prompt.context.source_missing_logs_comparison.model_dump(
+                                    mode="json"
+                                )
+                                if prompt.context.source_missing_logs_comparison is not None
                                 else None
                             ),
                             "current_coverage": prompt.context.current_coverage.model_dump(
@@ -667,18 +678,19 @@ class MonitoringWorkflowAgent:
             default=str,
         )
 
-    @staticmethod
-    def _build_history_comparison(
+    def _build_source_missing_logs_comparison(
+        self,
         *,
         previous_analysis: PreviousLogAnalysisContext,
         collect_logs: CollectLogsArtifact,
-    ) -> LogAnalysisHistoryComparison:
+    ) -> LogAnalysisSourceMissingLogsComparison:
         """Decide whether previous analysis is enough or tools must run.
 
         The cheap path is allowed only when the previous run was safe and the
-        current collection coverage matches the previous source coverage. Any
-        WARNING/CRITICAL history, unavailable-source change, or zero-line-source
-        change forces deterministic MCP tools before the LLM can report.
+        current source missing-log state matches the previous source missing-log
+        state. Any WARNING/CRITICAL history, unavailable-source change, or
+        zero-line-source change forces deterministic MCP tools before the LLM can
+        report.
         """
 
         previous_has_missing_logs_by_source: dict[str, bool] = {}
@@ -708,11 +720,15 @@ class MonitoringWorkflowAgent:
             if previous_has_missing_logs_by_source[source_name]
             != current_has_missing_logs_by_source[source_name]
         ]
+        tool_scope_by_project: dict[str, list[str]] = self._build_tool_scope_by_project(
+            changed_sources
+        )
         if previous_analysis.severity in {"WARNING", "CRITICAL"}:
-            return LogAnalysisHistoryComparison(
+            return LogAnalysisSourceMissingLogsComparison(
                 available=True,
-                coverage_changed=bool(changed_sources),
+                missing_logs_changed=bool(changed_sources),
                 changed_sources=changed_sources,
+                tool_scope_by_project=tool_scope_by_project,
                 recommended_action="call_tools",
                 rationale=(
                     f"Previous analysis severity was {previous_analysis.severity}; "
@@ -721,29 +737,58 @@ class MonitoringWorkflowAgent:
                 ),
             )
         if changed_sources:
-            return LogAnalysisHistoryComparison(
+            return LogAnalysisSourceMissingLogsComparison(
                 available=True,
-                coverage_changed=True,
+                missing_logs_changed=True,
                 changed_sources=changed_sources,
+                tool_scope_by_project=tool_scope_by_project,
                 recommended_action="call_tools",
                 rationale=(
-                    "Previous and current source coverage differ; call deterministic tools "
-                    "before final_report."
+                    "Previous and current source missing-log state differ; call "
+                    "deterministic tools scoped to changed_sources before final_report."
                 ),
             )
-        return LogAnalysisHistoryComparison(
+        return LogAnalysisSourceMissingLogsComparison(
             available=True,
-            coverage_changed=False,
+            missing_logs_changed=False,
             changed_sources=[],
+            tool_scope_by_project={},
             recommended_action="final_report",
-            rationale="Previous and current source coverage metadata match.",
+            rationale="Previous and current source missing-log state metadata match.",
         )
+
+    @staticmethod
+    def _build_tool_scope_by_project(changed_sources: list[str]) -> dict[str, list[str]]:
+        """Convert changed missing-log state source names into scoped MCP tool guidance.
+
+        `changed_sources` stores missing-log state changes as flat names in the
+        "project.source" format, for example "landingpage.traefik". That shape
+        is convenient for comparison and reporting, but MCP log tools expect a
+        `project_name` plus one or more `source_keys`.
+
+        This helper builds the prompt-facing scope used when previous analysis
+        was INFO and only specific source missing-log state changed. It lets the
+        LLM call deterministic tools for the changed source only instead of
+        broadening a small missing-log state change into a full daily analysis
+        across unrelated projects or source keys.
+        """
+
+        tool_scope_by_project: dict[str, list[str]] = {}
+        for source_name in changed_sources:
+            project_name, separator, source_key = source_name.partition(".")
+            if not separator or not project_name or not source_key:
+                continue
+            tool_scope_by_project.setdefault(project_name, []).append(source_key)
+        return {
+            project_name: sorted(source_keys)
+            for project_name, source_keys in sorted(tool_scope_by_project.items())
+        }
 
     @staticmethod
     def _build_current_coverage(
         collect_logs: CollectLogsArtifact,
     ) -> LogAnalysisCurrentCoverage:
-        """Build current coverage facts the LLM may cite in coverage gaps."""
+        """Build current missing-log state facts the LLM may cite in coverage gaps."""
 
         zero_line_sources: list[str] = []
         unavailable_sources: list[str] = []

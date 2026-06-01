@@ -10,7 +10,7 @@ from pytest_mock import MockerFixture
 
 from agents import MonitoringWorkflowAgent
 from db.models import LogAnalysisLLMCall
-from exceptions import McpClientError
+from exceptions import LogAnalysisAgentError, McpClientError
 from mcp import McpWorkflowClient
 from repositories import LLMCallRepository
 from schemas import (
@@ -287,10 +287,14 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "available_tool_inventory is an inventory of capabilities, not evidence" in followup_text
     assert "Do not write inspect_proxy_activity results" in followup_text
     assert "unless current tool_results contain those outputs" in followup_text
+    assert "label the report as scoped" in followup_text
+    assert "current tool evidence only covers" in followup_text
+    assert "do not write overall log coverage" in followup_text
+    assert "no scoped evidence suggests a broader reanalysis was required" in followup_text
     assert "When no current tool_results are present" in followup_text
     assert "consistent with previous_analysis" in followup_text
     assert "avoid fresh-detection wording" in followup_text
-    assert "Line counts are coverage metadata only" in followup_text
+    assert "Line counts are missing-log metadata only" in followup_text
     assert "A line count does not prove status codes" in followup_text
     assert "Forbidden zero-tool current-run claims" in followup_text
     assert "logs show mostly 2xx/3xx" in followup_text
@@ -363,17 +367,22 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     joined_instructions = "\n".join(instructions)
     assert "evidence_mode controls evidence wording" in joined_instructions
     assert "evidence_mode=metadata_and_previous_analysis_only" in joined_instructions
-    assert "do not describe current log content beyond collection coverage" in joined_instructions
-    assert "If history_comparison.recommended_action=call_tools" in joined_instructions
-    assert "call deterministic MCP tools before final_report" in joined_instructions
+    assert (
+        "do not describe current log content beyond collection missing-log state"
+        in joined_instructions
+    )
+    assert "source_missing_logs_comparison.tool_scope_by_project" in joined_instructions
+    assert "Do not inspect unrelated projects or unrelated source_keys" in joined_instructions
+    assert "do not broaden this into a full daily analysis" in joined_instructions
     assert "previous_analysis severity is WARNING or CRITICAL" in joined_instructions
     assert "do not preserve the previous severity by inertia" in joined_instructions
+
     assert "scanner/probe 4xx responses or intended 403 access restrictions remain INFO" in (
         joined_instructions
     )
     assert "coverage_gaps must describe current_coverage only" in joined_instructions
     assert "Do not copy previous_analysis coverage_snapshot" in joined_instructions
-    assert "history_comparison.changed_sources belong in trend_summary or evidence" in (
+    assert "source_missing_logs_comparison.changed_sources belong in trend_summary or evidence" in (
         joined_instructions
     )
     assert "previous_analysis shows the same known watch-only pattern" in joined_instructions
@@ -389,12 +398,16 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert "available_tools is an inventory of capabilities, not evidence" in joined_instructions
     assert "Do not write inspect_proxy_activity results" in joined_instructions
     assert "unless current tool_results contain those outputs" in joined_instructions
+    assert "label the report as scoped" in joined_instructions
+    assert "current tool evidence only covers" in joined_instructions
+    assert "do not write overall log coverage" in joined_instructions
+    assert "no scoped evidence suggests a broader reanalysis was required" in joined_instructions
     assert "When no current tool_results are present" in joined_instructions
     assert "consistent with previous_analysis" in joined_instructions
     assert "avoid fresh-detection wording" in joined_instructions
     assert "detected, found, grouped, active, currently banning" in joined_instructions
     assert "unless current tool_results explicitly prove it" in joined_instructions
-    assert "Line counts are coverage metadata only" in joined_instructions
+    assert "Line counts are missing-log metadata only" in joined_instructions
     assert "A line count does not prove status codes" in joined_instructions
     assert "routes, paths, bans, upstream errors" in joined_instructions
     assert "no service impact" in joined_instructions
@@ -592,12 +605,13 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
         "zero_line_sources": [],
         "unavailable_sources": ["landingpage.nginx"],
     }
-    assert user_prompt["history_comparison"] == {
+    assert user_prompt["source_missing_logs_comparison"] == {
         "available": True,
-        "coverage_changed": False,
+        "missing_logs_changed": False,
         "changed_sources": [],
+        "tool_scope_by_project": {},
         "recommended_action": "final_report",
-        "rationale": "Previous and current source coverage metadata match.",
+        "rationale": "Previous and current source missing-log state metadata match.",
     }
     assert user_prompt["previous_analysis"] == {
         "analysis_date": "2026-05-18",
@@ -621,10 +635,156 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
         cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     )
     assert followup_prompt["previous_analysis"] == user_prompt["previous_analysis"]
-    assert followup_prompt["history_comparison"] == user_prompt["history_comparison"]
+    assert (
+        followup_prompt["source_missing_logs_comparison"]
+        == user_prompt["source_missing_logs_comparison"]
+    )
     assert followup_prompt["current_coverage"] == user_prompt["current_coverage"]
     assert followup_prompt["evidence_mode"] == "current_tool_results_available"
     assert followup_prompt["current_tool_result_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history() -> None:
+    full_mcp_client = FakeMcpWorkflowClient()
+    full_llm_provider = MockProvider()
+    full_llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "group_errors",
+                        "arguments": {"project_name": "landingpage"},
+                    }
+                ],
+            }
+        ),
+        usage=Usage(prompt_tokens=120, completion_tokens=30, total_tokens=150, cost_usd=0.01),
+    )
+    full_llm_provider.queue_text_response(
+        json.dumps({"action": "read_skills", "skill_names": ["bot_detection"]}),
+        usage=Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120, cost_usd=0.008),
+    )
+    full_llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Full analysis used tools and optional skill guidance.",
+                "severity": "INFO",
+                "severity_rationale": "INFO because tool results found no service impact.",
+                "key_findings": ["Tool loop completed."],
+                "evidence": ["group_errors and bot_detection were reviewed."],
+                "coverage_gaps": [],
+                "recommendations": "Continue monitoring.",
+                "watch_only_items": ["Routine bot traffic."],
+                "trend_summary": "No previous structured baseline was available.",
+            }
+        ),
+        usage=Usage(prompt_tokens=140, completion_tokens=50, total_tokens=190, cost_usd=0.012),
+    )
+    full_agent = MonitoringWorkflowAgent(
+        full_mcp_client,
+        llm_provider=full_llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    full_context: LogAnalysisAgentContext = await full_agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    stable_mcp_client = FakeMcpWorkflowClient()
+    stable_llm_provider = MockProvider()
+    stable_llm_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "final_report",
+                "summary": "Stable history allowed a metadata-only delta report.",
+                "severity": "INFO",
+                "severity_rationale": (
+                    "INFO because current missing-log state matches the prior clean run."
+                ),
+                "key_findings": ["No missing-log state delta was detected."],
+                "evidence": ["Current missing-log metadata matched previous structured history."],
+                "coverage_gaps": [],
+                "recommendations": "Continue monitoring.",
+                "watch_only_items": ["Routine bot traffic."],
+                "trend_summary": "No material change from the previous run.",
+            }
+        ),
+        usage=Usage(prompt_tokens=90, completion_tokens=35, total_tokens=125, cost_usd=0.006),
+    )
+    previous_analysis = LogAnalysisOut(
+        id=8,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status="succeeded",
+        summary="Known scanner noise only.",
+        severity="INFO",
+        trend_summary="Scanner noise was stable.",
+        deterministic_fingerprint={"report": {"severity": "INFO"}},
+        evidence_fingerprints=["evidence:abc"],
+        known_patterns=[{"pattern": "Routine bot traffic."}],
+        coverage_snapshot={
+            "totals": {
+                "project_count": 1,
+                "source_count": 2,
+                "zero_line_sources": 1,
+            },
+            "projects": [
+                {
+                    "project_name": "landingpage",
+                    "sources": [
+                        {
+                            "source_key": "backend",
+                            "status": "collected",
+                            "line_count": 120,
+                            "zero_lines": False,
+                        },
+                        {
+                            "source_key": "nginx",
+                            "status": "unavailable",
+                            "line_count": 0,
+                            "zero_lines": True,
+                        },
+                    ],
+                }
+            ],
+        },
+        fingerprint_version="log-analysis-fingerprint-v1",
+    )
+    stable_agent = MonitoringWorkflowAgent(
+        stable_mcp_client,
+        llm_provider=stable_llm_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    stable_context: LogAnalysisAgentContext = await stable_agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+        previous_analysis=previous_analysis,
+    )
+
+    stable_prompt = json.loads(stable_context.prompt.user_prompt)
+    assert stable_prompt["next_required_action"] == "final_report"
+    assert stable_prompt["evidence_mode"] == "metadata_and_previous_analysis_only"
+    assert stable_prompt["current_tool_result_count"] == 0
+    assert stable_context.tool_results == []
+    assert len(stable_llm_provider.requests) == 1
+    assert stable_context.llm_tokens_used < full_context.llm_tokens_used
+    assert stable_context.llm_cost_usd < full_context.llm_cost_usd
+    assert len(stable_llm_provider.requests) < len(full_llm_provider.requests)
 
 
 @pytest.mark.asyncio
@@ -635,15 +795,15 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage() -> Non
         json.dumps(
             {
                 "action": "final_report",
-                "summary": "Coverage changed.",
+                "summary": "Missing-log state changed.",
                 "severity": "INFO",
-                "severity_rationale": "Coverage changed but no report was escalated.",
-                "key_findings": ["Coverage changed."],
-                "evidence": ["history_comparison showed changed coverage."],
+                "severity_rationale": "Missing-log state changed but no report was escalated.",
+                "key_findings": ["Missing-log state changed."],
+                "evidence": ["source_missing_logs_comparison showed changed missing-log state."],
                 "coverage_gaps": [],
-                "recommendations": "Inspect changed coverage.",
+                "recommendations": "Inspect changed missing-log state.",
                 "watch_only_items": [],
-                "trend_summary": "Coverage changed.",
+                "trend_summary": "Missing-log state changed.",
             }
         )
     )
@@ -703,14 +863,15 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage() -> Non
     )
 
     user_prompt = json.loads(context.prompt.user_prompt)
-    assert user_prompt["history_comparison"] == {
+    assert user_prompt["source_missing_logs_comparison"] == {
         "available": True,
-        "coverage_changed": True,
+        "missing_logs_changed": True,
         "changed_sources": ["landingpage.backend"],
+        "tool_scope_by_project": {"landingpage": ["backend"]},
         "recommended_action": "call_tools",
         "rationale": (
-            "Previous and current source coverage differ; call deterministic tools "
-            "before final_report."
+            "Previous and current source missing-log state differ; call deterministic "
+            "tools scoped to changed_sources before final_report."
         ),
     }
     assert user_prompt["current_coverage"] == {
@@ -727,7 +888,7 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage() -> Non
     assert "projects" not in user_prompt["previous_analysis"]["coverage_snapshot"]
     assert user_prompt["next_required_action"] == "call_tools"
     assert user_prompt["final_report_allowed"] is False
-    assert user_prompt["evidence_mode"] == "history_changed_requires_tools"
+    assert user_prompt["evidence_mode"] == "source_missing_logs_changed_requires_tools"
 
 
 @pytest.mark.asyncio
@@ -742,7 +903,7 @@ async def test_monitoring_workflow_agent_requires_tools_for_previous_warning() -
                 "severity": "WARNING",
                 "severity_rationale": "Prior warning should be verified.",
                 "key_findings": ["Previous run had 500s."],
-                "evidence": ["history_comparison required tools."],
+                "evidence": ["source_missing_logs_comparison required tools."],
                 "coverage_gaps": [],
                 "recommendations": "Verify with deterministic tools.",
                 "watch_only_items": [],
@@ -809,10 +970,11 @@ async def test_monitoring_workflow_agent_requires_tools_for_previous_warning() -
     )
 
     user_prompt = json.loads(context.prompt.user_prompt)
-    assert user_prompt["history_comparison"] == {
+    assert user_prompt["source_missing_logs_comparison"] == {
         "available": True,
-        "coverage_changed": False,
+        "missing_logs_changed": False,
         "changed_sources": [],
+        "tool_scope_by_project": {},
         "recommended_action": "call_tools",
         "rationale": (
             "Previous analysis severity was WARNING; call deterministic tools before "
@@ -822,7 +984,7 @@ async def test_monitoring_workflow_agent_requires_tools_for_previous_warning() -
     }
     assert user_prompt["next_required_action"] == "call_tools"
     assert user_prompt["final_report_allowed"] is False
-    assert user_prompt["evidence_mode"] == "history_changed_requires_tools"
+    assert user_prompt["evidence_mode"] == "source_missing_logs_changed_requires_tools"
 
 
 @pytest.mark.asyncio
@@ -1229,7 +1391,10 @@ async def test_monitoring_workflow_agent_rejects_unavailable_skill_reads() -> No
         private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
     )
 
-    with pytest.raises(ValueError, match="requested unavailable optional skill"):
+    with pytest.raises(
+        LogAnalysisAgentError,
+        match="requested unavailable optional skill",
+    ) as error_info:
         await agent.run_log_analysis(
             analysis_date=date(2026, 5, 19),
             log_window=LogCollectionWindow(
@@ -1239,6 +1404,8 @@ async def test_monitoring_workflow_agent_rejects_unavailable_skill_reads() -> No
                 until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
             ),
         )
+    assert isinstance(error_info.value.__cause__, ValueError)
+    assert error_info.value.collect_logs is not None
 
 
 @pytest.mark.asyncio
@@ -1306,7 +1473,7 @@ async def test_monitoring_workflow_agent_rejects_unknown_tool_requests() -> None
         private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
     )
 
-    with pytest.raises(ValueError, match="requested unavailable MCP tool"):
+    with pytest.raises(LogAnalysisAgentError, match="requested unavailable MCP tool") as error_info:
         await agent.run_log_analysis(
             analysis_date=date(2026, 5, 19),
             log_window=LogCollectionWindow(
@@ -1316,6 +1483,8 @@ async def test_monitoring_workflow_agent_rejects_unknown_tool_requests() -> None
                 until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
             ),
         )
+    assert isinstance(error_info.value.__cause__, ValueError)
+    assert error_info.value.collect_logs is not None
 
 
 @pytest.mark.asyncio
@@ -1337,7 +1506,10 @@ async def test_monitoring_workflow_agent_rejects_invalid_final_report() -> None:
         private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
     )
 
-    with pytest.raises(ValueError, match="LLM final report did not match expected shape"):
+    with pytest.raises(
+        LogAnalysisAgentError,
+        match="LLM final report did not match expected shape",
+    ) as error_info:
         await agent.run_log_analysis(
             analysis_date=date(2026, 5, 19),
             log_window=LogCollectionWindow(
@@ -1347,6 +1519,8 @@ async def test_monitoring_workflow_agent_rejects_invalid_final_report() -> None:
                 until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
             ),
         )
+    assert isinstance(error_info.value.__cause__, ValueError)
+    assert error_info.value.collect_logs is not None
 
 
 @pytest.mark.asyncio

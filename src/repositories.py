@@ -118,6 +118,45 @@ class LogAnalysisRepository:
             return None
         return LogAnalysisOut.from_model(analysis)
 
+    async def recent_history(self, *, limit: int = 5) -> list[LogAnalysisOut]:
+        """Return recent successful log-analysis reports for operator inspection."""
+
+        analyses: list[LogAnalysis] = (
+            await self.filter(status=RunStatus.SUCCEEDED).order_by("-analysis_date").limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def critical_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
+        """Return recent critical log-analysis reports."""
+
+        analyses: list[LogAnalysis] = (
+            await self.model.objects.critical().order_by("-analysis_date").limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def unsent_emails(self, *, limit: int = 50) -> list[LogAnalysisOut]:
+        """Return log-analysis reports whose notification email is still unsent."""
+
+        analyses: list[LogAnalysis] = (
+            await self.model.objects.unsent_emails().order_by("-analysis_date").limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def retention_candidates(
+        self,
+        *,
+        older_than_days: int,
+        limit: int = 100,
+    ) -> list[LogAnalysisOut]:
+        """Return log-analysis reports old enough for retention cleanup."""
+
+        analyses: list[LogAnalysis] = (
+            await self.model.objects.older_than(older_than_days)
+            .order_by("analysis_date")
+            .limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
 
 class SitemapAnalysisRepository:
     """Database access boundary for sitemap-analysis rows."""

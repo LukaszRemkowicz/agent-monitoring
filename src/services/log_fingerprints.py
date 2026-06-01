@@ -26,7 +26,9 @@ class LogAnalysisFingerprintBuilder:
         log_window_since: datetime,
         log_window_until: datetime,
     ) -> LogAnalysisFingerprintPacket:
-        coverage_snapshot: dict[str, Any] = _build_coverage_snapshot(collect_logs)
+        coverage_snapshot: dict[str, Any] = LogAnalysisFingerprintBuilder.build_coverage_snapshot(
+            collect_logs
+        )
         tool_fingerprints: list[dict[str, str]] = _build_tool_fingerprints(tool_results)
         return LogAnalysisFingerprintPacket(
             fingerprint_version=LOG_ANALYSIS_FINGERPRINT_VERSION,
@@ -68,64 +70,69 @@ class LogAnalysisFingerprintBuilder:
             coverage_snapshot=coverage_snapshot,
         )
 
+    @staticmethod
+    def build_coverage_snapshot(collect_logs: CollectLogsArtifact) -> dict[str, Any]:
+        """Summarize which log sources were observable without needing a final report.
 
-def _build_coverage_snapshot(collect_logs: CollectLogsArtifact) -> dict[str, Any]:
-    """Summarize which log sources were observable in this run.
+        This snapshot is the deterministic coverage baseline for later comparison.
+        It records project/source status, line counts, zero-line observations, and
+        unavailable-source errors without copying raw log lines into Postgres. A
+        future run can compare this object with its own snapshot before the LLM
+        decides whether a source coverage change is meaningful.
 
-    This snapshot is the deterministic coverage baseline for later comparison.
-    It records project/source status, line counts, zero-line observations, and
-    unavailable-source errors without copying raw log lines into Postgres. A
-    future run can compare this object with its own snapshot before the LLM
-    decides whether a source coverage change is meaningful.
-    """
+        The service also uses this method when the workflow fails after
+        `collect_logs`, before any final report exists. That lets failed runs
+        still persist useful coverage facts for debugging and for the next run's
+        history comparison.
+        """
 
-    projects: list[dict[str, Any]] = []
-    source_count = 0
-    collected_source_count = 0
-    unavailable_source_count = 0
-    zero_line_source_count = 0
+        projects: list[dict[str, Any]] = []
+        source_count = 0
+        collected_source_count = 0
+        unavailable_source_count = 0
+        zero_line_source_count = 0
 
-    for project in collect_logs.projects:
-        sources: list[dict[str, Any]] = []
-        for source in project.sources:
-            source_count += 1
-            if source.status == "collected":
-                collected_source_count += 1
-            if source.status == "unavailable":
-                unavailable_source_count += 1
-            if source.line_count == 0:
-                zero_line_source_count += 1
-            sources.append(
+        for project in collect_logs.projects:
+            sources: list[dict[str, Any]] = []
+            for source in project.sources:
+                source_count += 1
+                if source.status == "collected":
+                    collected_source_count += 1
+                if source.status == "unavailable":
+                    unavailable_source_count += 1
+                if source.line_count == 0:
+                    zero_line_source_count += 1
+                sources.append(
+                    {
+                        "source_key": source.source_key,
+                        "source_type": source.source_type,
+                        "status": source.status,
+                        "line_count": source.line_count,
+                        "byte_count": source.byte_count,
+                        "zero_lines": source.line_count == 0,
+                        "has_output_file": bool(source.output_file),
+                        "error": source.error,
+                    }
+                )
+            projects.append(
                 {
-                    "source_key": source.source_key,
-                    "source_type": source.source_type,
-                    "status": source.status,
-                    "line_count": source.line_count,
-                    "byte_count": source.byte_count,
-                    "zero_lines": source.line_count == 0,
-                    "has_output_file": bool(source.output_file),
-                    "error": source.error,
+                    "project_name": project.project_name,
+                    "snapshot_dir": project.snapshot_dir,
+                    "warnings": project.warnings,
+                    "sources": sources,
                 }
             )
-        projects.append(
-            {
-                "project_name": project.project_name,
-                "snapshot_dir": project.snapshot_dir,
-                "warnings": project.warnings,
-                "sources": sources,
-            }
-        )
 
-    return {
-        "projects": projects,
-        "totals": {
-            "projects": len(collect_logs.projects),
-            "sources": source_count,
-            "collected_sources": collected_source_count,
-            "unavailable_sources": unavailable_source_count,
-            "zero_line_sources": zero_line_source_count,
-        },
-    }
+        return {
+            "projects": projects,
+            "totals": {
+                "projects": len(collect_logs.projects),
+                "sources": source_count,
+                "collected_sources": collected_source_count,
+                "unavailable_sources": unavailable_source_count,
+                "zero_line_sources": zero_line_source_count,
+            },
+        }
 
 
 def _build_tool_fingerprints(

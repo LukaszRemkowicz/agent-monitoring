@@ -12,29 +12,18 @@ from tortoise.exceptions import DBConnectionError, IntegrityError
 
 from conf import settings
 from db.lifecycle import database_lifespan
-from exceptions import McpClientError, PrivateMonitoringContextError
+from exceptions import (
+    LogAnalysisAgentError,
+    McpClientError,
+    PrivateMonitoringContextError,
+    format_exception_chain,
+)
 from logging_config import get_logger
 
 P = ParamSpec("P")
 T = TypeVar("T")
 AsyncCallable = Callable[P, Coroutine[Any, Any, T]]
 logger = get_logger(__name__)
-
-
-def _format_exception_chain(exc: BaseException) -> str:
-    """Return a compact message with chained exception details."""
-
-    messages: list[str] = [str(exc)]
-    current: BaseException | None = exc.__cause__ or exc.__context__
-    while current is not None:
-        current_message: str = str(current)
-        current_type: str = current.__class__.__name__
-        if current_message:
-            messages.append(f"{current_type}: {current_message}")
-        else:
-            messages.append(current_type)
-        current = current.__cause__ or current.__context__
-    return " Caused by: ".join(messages)
 
 
 def as_async() -> Callable[[AsyncCallable[P, T]], Callable[P, T]]:
@@ -132,6 +121,19 @@ def db[**P, T](
                     "mount it into Docker Compose, or set MONITORING_PRIVATE_CONTEXT_PATH "
                     "to the correct path."
                 ) from None
+            except LogAnalysisAgentError as exc:
+                error_detail: str = format_exception_chain(exc)
+                logger.error(
+                    "log-analysis agent failed",
+                    extra={
+                        "event": "log_analysis_agent_failed",
+                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "error": error_detail,
+                    },
+                )
+                raise click.ClickException(
+                    "Log-analysis workflow failed.\n" f"Reason: {error_detail}."
+                ) from None
             except ProviderConfigurationError as exc:
                 logger.error(
                     "LLM provider configuration failed",
@@ -149,19 +151,19 @@ def db[**P, T](
                     "The variable name must be OPENAI_API_KEY, not OPEN_API_KEY."
                 ) from None
             except ProviderExecutionError as exc:
-                error_detail: str = _format_exception_chain(exc)
+                provider_error_detail: str = format_exception_chain(exc)
                 logger.error(
                     "LLM provider request failed",
                     extra={
                         "event": "llm_provider_request_failed",
                         "provider": settings.MONITORING_LLM_PROVIDER,
-                        "error": error_detail,
+                        "error": provider_error_detail,
                     },
                 )
                 raise click.ClickException(
                     "LLM provider request failed "
                     f"(provider={settings.MONITORING_LLM_PROVIDER}).\n"
-                    f"Reason: {error_detail}."
+                    f"Reason: {provider_error_detail}."
                 ) from None
 
         return wrapper

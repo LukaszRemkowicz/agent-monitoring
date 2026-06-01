@@ -32,6 +32,12 @@ workflow work should:
 - save summaries, findings, severity, recommendations, and token/cost metadata
 - send report emails through a dedicated notification boundary
 
+History-aware log analysis is documented in
+`infra/docs/log_analysis_history_comparison.md`. That document explains how the
+app compares the latest saved report with current collection coverage, when it
+allows a cheaper metadata-and-history report, and when it forces scoped or full
+deterministic MCP tool evidence.
+
 Runtime settings are exposed through `src/conf.py`, following
 the Django-style `settings` pattern. Tortoise models live in
 `src/db/models.py`. Tortoise-specific config and database URL

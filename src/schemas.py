@@ -471,18 +471,19 @@ class PreviousLogAnalysisPromptContext(BaseModel):
     fingerprint_version: str
 
 
-class LogAnalysisHistoryComparison(BaseModel):
-    """Small deterministic hint comparing current collection coverage to history."""
+class LogAnalysisSourceMissingLogsComparison(BaseModel):
+    """Small deterministic hint comparing current collection missing-log state to history."""
 
     available: bool
-    coverage_changed: bool = False
+    missing_logs_changed: bool = False
     changed_sources: list[str] = Field(default_factory=list)
+    tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
     recommended_action: Literal["final_report", "call_tools"]
     rationale: str
 
 
 class LogAnalysisCurrentCoverage(BaseModel):
-    """Current-run collection coverage facts for report coverage gaps."""
+    """Current-run collection missing-log state facts for report coverage gaps."""
 
     zero_line_sources: list[str] = Field(default_factory=list)
     unavailable_sources: list[str] = Field(default_factory=list)
@@ -491,7 +492,7 @@ class LogAnalysisCurrentCoverage(BaseModel):
 LogAnalysisEvidenceMode = Literal[
     "mcp_tool_results_required",
     "metadata_and_previous_analysis_only",
-    "history_changed_requires_tools",
+    "source_missing_logs_changed_requires_tools",
     "current_tool_results_available",
 ]
 LogAnalysisNextRequiredAction = Literal["call_tools", "final_report"]
@@ -511,7 +512,7 @@ class LogAnalysisPromptContext(BaseModel):
     completed_steps: list[str]
     historical_context_available: bool = False
     previous_analysis: PreviousLogAnalysisPromptContext | None = None
-    history_comparison: LogAnalysisHistoryComparison | None = None
+    source_missing_logs_comparison: LogAnalysisSourceMissingLogsComparison | None = None
     current_coverage: LogAnalysisCurrentCoverage
     evidence_mode: LogAnalysisEvidenceMode
     current_tool_result_count: int = 0

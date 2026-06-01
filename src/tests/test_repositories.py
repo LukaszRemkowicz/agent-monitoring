@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -123,6 +123,59 @@ async def test_log_analysis_repository_get_latest_before_date_returns_previous_s
     assert baseline.evidence_fingerprints == ["scanner-family:generic-env-probe"]
     assert baseline.known_patterns == [{"family": "scanner", "status": "watch_only"}]
     assert baseline.coverage_snapshot == {"landingpage": {"backend": "collected"}}
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_repository_returns_operational_reads() -> None:
+    repository = LogAnalysisRepository()
+    today = date.today()
+    old_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=30),
+        status="succeeded",
+        summary="Old report for retention cleanup.",
+        email_sent=True,
+    )
+    successful_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=2),
+        status="succeeded",
+        summary="Recent successful report.",
+        email_sent=True,
+    )
+    critical_unsent_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=1),
+        status="failed",
+        severity=LogAnalysis.Severity.CRITICAL.value,
+        summary="Failed critical report.",
+        email_sent=False,
+    )
+    older_critical_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=3),
+        status="failed",
+        severity=LogAnalysis.Severity.CRITICAL.value,
+        summary="Older critical report.",
+        email_sent=True,
+    )
+    warning_unsent_report = await LogAnalysisFactory.create(
+        analysis_date=today,
+        status="succeeded",
+        severity=LogAnalysis.Severity.WARNING.value,
+        summary="Warning report awaiting email.",
+        email_sent=False,
+    )
+
+    recent_history = await repository.recent_history(limit=2)
+    critical_reports = await repository.critical_reports(limit=1)
+    unsent_emails = await repository.unsent_emails(limit=1)
+    retention_candidates = await repository.retention_candidates(older_than_days=5, limit=1)
+
+    assert [report.id for report in recent_history] == [
+        warning_unsent_report.id,
+        successful_report.id,
+    ]
+    assert [report.id for report in critical_reports] == [critical_unsent_report.id]
+    assert older_critical_report.id != critical_unsent_report.id
+    assert [report.id for report in unsent_emails] == [warning_unsent_report.id]
+    assert [report.id for report in retention_candidates] == [old_report.id]
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ import main
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
-from exceptions import McpClientError, PrivateMonitoringContextError
+from exceptions import LogAnalysisAgentError, McpClientError, PrivateMonitoringContextError
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
@@ -973,6 +973,51 @@ def test_db_decorator_formats_llm_provider_execution_error_cause(
     assert "OpenAI provider request failed" in output
     assert "RuntimeError" in output
     assert "unsupported parameter 'temperature'" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_log_analysis_agent_error_cause(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        try:
+            try:
+                raise RuntimeError("Rate limit reached for gpt-4.1-mini")
+            except RuntimeError as exc:
+                raise ProviderExecutionError("OpenAI provider request failed") from exc
+        except ProviderExecutionError as exc:
+            raise LogAnalysisAgentError("OpenAI provider request failed") from exc
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Log-analysis workflow failed" in output
+    assert "OpenAI provider request failed" in output
+    assert "ProviderExecutionError" in output
+    assert "Rate limit reached for gpt-4.1-mini" in output
     assert "Traceback" not in output
 
 

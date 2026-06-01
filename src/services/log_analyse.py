@@ -5,9 +5,11 @@ from time import monotonic
 from typing import TYPE_CHECKING
 
 from db.models import RunStatus
+from exceptions import LogAnalysisAgentError, format_exception_chain
 from logging_config import get_logger
 from repositories import LLMCallRepository, LogAnalysisRepository
 from schemas import (
+    CollectLogsArtifact,
     LogAnalysisAgentContext,
     LogAnalysisFingerprintPacket,
     LogAnalysisIn,
@@ -98,6 +100,21 @@ class LogAnalysisService:
             )
         except Exception as exc:
             execution_time_seconds: float = round(monotonic() - execution_started_at, 3)
+            error_detail: str = format_exception_chain(exc)
+            partial_collect_logs: CollectLogsArtifact | None = (
+                exc.collect_logs if isinstance(exc, LogAnalysisAgentError) else None
+            )
+            failure_artifact: dict[str, object] = self._build_failure_artifact(
+                analysis_date=analysis_date,
+                log_window=log_window,
+                exc=exc,
+                partial_collect_logs=partial_collect_logs,
+            )
+            failure_coverage_snapshot: dict[str, object] = (
+                LogAnalysisFingerprintBuilder.build_coverage_snapshot(partial_collect_logs)
+                if partial_collect_logs is not None
+                else {}
+            )
             logger.error(
                 "log-analysis workflow failed",
                 extra={
@@ -105,7 +122,7 @@ class LogAnalysisService:
                     "analysis_date": str(analysis_date),
                     "failure_stage": "log_analysis",
                     "execution_time_seconds": execution_time_seconds,
-                    "error": str(exc),
+                    "error": error_detail,
                 },
             )
             await self.repository.update(
@@ -113,7 +130,26 @@ class LogAnalysisService:
                 status=RunStatus.FAILED,
                 finished_at=datetime.now(UTC),
                 failure_stage="log_analysis",
-                error_message=str(exc),
+                severity="CRITICAL",
+                summary="Log-analysis workflow failed before a final report was produced.",
+                key_findings=[
+                    f"log_analysis failed with {type(exc).__name__}: {error_detail}",
+                ],
+                recommendations=(
+                    "Inspect command logs, MCP availability, and persisted failure details; "
+                    "rerun with --force after the underlying issue is fixed."
+                ),
+                trend_summary="No trend summary is available because the workflow failed.",
+                mcp_artifact=failure_artifact,
+                mcp_collect_logs_id=(
+                    self._resolve_collect_logs_reference(partial_collect_logs)
+                    if partial_collect_logs is not None
+                    else None
+                ),
+                coverage_snapshot=failure_coverage_snapshot,
+                log_window_since=log_window.since_datetime,
+                log_window_until=log_window.until_datetime,
+                error_message=error_detail,
                 execution_time_seconds=execution_time_seconds,
             )
             raise
@@ -135,6 +171,7 @@ class LogAnalysisService:
             recommendations=agent_context.final_report.recommendations,
             trend_summary=agent_context.final_report.trend_summary,
             mcp_artifact=agent_context.model_dump(mode="json"),
+            mcp_collect_logs_id=self._resolve_collect_logs_reference(agent_context.collect_logs),
             log_window_since=log_window.since_datetime,
             log_window_until=log_window.until_datetime,
             gpt_tokens_used=agent_context.llm_tokens_used,
@@ -156,6 +193,40 @@ class LogAnalysisService:
             },
         )
         return LogAnalysisWorkflowResult(analysis=updated_analysis, agent_context=agent_context)
+
+    @staticmethod
+    def _build_failure_artifact(
+        *,
+        analysis_date: date,
+        log_window: LogCollectionWindow,
+        exc: Exception,
+        partial_collect_logs: CollectLogsArtifact | None,
+    ) -> dict[str, object]:
+        artifact: dict[str, object] = {
+            "analysis_date": str(analysis_date),
+            "log_window": {
+                "since": log_window.since,
+                "until": log_window.until,
+            },
+            "error": {
+                "stage": "log_analysis",
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "detail": format_exception_chain(exc),
+            },
+        }
+        if partial_collect_logs is not None:
+            artifact["collect_logs"] = partial_collect_logs.model_dump(mode="json")
+        return artifact
+
+    @staticmethod
+    def _resolve_collect_logs_reference(collect_logs: CollectLogsArtifact) -> str | None:
+        if collect_logs.session_id:
+            return collect_logs.session_id
+        for project in collect_logs.projects:
+            if project.snapshot_dir:
+                return project.snapshot_dir
+        return None
 
     @staticmethod
     def create_log_collection_window(analysis_date: date) -> LogCollectionWindow:
