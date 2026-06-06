@@ -16,6 +16,7 @@ from schemas import (
     McpReadResourceResponse,
     McpServiceStatus,
     McpServiceStatusResponse,
+    McpToolName,
     McpToolResponse,
     McpToolResultError,
     ProjectManifestSummary,
@@ -94,13 +95,17 @@ class McpWorkflowClient:
     async def get_workflow_bundle(self) -> WorkflowBootstrap:
         """Return the daily log workflow bootstrap bundle from MCP."""
 
-        structured_content: StructuredContent = await self.call_tool("analyze_daily_log_bundle")
+        structured_content: StructuredContent = await self.call_tool(
+            McpToolName.ANALYZE_DAILY_LOG_BUNDLE
+        )
         return WorkflowBootstrap.model_validate(structured_content.model_dump())
 
     async def get_sitemap_workflow_bundle(self) -> WorkflowBootstrap:
         """Return the sitemap workflow bootstrap bundle from MCP."""
 
-        structured_content: StructuredContent = await self.call_tool("analyze_sitemap_bundle")
+        structured_content: StructuredContent = await self.call_tool(
+            McpToolName.ANALYZE_SITEMAP_BUNDLE
+        )
         return WorkflowBootstrap.model_validate(structured_content.model_dump())
 
     async def collect_logs(
@@ -112,10 +117,10 @@ class McpWorkflowClient:
         """Collect the 24h workflow log artifact for all JWT-authorized projects."""
 
         response: dict[str, Any] = await self._make_call(
-            "collect_logs",
+            McpToolName.COLLECT_LOGS,
             {"since": since, "until": until},
         )
-        self._raise_tool_result_error_if_present(response, "collect_logs")
+        self._raise_tool_result_error_if_present(response, McpToolName.COLLECT_LOGS)
         try:
             collect_logs_response: McpCollectLogsResponse = McpCollectLogsResponse.model_validate(
                 response
@@ -127,27 +132,27 @@ class McpWorkflowClient:
                     exc,
                 ),
                 mcp_url=self.base_url,
-                tool_name="collect_logs",
+                tool_name=McpToolName.COLLECT_LOGS,
             ) from exc
         if collect_logs_response.error is not None:
             raise McpClientError(
                 f"MCP collect_logs error: {collect_logs_response.error.message}",
                 mcp_url=self.base_url,
-                tool_name="collect_logs",
+                tool_name=McpToolName.COLLECT_LOGS,
             )
         if collect_logs_response.result is None:
             raise McpClientError(
                 "MCP collect_logs response did not include a result object.",
                 mcp_url=self.base_url,
-                tool_name="collect_logs",
+                tool_name=McpToolName.COLLECT_LOGS,
             )
         return collect_logs_response.result.structured_content
 
     async def list_projects(self) -> list[ProjectManifestSummary]:
         """Return projects available to the authenticated MCP caller."""
 
-        response: dict[str, Any] = await self._make_call("list_projects")
-        self._raise_tool_result_error_if_present(response, "list_projects")
+        response: dict[str, Any] = await self._make_call(McpToolName.LIST_PROJECTS)
+        self._raise_tool_result_error_if_present(response, McpToolName.LIST_PROJECTS)
         try:
             projects_response: McpProjectManifestListResponse = (
                 McpProjectManifestListResponse.model_validate(response)
@@ -159,19 +164,19 @@ class McpWorkflowClient:
                     exc,
                 ),
                 mcp_url=self.base_url,
-                tool_name="list_projects",
+                tool_name=McpToolName.LIST_PROJECTS,
             ) from exc
         if projects_response.error is not None:
             raise McpClientError(
                 f"MCP list_projects error: {projects_response.error.message}",
                 mcp_url=self.base_url,
-                tool_name="list_projects",
+                tool_name=McpToolName.LIST_PROJECTS,
             )
         if projects_response.result is None:
             raise McpClientError(
                 "MCP list_projects response did not include a result object.",
                 mcp_url=self.base_url,
-                tool_name="list_projects",
+                tool_name=McpToolName.LIST_PROJECTS,
             )
         return projects_response.result.structured_content.result
 
@@ -267,7 +272,7 @@ class McpWorkflowClient:
         """Read one MCP resource and return its validated text content."""
 
         response: dict[str, Any] = await self._make_call(
-            name="resources/read",
+            name=McpToolName.READ_RESOURCE,
             request_payload=self._build_resource_read_payload(uri),
         )
         try:
@@ -281,25 +286,25 @@ class McpWorkflowClient:
                     exc,
                 ),
                 mcp_url=self.base_url,
-                tool_name="resources/read",
+                tool_name=McpToolName.READ_RESOURCE,
             ) from exc
         if resource_response.error is not None:
             raise McpClientError(
                 f"MCP resource read error: {resource_response.error.message}",
                 mcp_url=self.base_url,
-                tool_name="resources/read",
+                tool_name=McpToolName.READ_RESOURCE,
             )
         if resource_response.result is None:
             raise McpClientError(
                 "MCP resource response did not include a result object.",
                 mcp_url=self.base_url,
-                tool_name="resources/read",
+                tool_name=McpToolName.READ_RESOURCE,
             )
         if not resource_response.result.contents:
             raise McpClientError(
                 "MCP resource response did not include resource contents.",
                 mcp_url=self.base_url,
-                tool_name="resources/read",
+                tool_name=McpToolName.READ_RESOURCE,
             )
         return resource_response.result.contents[0].text
 
@@ -461,7 +466,7 @@ class McpWorkflowClient:
         return {
             "jsonrpc": "2.0",
             "id": f"agent-monitoring-{uuid4()}",
-            "method": "resources/read",
+            "method": McpToolName.READ_RESOURCE,
             "params": {
                 "uri": uri,
             },

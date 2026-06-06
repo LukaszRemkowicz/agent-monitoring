@@ -31,13 +31,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     network_mode: host
     dns:
       - 1.1.1.1
       - 8.8.8.8
     environment:
+      TZ: Europe/Warsaw
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: "${DATABASE_PORT_HOST:-5438}"
       DATABASE_NAME: monitoring
@@ -45,6 +44,7 @@ services:
       DATABASE_PASSWORD: monitoring
       DEBUG: "true"
       LOG_COLOR: always
+      MONITORING_AUTO_MIGRATE: "true"
       LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
       MONITORING_PROJECT: landingpage
       MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
@@ -60,49 +60,6 @@ services:
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
     command: ["log_analysis"]
-
-  migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: development
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      - ./src:/app/src
-      - ./migrations:/app/migrations
-      - ./private:/app/private:ro
-    depends_on:
-      db:
-        condition: service_healthy
-    network_mode: host
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    environment:
-      DATABASE_HOST: 127.0.0.1
-      DATABASE_PORT: "${DATABASE_PORT_HOST:-5438}"
-      DATABASE_NAME: monitoring
-      DATABASE_USER: monitoring
-      DATABASE_PASSWORD: monitoring
-      DEBUG: "true"
-      LOG_COLOR: always
-      LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
-      MONITORING_PROJECT: landingpage
-      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
-      EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
-      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
-      EMAIL_PORT: ${EMAIL_PORT:-587}
-      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
-      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
-      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
-      EMAIL_FROM: ${EMAIL_FROM:-}
-      EMAIL_TO: ${EMAIL_TO:-}
-      SITE_DOMAIN: ${SITE_DOMAIN:-}
-      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
-      SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
-    command: ["migrate"]
 
 volumes:
   monitoring-db:

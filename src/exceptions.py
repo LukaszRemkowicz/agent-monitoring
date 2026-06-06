@@ -62,3 +62,11 @@ class LogAnalysisAgentError(RuntimeError):
         self.workflow = workflow
         self.collect_logs = collect_logs
         self.prompt = prompt
+
+
+class LogAnalysisComparisonMissingException(RuntimeError):
+    """Raised when comparison-only behavior is called without a comparison object."""
+
+
+class LogAnalysisHistoryComparisonServiceMissingException(RuntimeError):
+    """Raised when history comparison is enabled without its comparison service."""

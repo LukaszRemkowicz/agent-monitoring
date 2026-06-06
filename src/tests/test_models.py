@@ -45,8 +45,8 @@ def test_model_fields_include_descriptions() -> None:
 
 def test_log_analysis_includes_structured_history_contract_fields() -> None:
     assert (
-        LogAnalysis._meta.fields_map["deterministic_fingerprint"].description
-        == "Compact deterministic facts derived from MCP artifacts and tool results."
+        LogAnalysis._meta.fields_map["fingerprints"].description
+        == "Compact fingerprints derived from MCP artifacts and tool results."
     )
     assert (
         LogAnalysis._meta.fields_map["evidence_fingerprints"].description

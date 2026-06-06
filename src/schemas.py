@@ -1,11 +1,112 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from utils.log_artifacts import format_log_artifact_size
+from utils.byte_size import format_byte_size
+from utils.log_artifacts import collect_log_artifact_byte_count
+
+
+class LogAnalysisSeverity(StrEnum):
+    """Allowed persisted/report severity values for log analysis."""
+
+    INFO = "INFO"
+    WARNING = "WARNING"
+    CRITICAL = "CRITICAL"
+
+
+class RecommendedAction(StrEnum):
+    """Shared recommended next action values for deterministic workflow hints."""
+
+    LLM_MAY_DECIDE = "llm_may_decide"
+    CALL_TOOLS = "call_tools"
+
+
+class LogAnalysisPromptEvidenceKind(StrEnum):
+    """Prompt evidence modes prepared before the LLM tool loop starts."""
+
+    HISTORY_COMPARISON = "history_comparison"
+    GROUPED_ERROR_BASELINE = "grouped_error_baseline"
+
+
+class LogAnalysisGroupedErrorEvidenceLabel(StrEnum):
+    """Labels for compact grouped-error evidence sides in log-analysis prompts."""
+
+    PREVIOUS = "previous"
+    CURRENT = "current"
+
+
+class LogAnalysisHistoryComparisonStatus(StrEnum):
+    """History-comparison availability state for log-analysis prompt evidence."""
+
+    DISABLED = "disabled"
+    UNAVAILABLE = "unavailable"
+    AVAILABLE = "available"
+
+
+class LogSourceCollectionStatus(StrEnum):
+    """Collection status values for one log source in MCP collect_logs output."""
+
+    COLLECTED = "collected"
+    UNAVAILABLE = "unavailable"
+
+
+class LogWorkspace(StrEnum):
+    """MCP log snapshot workspace values."""
+
+    WORKFLOW = "workflow"
+    SESSION = "session"
+
+
+class LogAnalysisEvidenceMode(StrEnum):
+    """Prompt evidence-mode values used to guide LLM decision behavior."""
+
+    MCP_TOOL_RESULTS_REQUIRED = "mcp_tool_results_required"
+    METADATA_AND_PREVIOUS_ANALYSIS_ONLY = "metadata_and_previous_analysis_only"
+    SOURCE_COVERAGE_CHANGED_REQUIRES_TOOLS = "source_coverage_changed_requires_tools"
+    HISTORY_GUARD_REQUIRES_TOOLS = "history_guard_requires_tools"
+    CURRENT_GROUPED_ERRORS_AVAILABLE = "current_grouped_errors_available"
+    CURRENT_TOOL_RESULTS_AVAILABLE = "current_tool_results_available"
+
+
+class LogAnalysisNextRequiredAction(StrEnum):
+    """Next action expected from the log-analysis LLM loop."""
+
+    CALL_TOOLS = "call_tools"
+    FINAL_REPORT = "final_report"
+    CHOOSE_NEXT_ACTION = "choose_next_action"
+
+
+class LogAnalysisAllowedAction(StrEnum):
+    """Allowed top-level actions exposed to the log-analysis LLM."""
+
+    CALL_TOOLS = "call_tools"
+    READ_SKILLS = "read_skills"
+    FINAL_REPORT = "final_report"
+
+
+class LogAnalysisPromptPhase(StrEnum):
+    """Prompt phase values for the log-analysis LLM context."""
+
+    INSPECT_COLLECTED_LOGS = "inspect_collected_logs"
+    FINAL_REPORT = "final_report"
+
+
+class McpToolName(StrEnum):
+    """Shared MCP tool names referenced by deterministic log-analysis code."""
+
+    ANALYZE_DAILY_LOG_BUNDLE = "analyze_daily_log_bundle"
+    ANALYZE_SITEMAP_BUNDLE = "analyze_sitemap_bundle"
+    COLLECT_LOGS = "collect_logs"
+    LIST_PROJECTS = "list_projects"
+    READ_RESOURCE = "resources/read"
+    GROUP_ERRORS = "group_errors"
+    INSPECT_PROXY_ACTIVITY = "inspect_proxy_activity"
+    BUILD_INCIDENT_BUNDLE = "build_incident_bundle"
+    GREP_LOG_SNAPSHOT = "grep_log_snapshot"
 
 
 class McpToolError(BaseModel):
@@ -197,7 +298,7 @@ class CollectedLogSource(BaseModel):
     target: str
     description: str
     stream: Literal["stdout", "stderr"] | None = None
-    status: Literal["collected", "unavailable"]
+    status: LogSourceCollectionStatus
     line_count: int
     byte_count: int
     output_file: str | None = None
@@ -217,7 +318,7 @@ class ProjectCollectLogsArtifact(BaseModel):
 
     requested_project_name: str
     project_name: str
-    workspace: Literal["workflow", "session"]
+    workspace: LogWorkspace
     snapshot_dir: str
     requested_source_keys: list[str] = Field(default_factory=list)
     requested_since: str | None = None
@@ -240,8 +341,8 @@ class CollectLogsArtifact(BaseModel):
     prepared prompt before the app makes any LLM request.
     """
 
-    action: Literal["collect_logs"]
-    workspace: Literal["workflow", "session"]
+    action: Literal[McpToolName.COLLECT_LOGS]
+    workspace: LogWorkspace
     session_id: str | None = None
     requested_project_names: list[str] = Field(default_factory=list)
     next_step_tips: list[str] = Field(default_factory=list)
@@ -378,7 +479,7 @@ class SnapshotAccessGuidance(BaseModel):
     project name, while session ids are only meaningful for session workspaces.
     """
 
-    workspace: Literal["workflow", "session"]
+    workspace: LogWorkspace
     session_id: str | None = None
     session_id_is_for_session_workspace_only: bool
     workflow_followup_arguments: list[str]
@@ -423,14 +524,273 @@ class LogAnalysisCompactCoverageSnapshot(BaseModel):
     totals: LogAnalysisCoverageTotals = Field(default_factory=dict)
 
 
+class LogAnalysisSourceCoverageComparison(BaseModel):
+    """Small deterministic hint comparing current collection source coverage state to history."""
+
+    available: bool
+    source_coverage_changed: bool = False
+    changed_sources: list[str] = Field(default_factory=list)
+    tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    recommended_action: RecommendedAction
+    rationale: str
+
+
+class LogAnalysisGroupedErrorSeenLine(BaseModel):
+    """Line reference shape returned by MCP `group_errors` for first/last sightings."""
+
+    line: str = ""
+    line_number: int = 0
+    line_truncated: bool = False
+    output_file: str = ""
+    source_key: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    def from_mcp_payload(cls, value: Any) -> LogAnalysisGroupedErrorSeenLine | None:
+        """Build a seen-line row from loose MCP group_errors payload data."""
+
+        if not isinstance(value, dict):
+            return None
+        return cls(
+            line=str(value.get("line") or ""),
+            line_number=_int_or_zero(value.get("line_number")),
+            line_truncated=bool(value.get("line_truncated")),
+            output_file=str(value.get("output_file") or ""),
+            source_key=str(value.get("source_key") or ""),
+        )
+
+
+class LogAnalysisGroupedErrorSignal(BaseModel):
+    """One grouped-error fingerprint from MCP `group_errors` output."""
+
+    fingerprint: str
+    project_name: str
+    category: str = ""
+    severity: str = ""
+    count: int = 0
+    source_keys: list[str] = Field(default_factory=list)
+    request_paths: list[str] = Field(default_factory=list)
+    status_codes: list[int] = Field(default_factory=list)
+    levels: list[str] = Field(default_factory=list)
+    message_summary: str = ""
+    first_timestamp: str | None = None
+    last_timestamp: str | None = None
+    first_seen: LogAnalysisGroupedErrorSeenLine | None = None
+    last_seen: LogAnalysisGroupedErrorSeenLine | None = None
+
+    @classmethod
+    def from_mcp_payload(
+        cls,
+        value: Any,
+        *,
+        project_name: str,
+    ) -> LogAnalysisGroupedErrorSignal | None:
+        """Build one grouped-error signal from a loose MCP group row."""
+
+        if not isinstance(value, dict):
+            return None
+        fingerprint: str = str(value.get("fingerprint") or "")
+        if not fingerprint:
+            return None
+        return cls(
+            fingerprint=fingerprint,
+            project_name=project_name,
+            category=str(value.get("category") or ""),
+            severity=str(value.get("severity") or ""),
+            count=_int_or_zero(value.get("count")),
+            source_keys=_string_list(value.get("source_keys")),
+            request_paths=_string_list(value.get("request_paths")),
+            status_codes=_int_list(value.get("status_codes")),
+            levels=_string_list(value.get("levels")),
+            message_summary=str(value.get("message_summary") or ""),
+            first_timestamp=_optional_string(value.get("first_timestamp")),
+            last_timestamp=_optional_string(value.get("last_timestamp")),
+            first_seen=LogAnalysisGroupedErrorSeenLine.from_mcp_payload(value.get("first_seen")),
+            last_seen=LogAnalysisGroupedErrorSeenLine.from_mcp_payload(value.get("last_seen")),
+        )
+
+
+class LogAnalysisGroupedErrorsResult(BaseModel):
+    """MCP `group_errors` structured result shape stored for history comparison."""
+
+    action: McpToolName = McpToolName.GROUP_ERRORS
+    analysis_cautions: list[str] = Field(default_factory=list)
+    grouped_error_count: int = 0
+    groups: list[LogAnalysisGroupedErrorSignal] = Field(default_factory=list)
+    matching_line_count: int = 0
+    max_groups: int = 0
+    next_step_tips: list[str] = Field(default_factory=list)
+    project_name: str = ""
+    requested_project_name: str = ""
+    searched_source_keys: list[str] = Field(default_factory=list)
+    session_id: str | None = None
+    snapshot_dir: str = ""
+    summary: str = ""
+    truncated: bool = False
+    workspace: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @classmethod
+    def from_mcp_payload(cls, structured_content: dict[str, Any]) -> LogAnalysisGroupedErrorsResult:
+        """Build the typed stored result from loose MCP group_errors output."""
+
+        project_name: str = str(structured_content.get("project_name") or "")
+        groups: object = structured_content.get("groups", [])
+        grouped_error_signals: list[LogAnalysisGroupedErrorSignal] = []
+        if isinstance(groups, list):
+            grouped_error_signals = [
+                signal
+                for group in groups
+                if (
+                    signal := LogAnalysisGroupedErrorSignal.from_mcp_payload(
+                        group,
+                        project_name=project_name,
+                    )
+                )
+                is not None
+            ]
+        return cls(
+            action=McpToolName.GROUP_ERRORS,
+            analysis_cautions=_string_list(structured_content.get("analysis_cautions")),
+            grouped_error_count=_int_or_zero(structured_content.get("grouped_error_count")),
+            groups=grouped_error_signals,
+            matching_line_count=_int_or_zero(structured_content.get("matching_line_count")),
+            max_groups=_int_or_zero(structured_content.get("max_groups")),
+            next_step_tips=_string_list(structured_content.get("next_step_tips")),
+            project_name=project_name,
+            requested_project_name=str(structured_content.get("requested_project_name") or ""),
+            searched_source_keys=_string_list(structured_content.get("searched_source_keys")),
+            session_id=_optional_string(structured_content.get("session_id")),
+            snapshot_dir=str(structured_content.get("snapshot_dir") or ""),
+            summary=str(structured_content.get("summary") or ""),
+            truncated=bool(structured_content.get("truncated")),
+            workspace=str(structured_content.get("workspace") or ""),
+        )
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item is not None]
+
+
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    return [_int_or_zero(item) for item in value if isinstance(item, int | str)]
+
+
+def _int_or_zero(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return 0
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+LogAnalysisFingerprintArgumentValue = (
+    str | int | float | bool | None | list[str] | list[int] | list[float] | list[bool]
+)
+
+
+class LogAnalysisFingerprintLogWindow(BaseModel):
+    """Log window represented by one fingerprint packet."""
+
+    since: str = ""
+    until: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisFingerprintCollection(BaseModel):
+    """Collection facts represented by one fingerprint packet."""
+
+    workspace: str = ""
+    requested_project_names: list[str] = Field(default_factory=list)
+    project_count: int = 0
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisToolResultFingerprint(BaseModel):
+    """Stable hash identity for one deterministic tool result."""
+
+    tool_name: str
+    arguments_hash: str
+    action: str = ""
+    result_hash: str
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisGroupedErrorRunFingerprint(BaseModel):
+    """One stored grouped-error tool run and the fingerprints it returned."""
+
+    arguments: dict[str, LogAnalysisFingerprintArgumentValue] = Field(default_factory=dict)
+    result: LogAnalysisGroupedErrorsResult = Field(default_factory=LogAnalysisGroupedErrorsResult)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisReportFingerprint(BaseModel):
+    """Compact report-level counters stored with fingerprints."""
+
+    severity: str = ""
+    key_finding_count: int = 0
+    evidence_count: int = 0
+    coverage_gap_count: int = 0
+    watch_only_count: int = 0
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisGroupedErrorHistorySummary(BaseModel):
+    """Prompt-safe summary for grouped-error history stripped from old reports."""
+
+    signal_count: int = 0
+    run_count: int = 0
+    detail: str = ""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogAnalysisFingerprints(BaseModel):
+    """Typed fingerprint packet stored for one log-analysis run."""
+
+    version: str = ""
+    log_window: LogAnalysisFingerprintLogWindow = Field(
+        default_factory=LogAnalysisFingerprintLogWindow
+    )
+    collection: LogAnalysisFingerprintCollection = Field(
+        default_factory=LogAnalysisFingerprintCollection
+    )
+    coverage_totals: LogAnalysisCoverageTotals = Field(default_factory=dict)
+    tool_results: list[LogAnalysisToolResultFingerprint] = Field(default_factory=list)
+    grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = Field(default_factory=list)
+    grouped_error_history_summary: LogAnalysisGroupedErrorHistorySummary | None = None
+    report: LogAnalysisReportFingerprint = Field(default_factory=LogAnalysisReportFingerprint)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class PreviousLogAnalysisContext(BaseModel):
     """Compact previous successful run data included for current-run comparison."""
 
     analysis_date: date
     summary: str
-    severity: str
+    severity: LogAnalysisSeverity
     trend_summary: str = ""
-    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    fingerprints: LogAnalysisFingerprints = Field(default_factory=LogAnalysisFingerprints)
     evidence_fingerprints: list[str] = Field(default_factory=list)
     known_patterns: list[dict[str, Any]] = Field(default_factory=list)
     coverage_snapshot: LogAnalysisCoverageSnapshot = Field(
@@ -446,7 +806,7 @@ class PreviousLogAnalysisContext(BaseModel):
                 "summary": analysis.summary,
                 "severity": analysis.severity,
                 "trend_summary": analysis.trend_summary,
-                "deterministic_fingerprint": analysis.deterministic_fingerprint,
+                "fingerprints": analysis.fingerprints,
                 "evidence_fingerprints": analysis.evidence_fingerprints,
                 "known_patterns": analysis.known_patterns,
                 "coverage_snapshot": analysis.coverage_snapshot,
@@ -460,9 +820,9 @@ class PreviousLogAnalysisPromptContext(BaseModel):
 
     analysis_date: date
     summary: str
-    severity: str
+    severity: LogAnalysisSeverity
     trend_summary: str = ""
-    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    fingerprints: LogAnalysisFingerprints = Field(default_factory=LogAnalysisFingerprints)
     evidence_fingerprints: list[str] = Field(default_factory=list)
     known_patterns: list[dict[str, Any]] = Field(default_factory=list)
     coverage_snapshot: LogAnalysisCompactCoverageSnapshot = Field(
@@ -471,31 +831,217 @@ class PreviousLogAnalysisPromptContext(BaseModel):
     fingerprint_version: str
 
 
-class LogAnalysisSourceMissingLogsComparison(BaseModel):
-    """Small deterministic hint comparing current collection missing-log state to history."""
+class LogAnalysisGroupedErrorComparison(BaseModel):
+    """Current grouped-error fingerprints compared with the previous run."""
 
     available: bool
-    missing_logs_changed: bool = False
-    changed_sources: list[str] = Field(default_factory=list)
-    tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
-    recommended_action: Literal["final_report", "call_tools"]
+    current_tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    previous_group_count: int = 0
+    current_group_count: int = 0
+    new_fingerprints: list[str] = Field(default_factory=list)
+    resolved_fingerprints: list[str] = Field(default_factory=list)
+    persisting_fingerprints: list[str] = Field(default_factory=list)
+    worsened_fingerprints: list[str] = Field(default_factory=list)
+    improved_fingerprints: list[str] = Field(default_factory=list)
+    new_high_severity_fingerprints: list[str] = Field(default_factory=list)
+    resolved_high_severity_fingerprints: list[str] = Field(default_factory=list)
+    resolved_high_severity_tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    resolved_high_severity_current_scope_covered: bool = True
+    current_changed_groups: list[LogAnalysisGroupedErrorSignal] = Field(default_factory=list)
+    previous_changed_groups: list[LogAnalysisGroupedErrorSignal] = Field(default_factory=list)
     rationale: str
 
 
+class LogAnalysisPromptGroupedErrorExample(BaseModel):
+    """Small example from a grouped-error delta for prompt grounding."""
+
+    fingerprint: str
+    project_name: str = ""
+    category: str = ""
+    severity: str = ""
+    count: int = 0
+    source_keys: list[str] = Field(default_factory=list)
+    request_paths: list[str] = Field(default_factory=list)
+    status_codes: list[int] = Field(default_factory=list)
+    message_summary: str = ""
+
+
+class LogAnalysisPromptGroupedErrorFingerprint(BaseModel):
+    """Thin grouped-error fingerprint row for previous/current prompt comparison."""
+
+    fingerprint: str
+    project_name: str = ""
+    category: str = ""
+    severity: str = ""
+    source_keys: list[str] = Field(default_factory=list)
+    status_codes: list[int] = Field(default_factory=list)
+
+
+class LogAnalysisPromptGroupedErrorComparison(BaseModel):
+    """Prompt-safe grouped-error comparison view.
+
+    Full fingerprint lists stay in deterministic Python state. The LLM receives
+    counts plus a bounded set of examples so compare-history stays cheap.
+    """
+
+    available: bool
+    current_tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    previous_group_count: int = 0
+    current_group_count: int = 0
+    new_fingerprint_count: int = 0
+    resolved_fingerprint_count: int = 0
+    persisting_fingerprint_count: int = 0
+    worsened_fingerprint_count: int = 0
+    improved_fingerprint_count: int = 0
+    new_high_severity_fingerprint_count: int = 0
+    new_high_severity_fingerprints: list[str] = Field(default_factory=list)
+    resolved_high_severity_fingerprint_count: int = 0
+    resolved_high_severity_fingerprints: list[str] = Field(default_factory=list)
+    resolved_high_severity_tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    resolved_high_severity_current_scope_covered: bool = True
+    evidence_quality_warnings: list[str] = Field(default_factory=list)
+    next_evidence_hint: str = ""
+    current_changed_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
+        default_factory=list
+    )
+    previous_changed_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
+        default_factory=list
+    )
+    rationale: str
+
+
+class LogAnalysisPromptGroupedErrorEvidence(BaseModel):
+    """Prompt-safe grouped-error evidence for one side of history context.
+
+    This is not a diff. It gives the LLM compact previous/current grouped-error
+    evidence without raw log lines.
+    """
+
+    available: bool = False
+    label: LogAnalysisGroupedErrorEvidenceLabel
+    tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
+    run_count: int = 0
+    group_count: int = 0
+    severity_counts: dict[str, int] = Field(default_factory=dict)
+    category_counts: dict[str, int] = Field(default_factory=dict)
+    status_code_counts: dict[str, int] = Field(default_factory=dict)
+    source_key_counts: dict[str, int] = Field(default_factory=dict)
+    fingerprints: list[LogAnalysisPromptGroupedErrorFingerprint] = Field(default_factory=list)
+    rationale: str = ""
+
+
 class LogAnalysisCurrentCoverage(BaseModel):
-    """Current-run collection missing-log state facts for report coverage gaps."""
+    """Current-run collection source coverage state facts for report coverage gaps."""
 
     zero_line_sources: list[str] = Field(default_factory=list)
     unavailable_sources: list[str] = Field(default_factory=list)
 
 
-LogAnalysisEvidenceMode = Literal[
-    "mcp_tool_results_required",
-    "metadata_and_previous_analysis_only",
-    "source_missing_logs_changed_requires_tools",
-    "current_tool_results_available",
-]
-LogAnalysisNextRequiredAction = Literal["call_tools", "final_report"]
+class LogAnalysisPromptCollectedSource(BaseModel):
+    """Compact source collection facts needed by the LLM prompt."""
+
+    source_key: str
+    status: LogSourceCollectionStatus
+    line_count: int
+    zero_lines: bool
+
+
+class LogAnalysisPromptCollectedProject(BaseModel):
+    """Compact project collection facts needed by the LLM prompt."""
+
+    project_name: str
+    snapshot_dir: str
+    resolved_source_keys: list[str] = Field(default_factory=list)
+    sources: list[LogAnalysisPromptCollectedSource] = Field(default_factory=list)
+
+
+class LogAnalysisPromptCollection(BaseModel):
+    """Compact collect_logs prompt view; full artifact stays in Python/storage."""
+
+    action: Literal[McpToolName.COLLECT_LOGS]
+    workspace: LogWorkspace
+    session_id: str | None = None
+    projects: list[LogAnalysisPromptCollectedProject]
+
+
+class LogAnalysisPromptHistoryComparison(BaseModel):
+    """Single prompt object describing deterministic history comparison state."""
+
+    status: LogAnalysisHistoryComparisonStatus = LogAnalysisHistoryComparisonStatus.DISABLED
+    decision_prompt: dict[str, Any] = Field(default_factory=dict)
+    source_coverage: LogAnalysisSourceCoverageComparison | None = None
+    previous_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+    current_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+    grouped_error_diff: LogAnalysisPromptGroupedErrorComparison | None = None
+
+
+class LogAnalysisPromptHistoryBaseline(BaseModel):
+    """Prompt object for no-compare-history baseline review.
+
+    This is intentionally not named comparison: deterministic previous/current
+    comparison is disabled in this mode. The LLM receives prior baseline facts
+    and current baseline facts, then chooses whether that is enough.
+    """
+
+    mode: Literal["no_compare_history"] = "no_compare_history"
+    decision_prompt: dict[str, Any] = Field(default_factory=dict)
+    previous_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+    current_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+
+
+class LogAnalysisPromptHistoryComparisonState(BaseModel):
+    """Compact history-comparison state included in prompt evidence."""
+
+    status: LogAnalysisHistoryComparisonStatus
+
+
+class LogAnalysisPromptCompactedEvidence(BaseModel):
+    """Compact deterministic comparison payload included in prompt evidence."""
+
+    source_coverage: LogAnalysisSourceCoverageComparison | None = None
+    grouped_error_diff: LogAnalysisPromptGroupedErrorComparison | None = None
+
+
+class LogAnalysisPromptEvidence(BaseModel):
+    """Single typed prompt evidence object prepared before the LLM loop."""
+
+    kind: LogAnalysisPromptEvidenceKind
+    decision_prompt: dict[str, Any] = Field(default_factory=dict)
+    history_comparison: LogAnalysisPromptHistoryComparisonState | None = None
+    prompt_compacted: LogAnalysisPromptCompactedEvidence | None = None
+    previous_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+    current_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None = None
+
+    def to_prompt_dict(self) -> dict[str, Any]:
+        """Return the exact JSON shape expected by the LLM prompt."""
+
+        data: dict[str, Any] = {
+            "kind": self.kind.value,
+            "decision_prompt": self.decision_prompt,
+        }
+        if self.kind == LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON:
+            data["history_comparison"] = (
+                self.history_comparison.model_dump(mode="json")
+                if self.history_comparison is not None
+                else None
+            )
+            data["prompt_compacted"] = (
+                self.prompt_compacted.model_dump(mode="json")
+                if self.prompt_compacted is not None
+                else None
+            )
+            return data
+        data["previous_grouped_errors"] = (
+            self.previous_grouped_errors.model_dump(mode="json")
+            if self.previous_grouped_errors is not None
+            else None
+        )
+        data["current_grouped_errors"] = (
+            self.current_grouped_errors.model_dump(mode="json")
+            if self.current_grouped_errors is not None
+            else None
+        )
+        return data
 
 
 class LogAnalysisPromptContext(BaseModel):
@@ -508,22 +1054,22 @@ class LogAnalysisPromptContext(BaseModel):
 
     analysis_date: date
     workflow_name: str
-    current_phase: Literal["inspect_collected_logs", "final_report"]
+    current_phase: LogAnalysisPromptPhase
     completed_steps: list[str]
     historical_context_available: bool = False
+    evidence: dict[str, Any] = Field(default_factory=dict)
     previous_analysis: PreviousLogAnalysisPromptContext | None = None
-    source_missing_logs_comparison: LogAnalysisSourceMissingLogsComparison | None = None
     current_coverage: LogAnalysisCurrentCoverage
     evidence_mode: LogAnalysisEvidenceMode
     current_tool_result_count: int = 0
     trend_summary_instruction: str = ""
-    allowed_actions: list[Literal["call_tools", "read_skills", "final_report"]]
+    allowed_actions: list[LogAnalysisAllowedAction]
     next_required_action: LogAnalysisNextRequiredAction
     final_report_allowed: bool
     available_projects: list[ProjectManifestSummary] = Field(default_factory=list)
-    mandatory_skills: list[WorkflowSkillContent]
+    mandatory_skills: list[WorkflowSkill]
     optional_skills: list[WorkflowSkill] = Field(default_factory=list)
-    collection: CollectLogsArtifact
+    collection: LogAnalysisPromptCollection
     snapshot_access: SnapshotAccessGuidance
     available_tools: list[WorkflowTool] = Field(default_factory=list)
     report_contract: dict[str, str]
@@ -546,7 +1092,7 @@ class LogAnalysisPreparedPrompt(BaseModel):
     def user_prompt(self) -> str:
         """Return the structured LLM request context as pretty JSON."""
 
-        return self.context.model_dump_json(indent=2)
+        return self.context.model_dump_json()
 
 
 class LogAnalysisFinalReport(BaseModel):
@@ -560,7 +1106,7 @@ class LogAnalysisFinalReport(BaseModel):
 
     action: Literal["final_report"]
     summary: str
-    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    severity: LogAnalysisSeverity
     severity_rationale: str
     key_findings: list[str]
     evidence: list[str]
@@ -626,7 +1172,7 @@ class LogAnalysisFingerprintPacket(BaseModel):
     """Compact structured comparison data derived from one log-analysis run."""
 
     fingerprint_version: str
-    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    fingerprints: LogAnalysisFingerprints = Field(default_factory=LogAnalysisFingerprints)
     evidence_fingerprints: list[str] = Field(default_factory=list)
     known_patterns: list[dict[str, Any]] = Field(default_factory=list)
     coverage_snapshot: dict[str, Any] = Field(default_factory=dict)
@@ -649,7 +1195,7 @@ class LogAnalysisIn(BaseModel):
     key_findings: list[str] = Field(default_factory=list)
     recommendations: str = ""
     trend_summary: str = ""
-    deterministic_fingerprint: dict[str, Any] = Field(default_factory=dict)
+    fingerprints: LogAnalysisFingerprints = Field(default_factory=LogAnalysisFingerprints)
     evidence_fingerprints: list[str] = Field(default_factory=list)
     known_patterns: list[dict[str, Any]] = Field(default_factory=list)
     coverage_snapshot: dict[str, Any] = Field(default_factory=dict)
@@ -662,7 +1208,7 @@ class LogAnalysisIn(BaseModel):
 
     @property
     def log_size(self) -> str:
-        return format_log_artifact_size(self.mcp_artifact)
+        return format_byte_size(collect_log_artifact_byte_count(self.mcp_artifact))
 
 
 class LogAnalysisOut(LogAnalysisIn):
@@ -691,7 +1237,7 @@ class LogAnalysisOut(LogAnalysisIn):
                 "key_findings": analysis.key_findings,
                 "recommendations": analysis.recommendations,
                 "trend_summary": analysis.trend_summary,
-                "deterministic_fingerprint": analysis.deterministic_fingerprint,
+                "fingerprints": analysis.fingerprints,
                 "evidence_fingerprints": analysis.evidence_fingerprints,
                 "known_patterns": analysis.known_patterns,
                 "coverage_snapshot": analysis.coverage_snapshot,

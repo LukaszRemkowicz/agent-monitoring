@@ -91,7 +91,7 @@ async def test_log_analysis_repository_get_latest_before_date_returns_previous_s
         status="succeeded",
         summary="Latest recurring scanner noise.",
         fingerprint_version="log-history-v1",
-        deterministic_fingerprint={"status_totals": {"404": 12}},
+        fingerprints={"coverage_totals": {"404": 12}},
         evidence_fingerprints=["scanner-family:generic-env-probe"],
         known_patterns=[{"family": "scanner", "status": "watch_only"}],
         coverage_snapshot={"landingpage": {"backend": "collected"}},
@@ -119,7 +119,7 @@ async def test_log_analysis_repository_get_latest_before_date_returns_previous_s
     assert baseline is not None
     assert baseline.id == latest.id
     assert baseline.summary == "Latest recurring scanner noise."
-    assert baseline.deterministic_fingerprint == {"status_totals": {"404": 12}}
+    assert baseline.fingerprints.coverage_totals == {"404": 12}
     assert baseline.evidence_fingerprints == ["scanner-family:generic-env-probe"]
     assert baseline.known_patterns == [{"family": "scanner", "status": "watch_only"}]
     assert baseline.coverage_snapshot == {"landingpage": {"backend": "collected"}}

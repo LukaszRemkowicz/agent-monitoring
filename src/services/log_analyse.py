@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from time import monotonic
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
+from conf import settings
 from db.models import RunStatus
 from exceptions import LogAnalysisAgentError, format_exception_chain
 from logging_config import get_logger
@@ -92,6 +94,22 @@ class LogAnalysisService:
             previous_analysis: LogAnalysisOut | None = await self.repository.get_latest_before_date(
                 analysis_date
             )
+            logger.info(
+                "loaded previous log-analysis for monitoring agent",
+                extra={
+                    "event": "log_analysis_previous_analysis_loaded",
+                    "analysis_date": str(analysis_date),
+                    "previous_analysis_found": previous_analysis is not None,
+                    "previous_analysis_date": (
+                        str(previous_analysis.analysis_date)
+                        if previous_analysis is not None
+                        else None
+                    ),
+                    "previous_analysis_severity": (
+                        previous_analysis.severity if previous_analysis is not None else None
+                    ),
+                },
+            )
             agent_context: LogAnalysisAgentContext = await self.agent.run_log_analysis(
                 analysis_date=analysis_date,
                 log_window=log_window,
@@ -176,7 +194,7 @@ class LogAnalysisService:
             log_window_until=log_window.until_datetime,
             gpt_tokens_used=agent_context.llm_tokens_used,
             gpt_cost_usd=agent_context.llm_cost_usd,
-            deterministic_fingerprint=fingerprint_packet.deterministic_fingerprint,
+            fingerprints=fingerprint_packet.fingerprints,
             evidence_fingerprints=fingerprint_packet.evidence_fingerprints,
             known_patterns=fingerprint_packet.known_patterns,
             coverage_snapshot=fingerprint_packet.coverage_snapshot,
@@ -230,8 +248,11 @@ class LogAnalysisService:
 
     @staticmethod
     def create_log_collection_window(analysis_date: date) -> LogCollectionWindow:
-        log_window_since: datetime = datetime.combine(analysis_date, time.min, tzinfo=UTC)
-        log_window_until: datetime = log_window_since + timedelta(days=1)
+        local_timezone = ZoneInfo(settings.LOG_TIMEZONE)
+        local_window_since = datetime.combine(analysis_date, time.min, tzinfo=local_timezone)
+        local_window_until = local_window_since + timedelta(days=1)
+        log_window_since: datetime = local_window_since.astimezone(UTC)
+        log_window_until: datetime = local_window_until.astimezone(UTC)
         return LogCollectionWindow(
             since=_format_mcp_timestamp(log_window_since),
             until=_format_mcp_timestamp(log_window_until),

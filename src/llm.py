@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from llm_core.bootstrap import register_builtin_providers
 from llm_core.protocols import LLMProvider
 from llm_core.registry import LLMProviderRegistry
@@ -9,30 +7,27 @@ from llm_core.registry import LLMProviderRegistry
 from conf import settings
 from logging_config import get_logger
 
-if TYPE_CHECKING:
-    from conf import Settings
-
 logger = get_logger(__name__)
 
 
-def configure_llm_providers(_settings: Settings = settings) -> None:
+def configure_llm_providers() -> None:
     """Register shared llm-core providers for this process."""
 
     register_builtin_providers(
         [
             {
-                "name": "openai-fast",
+                "name": settings.MONITORING_LLM_FAST_MODEL,
                 "provider": "openai",
-                "api_key": _settings.OPENAI_API_KEY,
-                "model": _settings.MONITORING_LLM_FAST_MODEL,
-                "base_url": _settings.OPENAI_BASE_URL or None,
+                "api_key": settings.OPENAI_API_KEY,
+                "model": settings.MONITORING_LLM_FAST_MODEL,
+                "base_url": settings.OPENAI_BASE_URL or None,
             },
             {
-                "name": "openai-strong",
+                "name": settings.MONITORING_LLM_STRONG_MODEL,
                 "provider": "openai",
-                "api_key": _settings.OPENAI_API_KEY,
-                "model": _settings.MONITORING_LLM_STRONG_MODEL,
-                "base_url": _settings.OPENAI_BASE_URL or None,
+                "api_key": settings.OPENAI_API_KEY,
+                "model": settings.MONITORING_LLM_STRONG_MODEL,
+                "base_url": settings.OPENAI_BASE_URL or None,
             },
             {
                 "name": "mock",
@@ -50,11 +45,10 @@ def configure_llm_providers(_settings: Settings = settings) -> None:
     )
 
 
-def get_monitoring_llm_provider(_settings: Settings = settings) -> LLMProvider:
-    """Return the configured shared LLM provider for monitoring analysis."""
+def get_llm_provider(provider_name: str) -> LLMProvider:
+    """Return one registered LLM provider profile by name."""
 
-    configure_llm_providers(_settings)
-    provider_name = _settings.MONITORING_LLM_PROVIDER
+    configure_llm_providers()
     provider = LLMProviderRegistry.create(provider_name)
     logger.info(
         "created monitoring LLM provider",

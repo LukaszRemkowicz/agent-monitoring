@@ -6,8 +6,17 @@ from typing import Any
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisFinalReport,
+    LogAnalysisFingerprintArgumentValue,
+    LogAnalysisFingerprintCollection,
+    LogAnalysisFingerprintLogWindow,
     LogAnalysisFingerprintPacket,
+    LogAnalysisFingerprints,
+    LogAnalysisGroupedErrorRunFingerprint,
+    LogAnalysisGroupedErrorsResult,
+    LogAnalysisReportFingerprint,
     LogAnalysisToolResult,
+    LogAnalysisToolResultFingerprint,
+    McpToolName,
 )
 from utils.runtime import dump_arguments, hash_text
 
@@ -29,30 +38,36 @@ class LogAnalysisFingerprintBuilder:
         coverage_snapshot: dict[str, Any] = LogAnalysisFingerprintBuilder.build_coverage_snapshot(
             collect_logs
         )
-        tool_fingerprints: list[dict[str, str]] = _build_tool_fingerprints(tool_results)
+        tool_fingerprints: list[LogAnalysisToolResultFingerprint] = _build_tool_fingerprints(
+            tool_results
+        )
+        grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = (
+            LogAnalysisFingerprintBuilder.build_grouped_error_runs(tool_results)
+        )
         return LogAnalysisFingerprintPacket(
             fingerprint_version=LOG_ANALYSIS_FINGERPRINT_VERSION,
-            deterministic_fingerprint={
-                "version": LOG_ANALYSIS_FINGERPRINT_VERSION,
-                "log_window": {
-                    "since": log_window_since.isoformat(),
-                    "until": log_window_until.isoformat(),
-                },
-                "collection": {
-                    "workspace": collect_logs.workspace,
-                    "requested_project_names": collect_logs.requested_project_names,
-                    "project_count": len(collect_logs.projects),
-                },
-                "coverage_totals": coverage_snapshot["totals"],
-                "tool_results": tool_fingerprints,
-                "report": {
-                    "severity": final_report.severity,
-                    "key_finding_count": len(final_report.key_findings),
-                    "evidence_count": len(final_report.evidence),
-                    "coverage_gap_count": len(final_report.coverage_gaps),
-                    "watch_only_count": len(final_report.watch_only_items),
-                },
-            },
+            fingerprints=LogAnalysisFingerprints(
+                version=LOG_ANALYSIS_FINGERPRINT_VERSION,
+                log_window=LogAnalysisFingerprintLogWindow(
+                    since=log_window_since.isoformat(),
+                    until=log_window_until.isoformat(),
+                ),
+                collection=LogAnalysisFingerprintCollection(
+                    workspace=collect_logs.workspace,
+                    requested_project_names=collect_logs.requested_project_names,
+                    project_count=len(collect_logs.projects),
+                ),
+                coverage_totals=coverage_snapshot["totals"],
+                tool_results=tool_fingerprints,
+                grouped_error_runs=grouped_error_runs,
+                report=LogAnalysisReportFingerprint(
+                    severity=final_report.severity,
+                    key_finding_count=len(final_report.key_findings),
+                    evidence_count=len(final_report.evidence),
+                    coverage_gap_count=len(final_report.coverage_gaps),
+                    watch_only_count=len(final_report.watch_only_items),
+                ),
+            ),
             evidence_fingerprints=[
                 f"evidence:{hash_text(evidence)}" for evidence in final_report.evidence
             ]
@@ -134,19 +149,76 @@ class LogAnalysisFingerprintBuilder:
             },
         }
 
+    @staticmethod
+    def build_grouped_error_runs(
+        tool_results: list[LogAnalysisToolResult],
+    ) -> list[LogAnalysisGroupedErrorRunFingerprint]:
+        """Build grouped-error domain runs from deterministic group_errors results."""
+
+        return _build_grouped_error_runs(tool_results)
+
 
 def _build_tool_fingerprints(
     tool_results: list[LogAnalysisToolResult],
-) -> list[dict[str, str]]:
+) -> list[LogAnalysisToolResultFingerprint]:
     return [
-        {
-            "tool_name": tool_result.tool_name,
-            "arguments_hash": hash_text(dump_arguments(tool_result.arguments)),
-            "action": str(tool_result.structured_content.get("action", "")),
-            "result_hash": _hash_mapping(tool_result.structured_content),
-        }
+        LogAnalysisToolResultFingerprint(
+            tool_name=tool_result.tool_name,
+            arguments_hash=hash_text(dump_arguments(tool_result.arguments)),
+            action=str(tool_result.structured_content.get("action", "")),
+            result_hash=_hash_mapping(tool_result.structured_content),
+        )
         for tool_result in tool_results
     ]
+
+
+def build_grouped_error_run(
+    *,
+    arguments: dict[str, Any],
+    structured_content: dict[str, Any],
+) -> LogAnalysisGroupedErrorRunFingerprint:
+    """Build one grouped-error domain run from an MCP group_errors response."""
+
+    return LogAnalysisGroupedErrorRunFingerprint(
+        arguments=_fingerprint_arguments(arguments),
+        result=LogAnalysisGroupedErrorsResult.from_mcp_payload(structured_content),
+    )
+
+
+def _build_grouped_error_runs(
+    tool_results: list[LogAnalysisToolResult],
+) -> list[LogAnalysisGroupedErrorRunFingerprint]:
+    runs: list[LogAnalysisGroupedErrorRunFingerprint] = []
+    for tool_result in tool_results:
+        if tool_result.tool_name != McpToolName.GROUP_ERRORS:
+            continue
+        runs.append(
+            LogAnalysisGroupedErrorRunFingerprint(
+                arguments=_fingerprint_arguments(tool_result.arguments),
+                result=LogAnalysisGroupedErrorsResult.from_mcp_payload(
+                    tool_result.structured_content
+                ),
+            )
+        )
+    return runs
+
+
+def _fingerprint_arguments(
+    arguments: dict[str, Any],
+) -> dict[str, LogAnalysisFingerprintArgumentValue]:
+    typed_arguments: dict[str, LogAnalysisFingerprintArgumentValue] = {}
+    for key, value in arguments.items():
+        if value is None or isinstance(value, str | int | float | bool):
+            typed_arguments[key] = value
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            typed_arguments[key] = value
+        elif isinstance(value, list) and all(isinstance(item, int) for item in value):
+            typed_arguments[key] = value
+        elif isinstance(value, list) and all(isinstance(item, float) for item in value):
+            typed_arguments[key] = value
+        elif isinstance(value, list) and all(isinstance(item, bool) for item in value):
+            typed_arguments[key] = value
+    return typed_arguments
 
 
 def _hash_mapping(value: dict[str, Any]) -> str:

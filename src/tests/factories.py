@@ -37,7 +37,7 @@ class LogAnalysisFactory(TortoiseModelFactory):
     key_findings = factory.LazyFunction(list)
     recommendations = ""
     trend_summary = ""
-    deterministic_fingerprint = factory.LazyFunction(dict)
+    fingerprints = factory.LazyFunction(dict)
     evidence_fingerprints = factory.LazyFunction(list)
     known_patterns = factory.LazyFunction(list)
     coverage_snapshot = factory.LazyFunction(dict)

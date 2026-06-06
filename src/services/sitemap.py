@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from html.parser import HTMLParser
 from time import monotonic
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, Protocol
 from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
 
@@ -21,7 +21,7 @@ from db.models import RunStatus, SitemapAnalysis
 from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import SitemapAnalysisRepository
-from schemas import SitemapAnalysisIn, SitemapAnalysisOut, WorkflowBootstrap
+from schemas import LogAnalysisSeverity, SitemapAnalysisIn, SitemapAnalysisOut, WorkflowBootstrap
 from utils.llm_usage import usage_cost_usd
 
 logger = get_logger(__name__)
@@ -133,7 +133,7 @@ class SitemapSummaryPayload(BaseModel):
     """Validated LLM sitemap summary shape."""
 
     summary: Annotated[str, BeforeValidator(_normalize_llm_text)]
-    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    severity: LogAnalysisSeverity
     key_findings: Annotated[list[str], BeforeValidator(_normalize_key_findings)] = Field(
         default_factory=list
     )

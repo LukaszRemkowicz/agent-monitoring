@@ -1,13 +1,25 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from llm_core.providers.mock import MockProvider
 from tortoise import Tortoise
 
+from agents import MonitoringWorkflowAgent
 from conf import Settings, set_settings, settings
-from schemas import CollectLogsArtifact
+from mcp import McpWorkflowClient
+from schemas import CollectLogsArtifact, LogSourceCollectionStatus, LogWorkspace, McpToolName
+from services.log_history_comparison import LogAnalysisHistoryComparisonService
+
+PRIVATE_MONITORING_CONTEXT = (
+    "# Private VPS Monitoring Context\n\n"
+    "Installed services: landingpage, vps-security, mcp-log-server."
+)
+
+AgentFactory = Callable[[McpWorkflowClient, MockProvider], MonitoringWorkflowAgent]
+HistoryAgentFactory = Callable[[McpWorkflowClient, MockProvider], MonitoringWorkflowAgent]
 
 
 @contextmanager
@@ -46,7 +58,7 @@ def build_collect_logs_artifact_payload(
             "target": "backend",
             "description": "Backend app logs",
             "stream": "stdout",
-            "status": "collected",
+            "status": LogSourceCollectionStatus.COLLECTED,
             "line_count": 120,
             "byte_count": 4096,
             "output_file": "workflow/landingpage/latest/backend.log",
@@ -62,7 +74,7 @@ def build_collect_logs_artifact_payload(
                 "target": "/var/log/nginx/access.log",
                 "description": "Nginx access logs",
                 "stream": None,
-                "status": "unavailable",
+                "status": LogSourceCollectionStatus.UNAVAILABLE,
                 "line_count": 0,
                 "byte_count": 0,
                 "output_file": None,
@@ -72,8 +84,8 @@ def build_collect_logs_artifact_payload(
         )
 
     return {
-        "action": "collect_logs",
-        "workspace": "workflow",
+        "action": McpToolName.COLLECT_LOGS,
+        "workspace": LogWorkspace.WORKFLOW,
         "session_id": session_id,
         "requested_project_names": requested_project_names or ["landingpage"],
         "next_step_tips": (
@@ -83,7 +95,7 @@ def build_collect_logs_artifact_payload(
             {
                 "requested_project_name": "landingpage",
                 "project_name": "landingpage",
-                "workspace": "workflow",
+                "workspace": LogWorkspace.WORKFLOW,
                 "snapshot_dir": "workflow/landingpage/latest",
                 "requested_source_keys": ["all"],
                 "requested_since": since,
@@ -104,6 +116,42 @@ def collect_logs_artifact() -> CollectLogsArtifact:
     """Return the canonical validated collect_logs artifact used by tests."""
 
     return CollectLogsArtifact.model_validate(build_collect_logs_artifact_payload())
+
+
+@pytest.fixture
+def agent_factory() -> AgentFactory:
+    """Build a default log-analysis agent for tests without history comparison."""
+
+    def create_agent(
+        mcp_client: McpWorkflowClient,
+        llm_provider: MockProvider,
+    ) -> MonitoringWorkflowAgent:
+        return MonitoringWorkflowAgent(
+            mcp_client,
+            llm_provider=llm_provider,
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+        )
+
+    return create_agent
+
+
+@pytest.fixture
+def history_agent_factory() -> HistoryAgentFactory:
+    """Build a log-analysis agent with history comparison enabled for tests."""
+
+    def create_agent(
+        mcp_client: McpWorkflowClient,
+        llm_provider: MockProvider,
+    ) -> MonitoringWorkflowAgent:
+        return MonitoringWorkflowAgent(
+            mcp_client,
+            llm_provider=llm_provider,
+            private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+            history_comparison_service=LogAnalysisHistoryComparisonService(),
+            history_comparison_enabled=True,
+        )
+
+    return create_agent
 
 
 @pytest_asyncio.fixture(autouse=True)

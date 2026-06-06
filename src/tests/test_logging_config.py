@@ -29,6 +29,7 @@ def make_record(**extra: object) -> logging.LogRecord:
 
 def test_json_formatter_outputs_single_line_structured_payload() -> None:
     record = make_record(project="landingpage", attempt=1)
+    record.created = 1780611503.850642
 
     message = JsonFormatter().format(record)
     payload = json.loads(message)
@@ -37,6 +38,7 @@ def test_json_formatter_outputs_single_line_structured_payload() -> None:
     assert payload["level"] == "INFO"
     assert payload["logger"] == "agent_monitoring.tests"
     assert payload["message"] == "hello world"
+    assert payload["timestamp"] == "2026-06-05T00:18:23.850642+02:00"
     assert payload["project"] == "landingpage"
     assert payload["attempt"] == 1
 
@@ -103,7 +105,13 @@ def test_json_formatter_ignores_empty_exception_info() -> None:
 
 def test_configure_logging_supports_json_and_child_loggers() -> None:
     stream = io.StringIO()
-    settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "json"})
+    settings = Settings(
+        {
+            "LOG_LEVEL": "INFO",
+            "LOG_FORMAT": "json",
+            "LOG_TIMEZONE": "Europe/Warsaw",
+        }
+    )
 
     configure_logging(settings, stream=stream)
     get_logger("tests").info("configured", extra={"project": "landingpage"})
@@ -112,11 +120,19 @@ def test_configure_logging_supports_json_and_child_loggers() -> None:
     assert payload["logger"] == "agent_monitoring.tests"
     assert payload["message"] == "configured"
     assert payload["project"] == "landingpage"
+    assert payload["timestamp"].endswith("+02:00")
 
 
 def test_configure_logging_supports_pretty_json_logs() -> None:
     stream = io.StringIO()
-    settings = Settings({"LOG_LEVEL": "INFO", "LOG_FORMAT": "pretty", "LOG_COLOR": "always"})
+    settings = Settings(
+        {
+            "LOG_LEVEL": "INFO",
+            "LOG_FORMAT": "pretty",
+            "LOG_COLOR": "always",
+            "LOG_TIMEZONE": "Europe/Warsaw",
+        }
+    )
 
     configure_logging(settings, stream=stream)
     get_logger("tests").info("configured", extra={"event": "tool_result"})

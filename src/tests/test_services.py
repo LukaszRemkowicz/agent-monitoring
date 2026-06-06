@@ -17,14 +17,26 @@ from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisAllowedAction,
     LogAnalysisCurrentCoverage,
+    LogAnalysisEvidenceMode,
     LogAnalysisFinalReport,
+    LogAnalysisFingerprints,
     LogAnalysisIn,
+    LogAnalysisNextRequiredAction,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
+    LogAnalysisPromptCollectedProject,
+    LogAnalysisPromptCollectedSource,
+    LogAnalysisPromptCollection,
     LogAnalysisPromptContext,
+    LogAnalysisPromptPhase,
+    LogAnalysisSeverity,
     LogCollectionWindow,
+    LogSourceCollectionStatus,
+    LogWorkspace,
     McpServiceStatus,
+    McpToolName,
     ProjectManifestSummary,
     SitemapAnalysisIn,
     SitemapAnalysisOut,
@@ -42,6 +54,10 @@ from services.sitemap import (
 from tests.conftest import build_collect_logs_artifact_payload
 
 PRIVATE_MONITORING_CONTEXT = "# Private VPS Monitoring Context\n\nTest context."
+
+
+def _fingerprints(payload: dict[str, object]) -> LogAnalysisFingerprints:
+    return LogAnalysisFingerprints.model_validate(payload)
 
 
 class FakeWorkflowAgent(MonitoringWorkflowAgent):
@@ -85,18 +101,22 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
             context=LogAnalysisPromptContext(
                 analysis_date=analysis_date,
                 workflow_name=workflow.workflow_name,
-                current_phase="final_report",
+                current_phase=LogAnalysisPromptPhase.FINAL_REPORT,
                 completed_steps=[
                     "analyze_daily_log_bundle",
                     "read_mandatory_skills",
                     "list_projects",
                     "collect_logs",
                 ],
-                allowed_actions=["call_tools", "read_skills", "final_report"],
-                evidence_mode="mcp_tool_results_required",
+                allowed_actions=[
+                    LogAnalysisAllowedAction.CALL_TOOLS,
+                    LogAnalysisAllowedAction.READ_SKILLS,
+                    LogAnalysisAllowedAction.FINAL_REPORT,
+                ],
+                evidence_mode=LogAnalysisEvidenceMode.MCP_TOOL_RESULTS_REQUIRED,
                 current_tool_result_count=0,
                 current_coverage=LogAnalysisCurrentCoverage(),
-                next_required_action="call_tools",
+                next_required_action=LogAnalysisNextRequiredAction.CALL_TOOLS,
                 final_report_allowed=False,
                 available_projects=[
                     ProjectManifestSummary(
@@ -112,9 +132,28 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                 ],
                 mandatory_skills=[],
                 optional_skills=[],
-                collection=collect_logs,
+                collection=LogAnalysisPromptCollection(
+                    action=McpToolName.COLLECT_LOGS,
+                    workspace=LogWorkspace.WORKFLOW,
+                    session_id=collect_logs.session_id,
+                    projects=[
+                        LogAnalysisPromptCollectedProject(
+                            project_name="landingpage",
+                            snapshot_dir="workflow/landingpage/latest",
+                            resolved_source_keys=["backend"],
+                            sources=[
+                                LogAnalysisPromptCollectedSource(
+                                    source_key="backend",
+                                    status=LogSourceCollectionStatus.COLLECTED,
+                                    line_count=42,
+                                    zero_lines=False,
+                                )
+                            ],
+                        )
+                    ],
+                ),
                 snapshot_access=SnapshotAccessGuidance(
-                    workspace="workflow",
+                    workspace=LogWorkspace.WORKFLOW,
                     session_id=None,
                     session_id_is_for_session_workspace_only=True,
                     workflow_followup_arguments=["project_name", "archive_name"],
@@ -144,7 +183,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
             final_report=LogAnalysisFinalReport(
                 action="final_report",
                 summary="Landingpage logs are healthy.",
-                severity="INFO",
+                severity=LogAnalysisSeverity.INFO,
                 severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
                 evidence=["group_errors found no repeated errors."],
@@ -375,6 +414,15 @@ class FakeLLMSummaryBuilder(LLMSummaryBuilder):
         }
 
 
+def test_log_collection_window_uses_warsaw_business_day_boundaries() -> None:
+    log_window = LogAnalysisService.create_log_collection_window(date(2026, 6, 5))
+
+    assert log_window.since == "2026-06-04T22:00:00Z"
+    assert log_window.until == "2026-06-05T22:00:00Z"
+    assert log_window.since_datetime == datetime(2026, 6, 4, 22, tzinfo=UTC)
+    assert log_window.until_datetime == datetime(2026, 6, 5, 22, tzinfo=UTC)
+
+
 @pytest.mark.asyncio
 async def test_log_analysis_service_loads_workflow_bundle() -> None:
     agent = FakeWorkflowAgent()
@@ -403,9 +451,9 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert result.analysis.email_sent is False
     assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
     assert result.analysis.mcp_collect_logs_id == "workflow/landingpage/latest"
-    assert result.analysis.log_window_since == datetime(2026, 5, 19, tzinfo=UTC)
-    assert result.analysis.log_window_until == datetime(2026, 5, 20, tzinfo=UTC)
-    assert '"analysis_date": "2026-05-19"' in result.prepared_prompt.user_prompt
+    assert result.analysis.log_window_since == datetime(2026, 5, 18, 22, tzinfo=UTC)
+    assert result.analysis.log_window_until == datetime(2026, 5, 19, 22, tzinfo=UTC)
+    assert '"analysis_date":"2026-05-19"' in result.prepared_prompt.user_prompt
     assert result.prepared_prompt.context.collection.projects[0].snapshot_dir == (
         "workflow/landingpage/latest"
     )
@@ -426,11 +474,11 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
         "unavailable_sources": 0,
         "zero_line_sources": 0,
     }
-    deterministic_fingerprint = cast(
+    fingerprints = cast(
         dict[str, Any],
-        repository.saved[0]["deterministic_fingerprint"],
+        repository.saved[0]["fingerprints"],
     )
-    assert deterministic_fingerprint["report"] == {
+    assert fingerprints["report"] == {
         "severity": "INFO",
         "key_finding_count": 1,
         "evidence_count": 1,
@@ -485,7 +533,7 @@ async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_log_analysis_service_passes_latest_comparable_run_to_agent() -> None:
+async def test_log_analysis_service_passes_previous_analysis_to_agent() -> None:
     agent = FakeWorkflowAgent()
     repository = FakeLogAnalysisRepository()
     previous_run = LogAnalysisOut(
@@ -498,7 +546,7 @@ async def test_log_analysis_service_passes_latest_comparable_run_to_agent() -> N
         key_findings=["No service impact."],
         recommendations="No action needed.",
         trend_summary="Stable scanner noise.",
-        deterministic_fingerprint={"report": {"severity": "INFO"}},
+        fingerprints=_fingerprints({"report": {"severity": "INFO"}}),
         evidence_fingerprints=["evidence:abc"],
         known_patterns=[{"pattern": "Routine bot traffic."}],
         coverage_snapshot={"totals": {"sources": 2}},
@@ -552,13 +600,13 @@ async def test_log_analysis_service_records_failure_state(mocker: MockerFixture)
     assert repository.saved[0]["trend_summary"] == (
         "No trend summary is available because the workflow failed."
     )
-    assert repository.saved[0]["log_window_since"] == datetime(2026, 5, 19, tzinfo=UTC)
-    assert repository.saved[0]["log_window_until"] == datetime(2026, 5, 20, tzinfo=UTC)
+    assert repository.saved[0]["log_window_since"] == datetime(2026, 5, 18, 22, tzinfo=UTC)
+    assert repository.saved[0]["log_window_until"] == datetime(2026, 5, 19, 22, tzinfo=UTC)
     assert repository.saved[0]["mcp_artifact"] == {
         "analysis_date": "2026-05-19",
         "log_window": {
-            "since": "2026-05-19T00:00:00Z",
-            "until": "2026-05-20T00:00:00Z",
+            "since": "2026-05-18T22:00:00Z",
+            "until": "2026-05-19T22:00:00Z",
         },
         "error": {
             "stage": "log_analysis",
