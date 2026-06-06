@@ -1,0 +1,10 @@
+{
+  "action": "build_incident_bundle",
+  "project_name": "landingpage",
+  "incident_key": "sensitive-path-env-200",
+  "summary": "Current sensitive path success evidence for /.env.",
+  "evidence": [
+    "group_errors reported /.env status 200.",
+    "grep_log_snapshot returned two current matching lines."
+  ]
+}

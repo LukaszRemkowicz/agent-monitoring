@@ -1,0 +1,168 @@
+{
+  "action": "collect_logs",
+  "workspace": "workflow",
+  "session_id": "fixture-session-id",
+  "requested_project_names": ["landingpage", "vps-security"],
+  "next_step_tips": [
+    "Use group_errors for the collected project/source scope before final_report.",
+    "Use grep_log_snapshot or inspect_proxy_activity when grouped errors show new high-severity evidence."
+  ],
+  "projects": [
+    {
+      "requested_project_name": "landingpage",
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_dir": "workflow/landingpage/2026-05-19",
+      "requested_source_keys": ["all"],
+      "requested_since": "2026-05-19T00:00:00Z",
+      "requested_until": "2026-05-20T00:00:00Z",
+      "warnings": [],
+      "retry_tips": [],
+      "unknown_requested_source_keys": [],
+      "resolved_source_keys": [
+        "nginx",
+        "traefik",
+        "backend",
+        "frontend",
+        "celery_worker",
+        "celery_beat"
+      ],
+      "collected_at": "2026-05-20T00:01:00Z",
+      "sources": [
+        {
+          "source_key": "nginx",
+          "source_type": "file",
+          "target": "/var/log/nginx/access.log",
+          "description": "Landingpage nginx access log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 920,
+          "byte_count": 65536,
+          "output_file": "workflow/landingpage/2026-05-19/nginx.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "traefik",
+          "source_type": "file",
+          "target": "/var/log/traefik/access.log",
+          "description": "Landingpage Traefik access log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 760,
+          "byte_count": 49152,
+          "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "backend",
+          "source_type": "docker",
+          "target": "landingpage-backend",
+          "description": "Landingpage backend API logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 180,
+          "byte_count": 12288,
+          "output_file": "workflow/landingpage/2026-05-19/backend.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "frontend",
+          "source_type": "docker",
+          "target": "landingpage-frontend",
+          "description": "Landingpage frontend SSR logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 90,
+          "byte_count": 8192,
+          "output_file": "workflow/landingpage/2026-05-19/frontend.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "celery_worker",
+          "source_type": "docker",
+          "target": "landingpage-celery-worker",
+          "description": "Landingpage Celery worker logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 75,
+          "byte_count": 6144,
+          "output_file": "workflow/landingpage/2026-05-19/celery_worker.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "celery_beat",
+          "source_type": "docker",
+          "target": "landingpage-celery-beat",
+          "description": "Landingpage Celery beat logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 22,
+          "byte_count": 2048,
+          "output_file": "workflow/landingpage/2026-05-19/celery_beat.log",
+          "error": null,
+          "retry_tips": []
+        }
+      ]
+    },
+    {
+      "requested_project_name": "vps-security",
+      "project_name": "vps-security",
+      "workspace": "workflow",
+      "snapshot_dir": "workflow/vps-security/2026-05-19",
+      "requested_source_keys": ["all"],
+      "requested_since": "2026-05-19T00:00:00Z",
+      "requested_until": "2026-05-20T00:00:00Z",
+      "warnings": [],
+      "retry_tips": [],
+      "unknown_requested_source_keys": [],
+      "resolved_source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+      "collected_at": "2026-05-20T00:01:00Z",
+      "sources": [
+        {
+          "source_key": "fail2ban",
+          "source_type": "file",
+          "target": "/var/log/fail2ban.log",
+          "description": "Fail2ban host security log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 64,
+          "byte_count": 4096,
+          "output_file": "workflow/vps-security/2026-05-19/fail2ban.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "nginx_access",
+          "source_type": "file",
+          "target": "/var/log/nginx/access.log",
+          "description": "Host nginx access log for security probes",
+          "stream": null,
+          "status": "collected",
+          "line_count": 920,
+          "byte_count": 65536,
+          "output_file": "workflow/vps-security/2026-05-19/nginx_access.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "traefik_access",
+          "source_type": "file",
+          "target": "/var/log/traefik/access.log",
+          "description": "Host Traefik access log for edge probes",
+          "stream": null,
+          "status": "collected",
+          "line_count": 760,
+          "byte_count": 49152,
+          "output_file": "workflow/vps-security/2026-05-19/traefik_access.log",
+          "error": null,
+          "retry_tips": []
+        }
+      ]
+    }
+  ]
+}

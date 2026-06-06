@@ -1,0 +1,99 @@
+{
+  "action": "group_errors",
+  "analysis_cautions": [],
+  "grouped_error_count": 3,
+  "groups": [
+    {
+      "fingerprint": "vps-security:edge:http_4xx:scanner-probes",
+      "category": "http_4xx",
+      "severity": "medium",
+      "count": 15,
+      "source_keys": ["nginx_access", "traefik_access"],
+      "request_paths": ["/wp-login.php", "/.env"],
+      "status_codes": [403, 404],
+      "levels": [],
+      "message_summary": "Edge access logs show blocked scanner probes.",
+      "first_timestamp": "2026-05-19T00:22:00Z",
+      "last_timestamp": "2026-05-19T23:10:00Z",
+      "first_seen": {
+        "line": "203.0.113.66 - - [19/May/2026:00:22:00 +0000] \"GET /.env HTTP/1.1\" 403 162",
+        "line_number": 13,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/nginx_access.log",
+        "source_key": "nginx_access"
+      },
+      "last_seen": {
+        "line": "203.0.113.66 GET /wp-login.php 404",
+        "line_number": 701,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/traefik_access.log",
+        "source_key": "traefik_access"
+      }
+    },
+    {
+      "fingerprint": "vps-security:fail2ban:notice:ssh-nginx-bans",
+      "category": "security_daemon",
+      "severity": "medium",
+      "count": 6,
+      "source_keys": ["fail2ban"],
+      "request_paths": [],
+      "status_codes": [],
+      "levels": ["notice"],
+      "message_summary": "Fail2ban recorded sshd and nginx jail bans.",
+      "first_timestamp": "2026-05-19T02:01:00Z",
+      "last_timestamp": "2026-05-19T19:44:00Z",
+      "first_seen": {
+        "line": "NOTICE [sshd] Ban 198.51.100.19",
+        "line_number": 17,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/fail2ban.log",
+        "source_key": "fail2ban"
+      },
+      "last_seen": {
+        "line": "NOTICE [nginx-botsearch] Ban 203.0.113.66",
+        "line_number": 52,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/fail2ban.log",
+        "source_key": "fail2ban"
+      }
+    },
+    {
+      "fingerprint": "vps-security:edge:http_404:php-probes",
+      "category": "http_4xx",
+      "severity": "low",
+      "count": 24,
+      "source_keys": ["nginx_access", "traefik_access"],
+      "request_paths": ["/phpinfo.php", "/shell.php"],
+      "status_codes": [404],
+      "levels": [],
+      "message_summary": "Routine PHP exploit probes were blocked.",
+      "first_timestamp": "2026-05-19T01:20:00Z",
+      "last_timestamp": "2026-05-19T22:18:00Z",
+      "first_seen": {
+        "line": "192.0.2.80 - - [19/May/2026:01:20:00 +0000] \"GET /phpinfo.php HTTP/1.1\" 404 153",
+        "line_number": 29,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/nginx_access.log",
+        "source_key": "nginx_access"
+      },
+      "last_seen": {
+        "line": "192.0.2.80 GET /shell.php 404",
+        "line_number": 641,
+        "line_truncated": false,
+        "output_file": "workflow/vps-security/2026-05-19/traefik_access.log",
+        "source_key": "traefik_access"
+      }
+    }
+  ],
+  "matching_line_count": 45,
+  "max_groups": 20,
+  "next_step_tips": ["Use inspect_proxy_activity if probe volume changed materially."],
+  "project_name": "vps-security",
+  "requested_project_name": "vps-security",
+  "searched_source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/vps-security/2026-05-19",
+  "summary": "Host security telemetry shows blocked edge scanner probes and fail2ban bans.",
+  "truncated": false,
+  "workspace": "workflow"
+}

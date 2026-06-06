@@ -1,0 +1,13 @@
+{
+  "action": "inspect_proxy_activity",
+  "project_name": "landingpage",
+  "source_keys": ["nginx"],
+  "status_counts": {
+    "200": 2,
+    "404": 18,
+    "499": 1
+  },
+  "upstream_error_count": 0,
+  "sensitive_path_success_count": 2,
+  "summary": "Current proxy activity includes two successful /.env responses."
+}

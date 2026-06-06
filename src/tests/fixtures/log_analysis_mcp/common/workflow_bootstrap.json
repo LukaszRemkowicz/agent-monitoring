@@ -1,0 +1,60 @@
+{
+  "workflow_name": "analyze_daily_log_bundle",
+  "prompt": "# Monitoring Tool Loop System Prompt\n\nValid actions are call_tools, read_skills, and final_report.",
+  "mandatory_skills": [
+    {
+      "skill_name": "severity_guide",
+      "resource_uri": "skill://workflow/severity_guide",
+      "description": "Severity rules for monitored systems."
+    }
+  ],
+  "optional_skills": [
+    {
+      "skill_name": "bot_detection",
+      "resource_uri": "skill://workflow/bot_detection",
+      "description": "Bot detection guidance.",
+      "when_useful": "Use for scanner/probe-heavy traffic and clustered suspicious HTTP responses."
+    },
+    {
+      "skill_name": "owasp_security",
+      "resource_uri": "skill://workflow/owasp_security",
+      "description": "Security interpretation guidance.",
+      "when_useful": "Use when logs show sensitive paths, auth probes, injection attempts, or exploit traffic."
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "group_errors",
+      "description": "Group repeated error and HTTP status families.",
+      "arguments": [
+        {
+          "name": "project_name",
+          "type": "str",
+          "required": true,
+          "default": null
+        },
+        {
+          "name": "source_keys",
+          "type": "list[str]",
+          "required": false,
+          "default": null
+        }
+      ]
+    },
+    {
+      "tool_name": "inspect_proxy_activity",
+      "description": "Inspect proxy status distribution for current snapshots.",
+      "arguments": []
+    },
+    {
+      "tool_name": "grep_log_snapshot",
+      "description": "Search current log snapshots for paths, messages, or status patterns.",
+      "arguments": []
+    },
+    {
+      "tool_name": "build_incident_bundle",
+      "description": "Build a compact evidence bundle for one incident pattern.",
+      "arguments": []
+    }
+  ]
+}
