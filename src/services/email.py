@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import smtplib
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime
 from email.message import EmailMessage
 from html import unescape
@@ -17,6 +18,17 @@ from logging_config import get_logger
 from schemas import LogAnalysisOut, SitemapAnalysisOut
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class MonitoringFailureEmail:
+    """Command failure details sent to operators when cron jobs fail."""
+
+    command_name: str
+    analysis_date: date
+    error_type: str
+    error_message: str
+    traceback_text: str
 
 
 class MonitoringEmailSender(Protocol):
@@ -100,6 +112,7 @@ class MonitoringEmailService:
 
     LOG_ANALYSIS_TEMPLATE = "monitoring/log_analysis.html"
     SITEMAP_ANALYSIS_TEMPLATE = "monitoring/sitemap_analysis.html"
+    FAILURE_TEMPLATE = "monitoring/failure.html"
 
     def __init__(self, config: MonitoringEmailConfig, renderer: MonitoringTemplateRenderer) -> None:
         self.config = config
@@ -129,6 +142,14 @@ class MonitoringEmailService:
             template_name=self.SITEMAP_ANALYSIS_TEMPLATE,
             context=self._sitemap_analysis_context(analysis),
             recipients=self.config.sitemap_recipients,
+        )
+
+    async def send_monitoring_failure(self, failure: MonitoringFailureEmail) -> None:
+        self.send(
+            subject=self._failure_subject(failure),
+            template_name=self.FAILURE_TEMPLATE,
+            context=self._failure_context(failure),
+            recipients=self.config.log_recipients,
         )
 
     def send(
@@ -194,6 +215,16 @@ class MonitoringEmailService:
             "current_year": datetime.now().year,
         }
 
+    def _failure_context(self, failure: MonitoringFailureEmail) -> dict[str, Any]:
+        return {
+            "environment": self.config.environment,
+            "monitoring_project": self.config.monitoring_project,
+            "failure": failure,
+            "analysis_date": self._format_email_date(failure.analysis_date).upper(),
+            "admin_domain": self.config.admin_domain,
+            "current_year": datetime.now().year,
+        }
+
     def _log_analysis_subject(self, analysis: LogAnalysisOut) -> str:
         environment = self.config.environment.upper()
         return f"[{environment}][{analysis.severity}] Daily Log Analysis - {analysis.analysis_date}"
@@ -201,6 +232,13 @@ class MonitoringEmailService:
     def _sitemap_analysis_subject(self, analysis: SitemapAnalysisOut) -> str:
         environment = self.config.environment.upper()
         return f"[{environment}][{analysis.severity}] Sitemap Analysis - {analysis.analysis_date}"
+
+    def _failure_subject(self, failure: MonitoringFailureEmail) -> str:
+        environment = self.config.environment.upper()
+        return (
+            f"[{environment}][CRITICAL] Monitoring Failure - "
+            f"{failure.command_name} - {failure.analysis_date}"
+        )
 
     @staticmethod
     def _format_email_date(value: date | datetime | str) -> str:

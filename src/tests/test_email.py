@@ -8,7 +8,12 @@ from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from schemas import LogAnalysisOut, SitemapAnalysisOut
-from services.email import MonitoringEmailConfig, MonitoringEmailRenderer, MonitoringEmailService
+from services.email import (
+    MonitoringEmailConfig,
+    MonitoringEmailRenderer,
+    MonitoringEmailService,
+    MonitoringFailureEmail,
+)
 from tests.conftest import build_collect_logs_artifact_payload, override_settings
 
 LOCAL_TEMPLATE_ROOT = Path("src/templates/monitoring")
@@ -74,10 +79,32 @@ def test_monitoring_email_templates_use_jinja_syntax() -> None:
         ".splitlines %}",
         ".strip %}",
     )
-    for template_name in ("log_analysis.html", "sitemap_analysis.html"):
+    for template_name in ("log_analysis.html", "sitemap_analysis.html", "failure.html"):
         template_text = (LOCAL_TEMPLATE_ROOT / template_name).read_text()
 
         assert not any(token in template_text for token in django_template_tokens)
+
+
+def test_monitoring_failure_email_renders_error_context() -> None:
+    failure = MonitoringFailureEmail(
+        command_name="log_analysis",
+        analysis_date=date(2026, 5, 19),
+        error_type="RuntimeError",
+        error_message="MCP workflow unavailable",
+        traceback_text="Traceback (most recent call last):\nRuntimeError: MCP workflow unavailable",
+    )
+    service = _email_service(_email_config())
+
+    html = service.renderer.render(
+        "monitoring/failure.html",
+        service._failure_context(failure),
+    )
+
+    assert "Portfolio - Monitoring Failure" in html
+    assert "log_analysis" in html
+    assert "MCP workflow unavailable" in html
+    assert "RuntimeError" in html
+    assert "Traceback (most recent call last):" in html
 
 
 def test_log_analysis_email_renders_copied_template() -> None:

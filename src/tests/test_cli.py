@@ -332,6 +332,34 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
 
 
+def test_log_analysis_command_sends_failure_email_on_service_error(
+    mocker: MockerFixture,
+) -> None:
+    class FakeLogAnalysisService:
+        async def run_log_analysis(
+            self,
+            *,
+            analysis_date: date,
+            log_window: LogCollectionWindow,
+            force: bool,
+        ) -> LogAnalysisWorkflowResult:
+            raise RuntimeError("MCP workflow unavailable")
+
+    fake_service = FakeLogAnalysisService()
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
+
+    result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    dependencies["email_service"].send_monitoring_failure.assert_awaited_once()
+    failure = dependencies["email_service"].send_monitoring_failure.call_args.args[0]
+    assert failure.command_name == "log_analysis"
+    assert failure.analysis_date == date(2026, 5, 19)
+    assert failure.error_type == "RuntimeError"
+    assert failure.error_message == "MCP workflow unavailable"
+    assert "RuntimeError: MCP workflow unavailable" in failure.traceback_text
+
+
 def test_log_analysis_command_defaults_analysis_date_to_today(
     mocker: MockerFixture,
 ) -> None:
@@ -490,6 +518,93 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     }
     email_service.send_sitemap_analysis.assert_awaited_once()
     assert fake_repository.updated[0][1] == {"email_sent": True}
+
+
+def test_sitemap_analysis_command_sends_failure_email_on_service_error(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            raise RuntimeError("sitemap fetch failed")
+
+    fake_runner = FakeAnalysisRunner()
+    mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(
+        main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.command_name == "sitemap-analysis"
+    assert failure.analysis_date == date(2026, 5, 19)
+    assert failure.error_type == "RuntimeError"
+    assert failure.error_message == "sitemap fetch failed"
+    assert "RuntimeError: sitemap fetch failed" in failure.traceback_text
+
+
+def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            return _sitemap_analysis_out(analysis_date).model_copy(
+                update={
+                    "status": "FAILED",
+                    "severity": "CRITICAL",
+                    "error_message": "sitemap audit failed",
+                }
+            )
+
+    fake_runner = FakeAnalysisRunner()
+    mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(
+        main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert "Sitemap analysis failed" in result.output
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.error_message == "sitemap audit failed"
 
 
 @pytest.mark.asyncio
