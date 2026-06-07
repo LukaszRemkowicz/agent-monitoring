@@ -1,6 +1,6 @@
 {
   "action": "build_incident_bundle",
-  "project_name": "landingpage",
+  "project_name": "demo-shop",
   "incident_key": "sensitive-path-env-200",
   "summary": "Current sensitive path success evidence for /.env.",
   "evidence": [

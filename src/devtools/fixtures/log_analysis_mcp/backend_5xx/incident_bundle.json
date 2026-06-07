@@ -1,8 +1,8 @@
 {
   "action": "build_incident_bundle",
-  "project_name": "landingpage",
-  "incident_key": "backend-5xx-api-images",
-  "summary": "Current backend 5xx evidence for /api/images.",
+  "project_name": "demo-shop",
+  "incident_key": "backend-5xx-api-catalog",
+  "summary": "Current backend 5xx evidence for /api/catalog.",
   "evidence": [
     "group_errors reported repeated 502 responses.",
     "inspect_proxy_activity confirmed upstream error count."

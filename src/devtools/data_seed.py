@@ -85,7 +85,7 @@ async def seed_manual_fixture_initial_data(
         ),
         severity=LogAnalysis.Severity.WARNING,
         key_findings=[
-            "A small number of image translation retries were logged.",
+            "A small number of catalog metadata sync retries were logged.",
             "No persistent backend 5xx pattern was present.",
         ],
         recommendations="Watch worker retry volume, but no incident action is required.",
@@ -150,12 +150,12 @@ async def _upsert_log_analysis(
             {
                 "name": "blocked-sensitive-path-probes",
                 "status": "expected_noise_when_blocked",
-                "fingerprint": "landingpage:edge:http_403:/.git/config",
+                "fingerprint": "demo-shop:edge:http_403:/.git/config",
             },
             {
                 "name": "wordpress-scanner-noise",
                 "status": "expected_noise",
-                "fingerprint": "landingpage:edge:http_404:scanner-wordpress",
+                "fingerprint": "demo-shop:edge:http_404:scanner-wordpress",
             },
         ],
         "coverage_snapshot": _coverage_snapshot(analysis_date),
@@ -186,8 +186,8 @@ def _baseline_fingerprints(*, analysis_date: date, severity: str) -> LogAnalysis
         for group in grouped_errors["groups"]
         if group["fingerprint"]
         in {
-            "landingpage:edge:http_403:/.git/config",
-            "landingpage:edge:http_404:scanner-wordpress",
+            "demo-shop:edge:http_403:/.git/config",
+            "demo-shop:edge:http_404:scanner-wordpress",
         }
     ]
     grouped_errors["groups"] = stable_groups
@@ -210,7 +210,7 @@ def _watch_only_fingerprints(*, analysis_date: date, severity: str) -> LogAnalys
     stable_groups = [
         group
         for group in grouped_errors["groups"]
-        if group["fingerprint"] == "landingpage:backend:error:celery:image-translation-timeout"
+        if group["fingerprint"] == "demo-shop:backend:error:celery:catalog-metadata-sync-timeout"
     ]
     grouped_errors["groups"] = stable_groups
     grouped_errors["grouped_error_count"] = len(stable_groups)
@@ -236,7 +236,7 @@ def _fingerprints_from_grouped_errors(
         log_window=LogAnalysisFingerprintLogWindow(since=since, until=until),
         collection=LogAnalysisFingerprintCollection(
             workspace="workflow",
-            requested_project_names=["landingpage", "vps-security"],
+            requested_project_names=["demo-shop", "host-security"],
             project_count=2,
         ),
         coverage_totals={
@@ -248,7 +248,7 @@ def _fingerprints_from_grouped_errors(
         },
         grouped_error_runs=[
             LogAnalysisGroupedErrorRunFingerprint(
-                arguments={"project_name": "landingpage"},
+                arguments={"project_name": "demo-shop"},
                 result=grouped_error_result,
             )
         ],
@@ -286,25 +286,26 @@ def _coverage_snapshot(analysis_date: date) -> dict[str, object]:
     return {
         "projects": [
             {
-                "project_name": "landingpage",
-                "snapshot_dir": f"workflow/landingpage/{analysis_date.isoformat()}",
+                "project_name": "demo-shop",
+                "snapshot_dir": f"workflow/demo-shop/{analysis_date.isoformat()}",
                 "warnings": [],
                 "sources": [
                     _coverage_source("nginx", "file", 920, 65536),
                     _coverage_source("traefik", "file", 760, 49152),
                     _coverage_source("backend", "docker", 180, 12288),
                     _coverage_source("frontend", "docker", 90, 8192),
-                    _coverage_source("celery_worker", "docker", 75, 6144),
-                    _coverage_source("celery_beat", "docker", 30, 2048),
+                    _coverage_source("worker", "docker", 75, 6144),
+                    _coverage_source("scheduler", "docker", 30, 2048),
                 ],
             },
             {
-                "project_name": "vps-security",
-                "snapshot_dir": f"workflow/vps-security/{analysis_date.isoformat()}",
+                "project_name": "host-security",
+                "snapshot_dir": f"workflow/host-security/{analysis_date.isoformat()}",
                 "warnings": [],
                 "sources": [
-                    _coverage_source("auth", "file", 220, 16384),
                     _coverage_source("fail2ban", "file", 64, 4096),
+                    _coverage_source("edge_access", "file", 220, 16384),
+                    _coverage_source("proxy_access", "file", 180, 12288),
                 ],
             },
         ],

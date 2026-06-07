@@ -1,21 +1,21 @@
 {
   "result": [
     {
-      "project_name": "landingpage",
-      "project_summary": "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
+      "project_name": "demo-shop",
+      "project_summary": "Demo web platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
       "source_keys": [
         "nginx",
         "traefik",
         "backend",
         "frontend",
-        "celery_worker",
-        "celery_beat"
+        "worker",
+        "scheduler"
       ]
     },
     {
-      "project_name": "vps-security",
-      "project_summary": "Host-level VPS security telemetry for fail2ban, ingress probe bans, and edge firewall investigation.",
-      "source_keys": ["fail2ban", "nginx_access", "traefik_access"]
+      "project_name": "host-security",
+      "project_summary": "Host-level security telemetry for fail2ban, ingress probe bans, and edge firewall investigation.",
+      "source_keys": ["fail2ban", "edge_access", "proxy_access"]
     }
   ]
 }

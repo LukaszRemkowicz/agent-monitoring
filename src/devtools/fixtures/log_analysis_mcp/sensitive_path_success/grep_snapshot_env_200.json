@@ -1,6 +1,6 @@
 {
   "action": "grep_log_snapshot",
-  "project_name": "landingpage",
+  "project_name": "demo-shop",
   "source_key": "nginx",
   "pattern": "/.env",
   "matching_line_count": 2,

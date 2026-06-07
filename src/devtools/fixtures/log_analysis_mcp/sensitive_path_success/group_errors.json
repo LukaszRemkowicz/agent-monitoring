@@ -6,7 +6,7 @@
   "grouped_error_count": 4,
   "groups": [
     {
-      "fingerprint": "landingpage:edge:http_2xx:200:/.env",
+      "fingerprint": "demo-shop:edge:http_2xx:200:/.env",
       "category": "sensitive_path_success",
       "severity": "critical",
       "count": 2,
@@ -21,19 +21,19 @@
         "line": "203.0.113.10 - - [19/May/2026:02:10:00 +0000] \"GET /.env HTTP/1.1\" 200 512",
         "line_number": 318,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/nginx.log",
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
         "source_key": "nginx"
       },
       "last_seen": {
         "line": "203.0.113.10 - - [19/May/2026:02:11:00 +0000] \"GET /.env HTTP/1.1\" 200 512",
         "line_number": 144,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
         "source_key": "traefik"
       }
     },
     {
-      "fingerprint": "landingpage:edge:http_403:/.git/config",
+      "fingerprint": "demo-shop:edge:http_403:/.git/config",
       "category": "blocked_sensitive_probe",
       "severity": "medium",
       "count": 11,
@@ -48,46 +48,46 @@
         "line": "198.51.100.77 - - [19/May/2026:01:30:00 +0000] \"GET /.git/config HTTP/1.1\" 403 162",
         "line_number": 72,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/nginx.log",
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
         "source_key": "nginx"
       },
       "last_seen": {
         "line": "198.51.100.77 GET /.git/config 403",
         "line_number": 609,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
         "source_key": "traefik"
       }
     },
     {
-      "fingerprint": "landingpage:backend:error:celery:image-translation-timeout",
+      "fingerprint": "demo-shop:backend:error:celery:catalog-metadata-sync-timeout",
       "category": "worker_error",
       "severity": "medium",
       "count": 3,
-      "source_keys": ["celery_worker"],
+      "source_keys": ["worker"],
       "request_paths": [],
       "status_codes": [],
       "levels": ["error"],
-      "message_summary": "Celery worker logged transient image translation timeout retries.",
+      "message_summary": "Celery worker logged transient catalog metadata sync timeout retries.",
       "first_timestamp": "2026-05-19T08:12:00Z",
       "last_timestamp": "2026-05-19T08:18:00Z",
       "first_seen": {
-        "line": "ERROR task translate_image_metadata retrying after upstream timeout",
+        "line": "ERROR task sync_catalog_metadata retrying after upstream timeout",
         "line_number": 41,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/celery_worker.log",
-        "source_key": "celery_worker"
+        "output_file": "workflow/demo-shop/2026-05-19/worker.log",
+        "source_key": "worker"
       },
       "last_seen": {
-        "line": "ERROR task translate_image_metadata retrying after upstream timeout",
+        "line": "ERROR task sync_catalog_metadata retrying after upstream timeout",
         "line_number": 46,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/celery_worker.log",
-        "source_key": "celery_worker"
+        "output_file": "workflow/demo-shop/2026-05-19/worker.log",
+        "source_key": "worker"
       }
     },
     {
-      "fingerprint": "landingpage:edge:http_404:scanner-wordpress",
+      "fingerprint": "demo-shop:edge:http_404:scanner-wordpress",
       "category": "http_4xx",
       "severity": "low",
       "count": 38,
@@ -102,14 +102,14 @@
         "line": "192.0.2.44 - - [19/May/2026:00:20:00 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153",
         "line_number": 11,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/nginx.log",
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
         "source_key": "nginx"
       },
       "last_seen": {
         "line": "192.0.2.44 GET /xmlrpc.php 404",
         "line_number": 751,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
         "source_key": "traefik"
       }
     }
@@ -121,18 +121,18 @@
     "Use inspect_proxy_activity for proxy status context.",
     "Use bot_detection only after distinguishing scanner noise from the successful sensitive-path response."
   ],
-  "project_name": "landingpage",
-  "requested_project_name": "landingpage",
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
   "searched_source_keys": [
     "nginx",
     "traefik",
     "backend",
     "frontend",
-    "celery_worker",
-    "celery_beat"
+    "worker",
+    "scheduler"
   ],
   "session_id": "fixture-session-id",
-  "snapshot_dir": "workflow/landingpage/2026-05-19",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
   "summary": "Current logs contain one critical sensitive-path success group plus routine blocked probe and worker-noise groups.",
   "truncated": false,
   "workspace": "workflow"

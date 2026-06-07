@@ -6,88 +6,88 @@
   "grouped_error_count": 4,
   "groups": [
     {
-      "fingerprint": "landingpage:api:http_5xx:502:/api/images",
+      "fingerprint": "demo-shop:api:http_5xx:502:/api/catalog",
       "category": "http_5xx",
       "severity": "high",
       "count": 7,
       "source_keys": ["backend", "nginx", "traefik"],
-      "request_paths": ["/api/images"],
+      "request_paths": ["/api/catalog"],
       "status_codes": [502],
       "levels": ["error"],
-      "message_summary": "Backend image endpoint returned repeated 502 responses through ingress.",
+      "message_summary": "Backend catalog endpoint returned repeated 502 responses through ingress.",
       "first_timestamp": "2026-05-19T04:05:00Z",
       "last_timestamp": "2026-05-19T04:19:00Z",
       "first_seen": {
-        "line": "ERROR GET /api/images upstream image service timeout status=502",
+        "line": "ERROR GET /api/catalog upstream catalog service timeout status=502",
         "line_number": 88,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/backend.log",
+        "output_file": "workflow/demo-shop/2026-05-19/backend.log",
         "source_key": "backend"
       },
       "last_seen": {
-        "line": "198.51.100.23 GET /api/images 502 upstream_response_time=30.000",
+        "line": "198.51.100.23 GET /api/catalog 502 upstream_response_time=30.000",
         "line_number": 412,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
         "source_key": "traefik"
       }
     },
     {
-      "fingerprint": "landingpage:frontend:error:ssr-image-gallery-timeout",
+      "fingerprint": "demo-shop:frontend:error:ssr-product-page-timeout",
       "category": "frontend_ssr_error",
       "severity": "medium",
       "count": 4,
       "source_keys": ["frontend"],
-      "request_paths": ["/gallery"],
+      "request_paths": ["/products"],
       "status_codes": [],
       "levels": ["error"],
-      "message_summary": "Frontend SSR logged gallery image fetch timeouts.",
+      "message_summary": "Frontend SSR logged product page fetch timeouts.",
       "first_timestamp": "2026-05-19T04:06:00Z",
       "last_timestamp": "2026-05-19T04:18:00Z",
       "first_seen": {
-        "line": "ERROR SSR gallery image fetch failed after backend 502",
+        "line": "ERROR SSR product page fetch failed after backend 502",
         "line_number": 51,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/frontend.log",
+        "output_file": "workflow/demo-shop/2026-05-19/frontend.log",
         "source_key": "frontend"
       },
       "last_seen": {
-        "line": "ERROR SSR gallery image fetch failed after backend 502",
+        "line": "ERROR SSR product page fetch failed after backend 502",
         "line_number": 56,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/frontend.log",
+        "output_file": "workflow/demo-shop/2026-05-19/frontend.log",
         "source_key": "frontend"
       }
     },
     {
-      "fingerprint": "landingpage:celery_worker:warning:translation-retry",
+      "fingerprint": "demo-shop:worker:warning:catalog-sync-retry",
       "category": "worker_warning",
       "severity": "low",
       "count": 5,
-      "source_keys": ["celery_worker"],
+      "source_keys": ["worker"],
       "request_paths": [],
       "status_codes": [],
       "levels": ["warning"],
-      "message_summary": "Celery worker retried translation tasks without final failure.",
+      "message_summary": "Celery worker retried catalog sync tasks without final failure.",
       "first_timestamp": "2026-05-19T09:02:00Z",
       "last_timestamp": "2026-05-19T10:12:00Z",
       "first_seen": {
-        "line": "WARNING translation task retry scheduled attempt=1",
+        "line": "WARNING catalog sync retry scheduled attempt=1",
         "line_number": 71,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/celery_worker.log",
-        "source_key": "celery_worker"
+        "output_file": "workflow/demo-shop/2026-05-19/worker.log",
+        "source_key": "worker"
       },
       "last_seen": {
-        "line": "WARNING translation task retry scheduled attempt=2",
+        "line": "WARNING catalog sync retry scheduled attempt=2",
         "line_number": 79,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/celery_worker.log",
-        "source_key": "celery_worker"
+        "output_file": "workflow/demo-shop/2026-05-19/worker.log",
+        "source_key": "worker"
       }
     },
     {
-      "fingerprint": "landingpage:edge:http_404:scanner-wordpress",
+      "fingerprint": "demo-shop:edge:http_404:scanner-wordpress",
       "category": "http_4xx",
       "severity": "low",
       "count": 21,
@@ -102,14 +102,14 @@
         "line": "192.0.2.31 - - [19/May/2026:00:12:00 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153",
         "line_number": 5,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/nginx.log",
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
         "source_key": "nginx"
       },
       "last_seen": {
         "line": "192.0.2.31 GET /xmlrpc.php 404",
         "line_number": 733,
         "line_truncated": false,
-        "output_file": "workflow/landingpage/2026-05-19/traefik.log",
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
         "source_key": "traefik"
       }
     }
@@ -120,18 +120,18 @@
     "Use inspect_proxy_activity for upstream status context.",
     "Use build_incident_bundle if the 502 group needs a compact operator packet."
   ],
-  "project_name": "landingpage",
-  "requested_project_name": "landingpage",
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
   "searched_source_keys": [
     "nginx",
     "traefik",
     "backend",
     "frontend",
-    "celery_worker",
-    "celery_beat"
+    "worker",
+    "scheduler"
   ],
   "session_id": "fixture-session-id",
-  "snapshot_dir": "workflow/landingpage/2026-05-19",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
   "summary": "Current logs contain a high-severity backend 5xx family with related SSR errors and lower-severity background noise.",
   "truncated": false,
   "workspace": "workflow"

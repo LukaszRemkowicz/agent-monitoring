@@ -197,8 +197,8 @@ class FakerMCP(McpWorkflowClient):
     @staticmethod
     def _fixture_name_for_tool(name: str, arguments: dict[str, Any]) -> str | None:
         if name == McpToolName.GROUP_ERRORS:
-            if arguments.get("project_name") == "vps-security":
-                return "group_errors_vps_security"
+            if arguments.get("project_name") == "host-security":
+                return "group_errors_host_security"
             return "group_errors"
         if name == McpToolName.INSPECT_PROXY_ACTIVITY:
             return "inspect_proxy_activity"

@@ -1,6 +1,6 @@
 {
   "action": "inspect_proxy_activity",
-  "project_name": "landingpage",
+  "project_name": "demo-shop",
   "source_keys": ["nginx"],
   "status_counts": {
     "200": 2,
