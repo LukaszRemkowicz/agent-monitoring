@@ -39,7 +39,7 @@ def _email_config(
         sitemap_recipients=_parse_test_recipients(sitemap_recipients) or parsed_log_recipients,
         admin_domain=admin_domain,
         environment="dev",
-        monitoring_project="landingpage",
+        monitoring_project="demo-shop",
     )
 
 
@@ -86,7 +86,7 @@ def test_log_analysis_email_renders_copied_template() -> None:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=date(2026, 5, 19),
         status="SUCCEEDED",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=["No critical incidents found."],
         recommendations="Keep watching the backend logs.",
@@ -106,7 +106,7 @@ def test_log_analysis_email_renders_copied_template() -> None:
         "monitoring/log_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "landingpage",
+            "monitoring_project": "demo-shop",
             "log_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "log_size": "0.0 KB",
@@ -117,7 +117,7 @@ def test_log_analysis_email_renders_copied_template() -> None:
     )
 
     assert "Portfolio - Daily Log Analysis" in html
-    assert "Landingpage logs are healthy." in html
+    assert "Demo shop logs are healthy." in html
     assert "No critical incidents found." in html
     assert "https://admin.example.com/admin/monitoring/loganalysis/7/" in html
 
@@ -128,7 +128,7 @@ def test_log_analysis_email_omits_admin_link_without_admin_domain() -> None:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=date(2026, 5, 19),
         status="SUCCEEDED",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=["No critical incidents found."],
     )
@@ -138,7 +138,7 @@ def test_log_analysis_email_omits_admin_link_without_admin_domain() -> None:
         "monitoring/log_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "landingpage",
+            "monitoring_project": "demo-shop",
             "log_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "log_size": "0.0 KB",
@@ -159,7 +159,7 @@ def test_log_analysis_email_context_uses_mcp_artifact_size() -> None:
         analysis_date=date(2026, 5, 19),
         mcp_artifact={"collect_logs": build_collect_logs_artifact_payload()},
         status="SUCCEEDED",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=[],
     )
@@ -177,7 +177,7 @@ def test_log_analysis_email_context_uses_mb_for_large_mcp_artifacts() -> None:
         analysis_date=date(2026, 5, 19),
         mcp_artifact={"collect_logs": artifact},
         status="SUCCEEDED",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=[],
     )
@@ -215,7 +215,7 @@ def test_sitemap_analysis_email_renders_copied_template() -> None:
         "monitoring/sitemap_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "landingpage",
+            "monitoring_project": "demo-shop",
             "sitemap_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "execution_time": "4.6",
@@ -246,7 +246,7 @@ def test_sitemap_analysis_email_omits_admin_link_without_admin_domain() -> None:
         "monitoring/sitemap_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "landingpage",
+            "monitoring_project": "demo-shop",
             "sitemap_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "execution_time": "0.0",
@@ -278,7 +278,7 @@ def test_monitoring_email_service_sends_html_email(mocker: MockerFixture) -> Non
         template_name="monitoring/log_analysis.html",
         context={
             "environment": "dev",
-            "monitoring_project": "landingpage",
+            "monitoring_project": "demo-shop",
             "log_analysis": LogAnalysisOut(
                 id=7,
                 created_at=datetime(2026, 5, 19, tzinfo=UTC),

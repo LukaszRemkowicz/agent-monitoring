@@ -53,7 +53,7 @@ from services.sitemap import (
 )
 from tests.conftest import build_collect_logs_artifact_payload
 
-PRIVATE_MONITORING_CONTEXT = "# Private VPS Monitoring Context\n\nTest context."
+PRIVATE_MONITORING_CONTEXT = "# Private Monitoring Context\n\nTest context."
 
 
 def _fingerprints(payload: dict[str, object]) -> LogAnalysisFingerprints:
@@ -91,7 +91,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
         )
         collect_logs = CollectLogsArtifact.model_validate(
             build_collect_logs_artifact_payload(
-                requested_project_names=["landingpage", "shop"],
+                requested_project_names=["demo-shop", "shop"],
                 next_step_tips=[],
                 resolved_source_keys=["backend"],
             )
@@ -120,8 +120,8 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                 final_report_allowed=False,
                 available_projects=[
                     ProjectManifestSummary(
-                        project_name="landingpage",
-                        project_summary="Landingpage project.",
+                        project_name="demo-shop",
+                        project_summary="Demo shop project.",
                         source_keys=["backend"],
                     ),
                     ProjectManifestSummary(
@@ -138,8 +138,8 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                     session_id=collect_logs.session_id,
                     projects=[
                         LogAnalysisPromptCollectedProject(
-                            project_name="landingpage",
-                            snapshot_dir="workflow/landingpage/latest",
+                            project_name="demo-shop",
+                            snapshot_dir="workflow/demo-shop/latest",
                             resolved_source_keys=["backend"],
                             sources=[
                                 LogAnalysisPromptCollectedSource(
@@ -182,7 +182,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
             prompt=prompt,
             final_report=LogAnalysisFinalReport(
                 action="final_report",
-                summary="Landingpage logs are healthy.",
+                summary="Demo shop logs are healthy.",
                 severity=LogAnalysisSeverity.INFO,
                 severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
@@ -261,7 +261,7 @@ class FakeMcpClient(McpWorkflowClient):
     async def get_service_status(self) -> McpServiceStatus:
         self.calls.append("get_service_status")
         return McpServiceStatus(
-            name="mcp-log-server",
+            name="workflow-mcp",
             status="ok",
             environment="dev",
             client_type="workflow_agent",
@@ -450,15 +450,15 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
     assert result.analysis.status == RunStatus.SUCCEEDED
     assert result.analysis.email_sent is False
     assert result.analysis.mcp_artifact == result.agent_context.model_dump(mode="json")
-    assert result.analysis.mcp_collect_logs_id == "workflow/landingpage/latest"
+    assert result.analysis.mcp_collect_logs_id == "workflow/demo-shop/latest"
     assert result.analysis.log_window_since == datetime(2026, 5, 18, 22, tzinfo=UTC)
     assert result.analysis.log_window_until == datetime(2026, 5, 19, 22, tzinfo=UTC)
     assert '"analysis_date":"2026-05-19"' in result.prepared_prompt.user_prompt
     assert result.prepared_prompt.context.collection.projects[0].snapshot_dir == (
-        "workflow/landingpage/latest"
+        "workflow/demo-shop/latest"
     )
     assert repository.saved[0]["status"] == RunStatus.SUCCEEDED
-    assert repository.saved[0]["summary"] == "Landingpage logs are healthy."
+    assert repository.saved[0]["summary"] == "Demo shop logs are healthy."
     assert repository.saved[0]["severity"] == "INFO"
     assert repository.saved[0]["key_findings"] == ["No critical incidents found."]
     assert repository.saved[0]["recommendations"] == "Keep watching the backend logs."
@@ -648,7 +648,7 @@ async def test_log_analysis_service_records_partial_collection_on_agent_failure(
     assert running_update["status"] == RunStatus.RUNNING
     assert failure_update["status"] == RunStatus.FAILED
     assert failure_update["severity"] == "CRITICAL"
-    assert failure_update["mcp_collect_logs_id"] == "workflow/landingpage/latest"
+    assert failure_update["mcp_collect_logs_id"] == "workflow/demo-shop/latest"
     failure_artifact = cast(dict[str, object], failure_update["mcp_artifact"])
     assert failure_artifact["error"] == {
         "stage": "log_analysis",

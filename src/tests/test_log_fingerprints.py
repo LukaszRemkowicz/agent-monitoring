@@ -25,19 +25,19 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     )
     tool_result = LogAnalysisToolResult(
         tool_name=McpToolName.GROUP_ERRORS,
-        arguments={"project_name": "landingpage"},
+        arguments={"project_name": "demo-shop"},
         structured_content={
             "action": McpToolName.GROUP_ERRORS,
             "analysis_cautions": ["Only grouped matching lines are shown."],
             "grouped_error_count": 1,
-            "project_name": "landingpage",
-            "requested_project_name": "landingpage",
+            "project_name": "demo-shop",
+            "requested_project_name": "demo-shop",
             "searched_source_keys": ["nginx"],
             "matching_line_count": 5,
             "max_groups": 50,
             "next_step_tips": ["Use inspect_proxy_activity for HTTP status totals."],
             "session_id": "session-123",
-            "snapshot_dir": "sessions/test/landingpage",
+            "snapshot_dir": "sessions/test/demo-shop",
             "summary": "Found one grouped scanner probe.",
             "truncated": False,
             "workspace": "workflow",
@@ -58,14 +58,14 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
                         "line": "first raw line",
                         "line_number": 7,
                         "line_truncated": False,
-                        "output_file": "sessions/test/landingpage/nginx.log",
+                        "output_file": "sessions/test/demo-shop/nginx.log",
                         "source_key": "nginx",
                     },
                     "last_seen": {
                         "line": "last raw line",
                         "line_number": 9,
                         "line_truncated": True,
-                        "output_file": "sessions/test/landingpage/nginx.log",
+                        "output_file": "sessions/test/demo-shop/nginx.log",
                         "source_key": "nginx",
                     },
                 }
@@ -119,7 +119,7 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     assert packet.fingerprints.report.watch_only_count == 1
     assert packet.fingerprints.tool_results[0].tool_name == McpToolName.GROUP_ERRORS
     assert packet.fingerprints.tool_results[0].arguments_hash == hash_text(
-        dump_arguments({"project_name": "landingpage"})
+        dump_arguments({"project_name": "demo-shop"})
     )
     assert packet.fingerprints.tool_results[0].action == McpToolName.GROUP_ERRORS
     assert packet.fingerprints.tool_results[0].result_hash == hash_text(
@@ -132,13 +132,13 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     assert grouped_errors[0].first_seen.line == "first raw line"
     assert grouped_errors[0].first_seen.line_number == 7
     assert grouped_errors[0].first_seen.line_truncated is False
-    assert grouped_errors[0].first_seen.output_file == "sessions/test/landingpage/nginx.log"
+    assert grouped_errors[0].first_seen.output_file == "sessions/test/demo-shop/nginx.log"
     assert grouped_errors[0].first_seen.source_key == "nginx"
     assert grouped_errors[0].last_seen is not None
     assert grouped_errors[0].last_seen.line == "last raw line"
     assert grouped_errors[0].last_seen.line_number == 9
     assert grouped_errors[0].last_seen.line_truncated is True
-    assert packet.fingerprints.grouped_error_runs[0].arguments == {"project_name": "landingpage"}
+    assert packet.fingerprints.grouped_error_runs[0].arguments == {"project_name": "demo-shop"}
     assert packet.fingerprints.grouped_error_runs[0].result.action == McpToolName.GROUP_ERRORS
     assert packet.fingerprints.grouped_error_runs[0].result.analysis_cautions == [
         "Only grouped matching lines are shown."
@@ -149,12 +149,12 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     assert packet.fingerprints.grouped_error_runs[0].result.next_step_tips == [
         "Use inspect_proxy_activity for HTTP status totals."
     ]
-    assert packet.fingerprints.grouped_error_runs[0].result.project_name == "landingpage"
-    assert packet.fingerprints.grouped_error_runs[0].result.requested_project_name == "landingpage"
+    assert packet.fingerprints.grouped_error_runs[0].result.project_name == "demo-shop"
+    assert packet.fingerprints.grouped_error_runs[0].result.requested_project_name == "demo-shop"
     assert packet.fingerprints.grouped_error_runs[0].result.searched_source_keys == ["nginx"]
     assert packet.fingerprints.grouped_error_runs[0].result.session_id == "session-123"
     assert packet.fingerprints.grouped_error_runs[0].result.snapshot_dir == (
-        "sessions/test/landingpage"
+        "sessions/test/demo-shop"
     )
     assert packet.fingerprints.grouped_error_runs[0].result.summary == (
         "Found one grouped scanner probe."

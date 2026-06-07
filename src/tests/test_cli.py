@@ -104,7 +104,7 @@ def _patch_log_analysis_command_dependencies(
     dependencies["context_loader"] = mocker.patch.object(
         main,
         "load_private_monitoring_context",
-        return_value="Private VPS context",
+        return_value="Private Monitoring context",
     )
     dependencies["repository_constructor"] = mocker.patch.object(
         main,
@@ -135,7 +135,7 @@ def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=analysis_date,
         status="succeeded",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=["No critical incidents found."],
         recommendations="Keep watching the backend logs.",
@@ -187,8 +187,8 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                     final_report_allowed=True,
                     available_projects=[
                         ProjectManifestSummary(
-                            project_name="landingpage",
-                            project_summary="Landingpage project.",
+                            project_name="demo-shop",
+                            project_summary="Demo shop project.",
                             source_keys=["backend"],
                         )
                     ],
@@ -223,12 +223,12 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
             ),
             final_report=LogAnalysisFinalReport(
                 action="final_report",
-                summary="Landingpage logs are healthy.",
+                summary="Demo shop logs are healthy.",
                 severity=LogAnalysisSeverity.INFO,
                 severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
                 evidence=["group_errors found no repeated backend errors."],
-                coverage_gaps=["celery_beat collected zero lines."],
+                coverage_gaps=["scheduler collected zero lines."],
                 recommendations="Keep watching the backend logs.",
                 watch_only_items=["Routine SSH brute-force traffic blocked by fail2ban."],
                 trend_summary="No prior trend data was available.",
@@ -293,14 +293,14 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert result.exit_code == 0
     assert "Completed log-analysis report analyze_daily_log_bundle" in result.output
     assert "severity=INFO" in result.output
-    assert "Summary: Landingpage logs are healthy." in result.output
+    assert "Summary: Demo shop logs are healthy." in result.output
     assert "Severity rationale: INFO because no service-impacting issue was found." in result.output
     assert "Key findings:" in result.output
     assert "- No critical incidents found." in result.output
     assert "Evidence:" in result.output
     assert "- group_errors found no repeated backend errors." in result.output
     assert "Coverage gaps:" in result.output
-    assert "- celery_beat collected zero lines." in result.output
+    assert "- scheduler collected zero lines." in result.output
     assert "Watch-only items:" in result.output
     assert "- Routine SSH brute-force traffic blocked by fail2ban." in result.output
     assert "Recommendations: Keep watching the backend logs." in result.output
@@ -389,7 +389,7 @@ def test_check_mcp_command_calls_mcp_service_status(
         async def get_service_status(self) -> McpServiceStatus:
             self.calls.append("get_service_status")
             return McpServiceStatus(
-                name="mcp-log-server",
+                name="workflow-mcp",
                 status="ok",
                 environment="dev",
                 client_type="workflow_agent",
@@ -411,7 +411,7 @@ def test_check_mcp_command_calls_mcp_service_status(
         "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
     }
     assert "MCP service is reachable" in result.output
-    assert "name=mcp-log-server" in result.output
+    assert "name=workflow-mcp" in result.output
     assert "status=ok" in result.output
 
 
@@ -852,7 +852,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     async def command() -> None:
         raise McpClientError(
             (
-                "MCP collect_logs error: Unknown project 'landingpage'. "
+                "MCP collect_logs error: Unknown project 'demo-shop'. "
                 "No persisted manifest was found for that project. "
                 "Retry tips: Call list_projects to discover available projects."
             ),
@@ -866,7 +866,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     assert result.exit_code == 1
     assert "MCP call failed" in output
     assert "collect_logs" in output
-    assert "Unknown project 'landingpage'" in output
+    assert "Unknown project 'demo-shop'" in output
     assert "No persisted manifest" in output
     assert "was found for that project" in output
     assert "Call list_projects" in output

@@ -14,8 +14,7 @@ from schemas import CollectLogsArtifact, LogSourceCollectionStatus, LogWorkspace
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
 
 PRIVATE_MONITORING_CONTEXT = (
-    "# Private VPS Monitoring Context\n\n"
-    "Installed services: landingpage, vps-security, mcp-log-server."
+    "# Private Monitoring Context\n\n" "Installed services: demo-shop, host-security, workflow-mcp."
 )
 
 AgentFactory = Callable[[McpWorkflowClient, MockProvider], MonitoringWorkflowAgent]
@@ -61,7 +60,7 @@ def build_collect_logs_artifact_payload(
             "status": LogSourceCollectionStatus.COLLECTED,
             "line_count": 120,
             "byte_count": 4096,
-            "output_file": "workflow/landingpage/latest/backend.log",
+            "output_file": "workflow/demo-shop/latest/backend.log",
             "error": None,
             "retry_tips": [],
         }
@@ -87,16 +86,16 @@ def build_collect_logs_artifact_payload(
         "action": McpToolName.COLLECT_LOGS,
         "workspace": LogWorkspace.WORKFLOW,
         "session_id": session_id,
-        "requested_project_names": requested_project_names or ["landingpage"],
+        "requested_project_names": requested_project_names or ["demo-shop"],
         "next_step_tips": (
             ["Use group_snapshot_errors next."] if next_step_tips is None else next_step_tips
         ),
         "projects": [
             {
-                "requested_project_name": "landingpage",
-                "project_name": "landingpage",
+                "requested_project_name": "demo-shop",
+                "project_name": "demo-shop",
                 "workspace": LogWorkspace.WORKFLOW,
-                "snapshot_dir": "workflow/landingpage/latest",
+                "snapshot_dir": "workflow/demo-shop/latest",
                 "requested_source_keys": ["all"],
                 "requested_since": since,
                 "requested_until": until,

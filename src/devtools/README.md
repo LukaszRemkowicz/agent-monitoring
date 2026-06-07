@@ -72,6 +72,13 @@ the agent to reason about:
 - `sensitive_path_success`: today includes a successful sensitive-path response
   that should be treated as critical
 
+Fixture project names, source names, archive paths, host labels, and route
+examples are synthetic and intentionally public-safe. The scenarios preserve
+the shape of useful monitoring evidence, not the real private topology. Generic
+stack vocabulary such as nginx, Traefik, fail2ban, backend, frontend, worker,
+scheduler, and common scanner paths remains when it helps the LLM reason about
+the scenario.
+
 This lets us check whether the AI agent understands "what changed today versus
 yesterday" instead of spending tokens rereading broad raw logs or hiding new
 risk behind historical context.

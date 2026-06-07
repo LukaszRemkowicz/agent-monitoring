@@ -163,7 +163,7 @@ async def test_mcp_workflow_client_get_service_status_uses_status_tool() -> None
             json={
                 "result": {
                     "structuredContent": {
-                        "name": "mcp-log-server",
+                        "name": "workflow-mcp",
                         "status": "ok",
                     },
                 }
@@ -209,7 +209,7 @@ async def test_mcp_workflow_client_collect_logs_omits_project_names_for_jwt_scop
     )
 
     assert artifact.action == McpToolName.COLLECT_LOGS
-    assert artifact.projects[0].snapshot_dir == "workflow/landingpage/latest"
+    assert artifact.projects[0].snapshot_dir == "workflow/demo-shop/latest"
     assert artifact.projects[0].sources[0].source_key == "backend"
     assert requests[0]["method"] == "tools/call"
     assert requests[0]["params"] == {
@@ -234,15 +234,15 @@ async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> N
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Unknown project 'landingpage'.",
+                                "text": "Unknown project 'demo-shop'.",
                             }
                         ],
                         "structuredContent": {
                             "status": "error",
                             "error_code": "unknown_project",
-                            "message": "Unknown project 'landingpage'.",
+                            "message": "Unknown project 'demo-shop'.",
                             "retry_tips": ["Call list_projects."],
-                            "details": {"requested_project_names": ["landingpage"]},
+                            "details": {"requested_project_names": ["demo-shop"]},
                         },
                         "isError": True,
                     }
@@ -257,7 +257,7 @@ async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> N
             until="2026-05-20T00:00:00Z",
         )
 
-    assert "Unknown project 'landingpage'" in str(error_info.value)
+    assert "Unknown project 'demo-shop'" in str(error_info.value)
     assert "Call list_projects" in str(error_info.value)
     assert error_info.value.tool_name == McpToolName.COLLECT_LOGS
 
@@ -277,9 +277,9 @@ async def test_mcp_workflow_client_collect_logs_validation_error_lists_fields() 
                             "workspace": LogWorkspace.WORKFLOW,
                             "projects": [
                                 {
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "workspace": LogWorkspace.WORKFLOW,
-                                    "snapshot_dir": "workflow/landingpage/latest",
+                                    "snapshot_dir": "workflow/demo-shop/latest",
                                     "collected_at": "2026-05-20T00:01:00Z",
                                 }
                             ],
@@ -314,8 +314,8 @@ async def test_mcp_workflow_client_list_projects_uses_discovery_tool() -> None:
                     "structuredContent": {
                         "result": [
                             {
-                                "project_name": "landingpage",
-                                "project_summary": "Landingpage project.",
+                                "project_name": "demo-shop",
+                                "project_summary": "Demo shop project.",
                                 "source_keys": ["backend", "nginx"],
                             },
                             {
@@ -337,7 +337,7 @@ async def test_mcp_workflow_client_list_projects_uses_discovery_tool() -> None:
 
     projects: list[ProjectManifestSummary] = await client.list_projects()
 
-    assert [project.project_name for project in projects] == ["landingpage", "shop"]
+    assert [project.project_name for project in projects] == ["demo-shop", "shop"]
     assert projects[0].source_keys == ["backend", "nginx"]
     assert requests[0]["params"] == {
         "name": McpToolName.LIST_PROJECTS,
@@ -423,7 +423,7 @@ async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
                 "result": {
                     "structuredContent": {
                         "action": McpToolName.GROUP_ERRORS,
-                        "project_name": "landingpage",
+                        "project_name": "demo-shop",
                         "groups": [{"message": "No repeated errors", "count": 0}],
                     }
                 }
@@ -438,14 +438,14 @@ async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
 
     structured_content: dict[str, object] = await client.call_deterministic_tool(
         McpToolName.GROUP_ERRORS,
-        {"project_name": "landingpage"},
+        {"project_name": "demo-shop"},
     )
 
     assert structured_content["action"] == McpToolName.GROUP_ERRORS
-    assert structured_content["project_name"] == "landingpage"
+    assert structured_content["project_name"] == "demo-shop"
     assert requests[0]["params"] == {
         "name": McpToolName.GROUP_ERRORS,
-        "arguments": {"project_name": "landingpage"},
+        "arguments": {"project_name": "demo-shop"},
     }
 
 
@@ -474,7 +474,7 @@ async def test_mcp_workflow_client_deterministic_tool_raises_result_error() -> N
     with pytest.raises(McpClientError) as error_info:
         await client.call_deterministic_tool(
             McpToolName.GROUP_ERRORS,
-            {"project_name": "landingpage", "source_key": "backend"},
+            {"project_name": "demo-shop", "source_key": "backend"},
         )
 
     assert "Unknown source key 'backend'" in str(error_info.value)

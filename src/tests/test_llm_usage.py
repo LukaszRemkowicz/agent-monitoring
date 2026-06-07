@@ -11,13 +11,13 @@ def test_usage_cost_prefers_provider_cost_when_available() -> None:
     assert usage_cost_usd(usage) == 0.123
 
 
-def test_usage_cost_matches_landingpage_gpt4o_token_formula() -> None:
+def test_usage_cost_matches_demo_shop_gpt4o_token_formula() -> None:
     usage = Usage(prompt_tokens=1_000_000, completion_tokens=500_000, total_tokens=1_500_000)
 
     assert usage_cost_usd(usage) == 7.5
 
 
-def test_usage_cost_rounds_to_six_decimals_like_landingpage() -> None:
+def test_usage_cost_rounds_to_six_decimals_like_demo_shop() -> None:
     usage = Usage(prompt_tokens=123, completion_tokens=45, total_tokens=168)
 
     assert usage_cost_usd(usage) == 0.000758

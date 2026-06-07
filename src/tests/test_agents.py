@@ -59,7 +59,7 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
         self.tool_results: dict[str, dict[str, object]] = {
             McpToolName.GROUP_ERRORS: {
                 "action": McpToolName.GROUP_ERRORS,
-                "project_name": "landingpage",
+                "project_name": "demo-shop",
                 "groups": [
                     {
                         "message": "No repeated errors detected",
@@ -145,7 +145,7 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
                 since=since,
                 until=until,
                 session_id="generated-workflow-session-id",
-                requested_project_names=["landingpage", "shop"],
+                requested_project_names=["demo-shop", "shop"],
                 next_step_tips=["Use group_snapshot_errors before final report."],
                 warnings=["nginx stderr unavailable"],
                 include_unavailable_nginx=True,
@@ -156,8 +156,8 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
         self.calls.append(McpToolName.LIST_PROJECTS)
         return [
             ProjectManifestSummary(
-                project_name="landingpage",
-                project_summary="Landingpage project.",
+                project_name="demo-shop",
+                project_summary="Demo shop project.",
                 source_keys=["backend", "nginx"],
             ),
             ProjectManifestSummary(
@@ -285,7 +285,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -309,10 +309,10 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
         McpToolName.LIST_PROJECTS,
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
-            "call_deterministic_tool:group_errors:{'project_name': 'landingpage', "
+            "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
             "'source_keys': ['backend', 'nginx']}"
         ),
-        "call_deterministic_tool:group_errors:{'project_name': 'landingpage'}",
+        "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
     assert context.workflow.workflow_name == McpToolName.ANALYZE_DAILY_LOG_BUNDLE
     collected_project = context.collect_logs.projects[0]
@@ -437,7 +437,7 @@ async def test_monitoring_workflow_agent_includes_historical_context_in_system_p
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -506,7 +506,7 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -542,16 +542,16 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend", "nginx"],
                         },
                         "result": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "grouped_error_count": 1,
                             "groups": [
                                 {
                                     "fingerprint": "nginx:http_4xx:404:/.env",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 4,
@@ -576,7 +576,7 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
             },
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -620,7 +620,7 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
     grouped_error_diff = user_prompt["evidence"]["prompt_compacted"]["grouped_error_diff"]
     assert grouped_error_diff["available"] is True
     assert grouped_error_diff["current_tool_scope_by_project"] == {
-        "landingpage": ["backend", "nginx"]
+        "demo-shop": ["backend", "nginx"]
     }
     assert grouped_error_diff["previous_group_count"] == 1
     assert grouped_error_diff["current_group_count"] == 0
@@ -634,7 +634,7 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
     )
     assert user_prompt["current_coverage"] == {
         "zero_line_sources": [],
-        "unavailable_sources": ["landingpage.nginx"],
+        "unavailable_sources": ["demo-shop.nginx"],
     }
     assert user_prompt["evidence"]["prompt_compacted"]["source_coverage"] == {
         "available": True,
@@ -718,16 +718,16 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend", "nginx"],
                         },
                         "result": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "grouped_error_count": 1,
                             "groups": [
                                 {
                                     "fingerprint": "nginx:http_4xx:404:/.env",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 4,
@@ -767,7 +767,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     assert previous_grouped_errors["available"] is True
     assert previous_grouped_errors["label"] == "previous"
     assert previous_grouped_errors["tool_scope_by_project"] == {
-        "landingpage": ["backend", "nginx"],
+        "demo-shop": ["backend", "nginx"],
     }
     assert previous_grouped_errors["run_count"] == 1
     assert previous_grouped_errors["group_count"] == 1
@@ -776,7 +776,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     assert previous_grouped_errors["fingerprints"] == [
         {
             "fingerprint": "nginx:http_4xx:404:/.env",
-            "project_name": "landingpage",
+            "project_name": "demo-shop",
             "category": "http_4xx",
             "severity": "medium",
             "source_keys": ["nginx"],
@@ -787,7 +787,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     assert user_prompt["evidence"]["current_grouped_errors"]["label"] == "current"
     assert user_prompt["evidence"]["current_grouped_errors"]["run_count"] == 1
     assert user_prompt["evidence"]["current_grouped_errors"]["tool_scope_by_project"] == {
-        "landingpage": ["backend", "nginx"],
+        "demo-shop": ["backend", "nginx"],
     }
     decision_prompt = user_prompt["evidence"]["decision_prompt"]
     assert decision_prompt["mode"] == "no_compare_history"
@@ -831,7 +831,7 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
     previous_groups = [
         {
             "fingerprint": f"nginx:http_4xx:404:/old-{index}.php",
-            "project_name": "landingpage",
+            "project_name": "demo-shop",
             "category": "http_4xx",
             "severity": "medium",
             "count": 1,
@@ -844,7 +844,7 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
     ] + [
         {
             "fingerprint": f"backend:http_4xx:404:/old-backend-{index}.json",
-            "project_name": "landingpage",
+            "project_name": "demo-shop",
             "category": "http_4xx",
             "severity": "medium",
             "count": 2,
@@ -882,7 +882,7 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
     ]
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = {
         "action": McpToolName.GROUP_ERRORS,
-        "project_name": "landingpage",
+        "project_name": "demo-shop",
         "grouped_error_count": len(current_groups),
         "groups": current_groups,
     }
@@ -899,11 +899,11 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend", "nginx"],
                         },
                         "result": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "grouped_error_count": len(previous_groups),
                             "groups": previous_groups,
                         },
@@ -961,7 +961,7 @@ async def test_agent_uses_current_grouped_baseline_without_previous_run(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -996,7 +996,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = _group_errors_result(
-        project_name="landingpage",
+        project_name="demo-shop",
         fingerprint="frontend:http_4xx:404:/favicon.png",
         severity="medium",
         count=6,
@@ -1026,14 +1026,14 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend", "frontend"],
                         },
                         "result": {
                             "groups": [
                                 {
                                     "fingerprint": "frontend:http_4xx:404:/favicon.png",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 5,
@@ -1056,7 +1056,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
         coverage_snapshot={
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -1095,7 +1095,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
         McpToolName.LIST_PROJECTS,
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
-            "call_deterministic_tool:group_errors:{'project_name': 'landingpage', "
+            "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
             "'source_keys': ['backend', 'nginx']}"
         ),
     ]
@@ -1106,7 +1106,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
     grouped_error_diff = user_prompt["evidence"]["prompt_compacted"]["grouped_error_diff"]
     assert grouped_error_diff["available"] is True
     assert grouped_error_diff["current_tool_scope_by_project"] == {
-        "landingpage": ["backend", "nginx"]
+        "demo-shop": ["backend", "nginx"]
     }
     assert grouped_error_diff["previous_group_count"] == 1
     assert grouped_error_diff["current_group_count"] == 1
@@ -1130,7 +1130,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = _group_errors_result(
-        project_name="landingpage",
+        project_name="demo-shop",
         fingerprint="nginx:http_5xx:500:/api",
         severity="high",
         count=3,
@@ -1145,7 +1145,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.INSPECT_PROXY_ACTIVITY,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -1156,7 +1156,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
     )
     mcp_client.tool_results[McpToolName.INSPECT_PROXY_ACTIVITY] = {
         "action": McpToolName.INSPECT_PROXY_ACTIVITY,
-        "project_name": "landingpage",
+        "project_name": "demo-shop",
         "status_class_counts": {"5xx": 3},
         "upstream_error_count": 0,
     }
@@ -1175,7 +1175,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
                             "groups": [
                                 {
                                     "fingerprint": "nginx:http_4xx:404:/.env",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 5,
@@ -1198,7 +1198,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
         coverage_snapshot={
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "nginx",
@@ -1258,7 +1258,7 @@ async def test_agent_relaxes_missing_log_guard_with_grouped_errors(
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = _group_errors_result(
-        project_name="landingpage",
+        project_name="demo-shop",
         fingerprint="backend:http_4xx:404:/robots.txt",
         severity="medium",
         count=1,
@@ -1287,14 +1287,14 @@ async def test_agent_relaxes_missing_log_guard_with_grouped_errors(
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend"],
                         },
                         "result": {
                             "groups": [
                                 {
                                     "fingerprint": "backend:http_4xx:404:/robots.txt",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 1,
@@ -1317,7 +1317,7 @@ async def test_agent_relaxes_missing_log_guard_with_grouped_errors(
         coverage_snapshot={
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -1375,7 +1375,7 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = _group_errors_result(
-        project_name="landingpage",
+        project_name="demo-shop",
         fingerprint="frontend:http_4xx:404:/favicon.png",
         severity="medium",
         count=5,
@@ -1389,16 +1389,16 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
             {
                 "action": LogAnalysisAllowedAction.FINAL_REPORT,
                 "summary": (
-                    "The landingpage and vps-security projects show stable operation with "
+                    "The demo-shop and host-security projects show stable operation with "
                     "no new or worsening 5xx or upstream errors."
                 ),
                 "severity": LogAnalysisSeverity.INFO,
                 "severity_rationale": "No 5xx or upstream errors were detected.",
                 "key_findings": [
                     "No 5xx or upstream errors were detected in any collected logs for "
-                    "landingpage or vps-security projects."
+                    "demo-shop or host-security projects."
                 ],
-                "evidence": ["Current grouped_errors covered landingpage frontend only."],
+                "evidence": ["Current grouped_errors covered demo-shop frontend only."],
                 "coverage_gaps": [],
                 "recommendations": "Continue monitoring.",
                 "watch_only_items": [],
@@ -1410,11 +1410,11 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
         json.dumps(
             _final_report_payload(
                 summary=(
-                    "Landingpage frontend grouped-error fingerprints match previous "
+                    "Demo shop frontend grouped-error fingerprints match previous "
                     "history; other projects were not reanalyzed by current tools."
                 ),
                 evidence=[
-                    "Current grouped_errors covered landingpage frontend.",
+                    "Current grouped_errors covered demo-shop frontend.",
                     "Previous analysis is comparison context only.",
                 ],
             )
@@ -1433,14 +1433,14 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["frontend"],
                         },
                         "result": {
                             "groups": [
                                 {
                                     "fingerprint": "frontend:http_4xx:404:/favicon.png",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 5,
@@ -1461,7 +1461,7 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
         coverage_snapshot={
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "frontend",
@@ -1489,14 +1489,14 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
     )
 
     assert context.final_report.summary == (
-        "Landingpage frontend grouped-error fingerprints match previous history; "
+        "Demo shop frontend grouped-error fingerprints match previous history; "
         "other projects were not reanalyzed by current tools."
     )
     assert len(llm_provider.requests) == 2
     correction_prompt = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     assert "unsupported_history_comparison_claims" in correction_prompt
     assert "current_grouped_error_scope_by_project" in correction_prompt
-    assert "vps-security" in correction_prompt
+    assert "host-security" in correction_prompt
 
 
 @pytest.mark.asyncio
@@ -1513,7 +1513,7 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -1560,7 +1560,7 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
 
     stable_mcp_client = FakeMcpWorkflowClient()
     stable_mcp_client.tool_results[McpToolName.GROUP_ERRORS] = _group_errors_result(
-        project_name="landingpage",
+        project_name="demo-shop",
         fingerprint="nginx:http_4xx:404:/.env",
         severity="medium",
         count=5,
@@ -1602,7 +1602,7 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
                             "groups": [
                                 {
                                     "fingerprint": "nginx:http_4xx:404:/.env",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 5,
@@ -1630,7 +1630,7 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
             },
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -1720,7 +1720,7 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage(
             },
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -1757,12 +1757,12 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage(
     source_coverage = user_prompt["evidence"]["prompt_compacted"]["source_coverage"]
     assert source_coverage["available"] is True
     assert source_coverage["source_coverage_changed"] is True
-    assert source_coverage["changed_sources"] == ["landingpage.backend"]
+    assert source_coverage["changed_sources"] == ["demo-shop.backend"]
     assert source_coverage["tool_scope_by_project"] == {}
     assert source_coverage["recommended_action"] == RecommendedAction.LLM_MAY_DECIDE
     assert user_prompt["current_coverage"] == {
         "zero_line_sources": [],
-        "unavailable_sources": ["landingpage.nginx"],
+        "unavailable_sources": ["demo-shop.nginx"],
     }
     assert user_prompt["previous_analysis"]["coverage_snapshot"] == {
         "totals": {
@@ -1809,14 +1809,14 @@ async def test_monitoring_workflow_agent_requires_tools_for_previous_warning(
         severity=LogAnalysisSeverity.WARNING,
         fingerprints=_fingerprints({"report": {"severity": LogAnalysisSeverity.WARNING}}),
         evidence_fingerprints=[
-            "simulated:landingpage.backend:http_500:count_7",
-            "simulated:landingpage.frontend:http_500:count_5",
+            "simulated:demo-shop.backend:http_500:count_7",
+            "simulated:demo-shop.frontend:http_500:count_5",
         ],
         known_patterns=[],
         coverage_snapshot={
             "projects": [
                 {
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "sources": [
                         {
                             "source_key": "backend",
@@ -1874,7 +1874,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
         "tool_calls": [
             {
                 "tool_name": McpToolName.GROUP_ERRORS,
-                "arguments": {"project_name": "landingpage"},
+                "arguments": {"project_name": "demo-shop"},
             }
         ],
     }
@@ -1915,10 +1915,10 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
         McpToolName.LIST_PROJECTS,
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
-            "call_deterministic_tool:group_errors:{'project_name': 'landingpage', "
+            "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
             "'source_keys': ['backend', 'nginx']}"
         ),
-        "call_deterministic_tool:group_errors:{'project_name': 'landingpage'}",
+        "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
     assert [result.tool_name for result in context.tool_results] == [
         McpToolName.GROUP_ERRORS,
@@ -1962,7 +1962,7 @@ async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_diff
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_key": "backend",
                             "max_groups": 50,
                         },
@@ -1979,7 +1979,7 @@ async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_diff
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_key": "backend",
                             "max_groups": 200,
                         },
@@ -2004,7 +2004,7 @@ async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_diff
 
     assert (
         mcp_client.calls.count(
-            "call_deterministic_tool:group_errors:{'project_name': 'landingpage', "
+            "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
             "'source_key': 'backend', 'max_groups': 50}"
         )
         == 1
@@ -2031,14 +2031,14 @@ async def test_monitoring_workflow_agent_does_not_add_local_probe_interpretation
         {
             McpToolName.INSPECT_PROXY_ACTIVITY: {
                 "action": McpToolName.INSPECT_PROXY_ACTIVITY,
-                "project_name": "landingpage",
+                "project_name": "demo-shop",
                 "total_requests": 100,
                 "status_class_counts": {"2xx": 20, "4xx": 80, "5xx": 0},
                 "upstream_error_count": 0,
             },
             "inspect_live_fail2ban_activity": {
                 "action": "inspect_live_fail2ban_activity",
-                "project_name": "vps-security",
+                "project_name": "host-security",
                 "active_jails": 3,
                 "currently_banned_total": 2,
             },
@@ -2052,11 +2052,11 @@ async def test_monitoring_workflow_agent_does_not_add_local_probe_interpretation
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.INSPECT_PROXY_ACTIVITY,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     },
                     {
                         "tool_name": "inspect_live_fail2ban_activity",
-                        "arguments": {"project_name": "vps-security"},
+                        "arguments": {"project_name": "host-security"},
                     },
                 ],
             }
@@ -2128,7 +2128,7 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
         )
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = {
         "action": McpToolName.GROUP_ERRORS,
-        "project_name": "landingpage",
+        "project_name": "demo-shop",
         "grouped_error_count": len(groups),
         "matching_line_count": 1275,
         "truncated": False,
@@ -2142,7 +2142,7 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage", "max_groups": 200},
+                        "arguments": {"project_name": "demo-shop", "max_groups": 200},
                     }
                 ],
             }
@@ -2181,7 +2181,7 @@ async def test_monitoring_workflow_agent_compacts_large_grep_followup(
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GREP_LOG_SNAPSHOT] = {
         "action": McpToolName.GREP_LOG_SNAPSHOT,
-        "project_name": "landingpage",
+        "project_name": "demo-shop",
         "source_key": "nginx",
         "grep": "/\\.env",
         "match_count": 50,
@@ -2202,7 +2202,7 @@ async def test_monitoring_workflow_agent_compacts_large_grep_followup(
                     {
                         "tool_name": McpToolName.GREP_LOG_SNAPSHOT,
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_key": "nginx",
                             "grep": "/\\.env",
                             "max_matches": 100,
@@ -2264,11 +2264,11 @@ async def test_monitoring_workflow_agent_persists_llm_tool_usage_by_trace_id(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.INSPECT_PROXY_ACTIVITY,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     },
                     {
                         "tool_name": "inspect_live_fail2ban_activity",
-                        "arguments": {"project_name": "vps-security"},
+                        "arguments": {"project_name": "host-security"},
                     },
                 ],
             }
@@ -2333,7 +2333,7 @@ async def test_monitoring_workflow_agent_logs_llm_actions(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }
@@ -2382,11 +2382,11 @@ async def test_monitoring_workflow_agent_logs_llm_actions(
     assert first_extra["tool_call_count"] == 1
     assert first_extra["llm_response_text"] == (
         '{"action": "call_tools", "tool_calls": [{"tool_name": "group_errors", '
-        '"arguments": {"project_name": "landingpage"}}]}'
+        '"arguments": {"project_name": "demo-shop"}}]}'
     )
     assert first_extra["llm_response_structured_output"] is None
     assert first_extra["llm_action_payload"]["tool_calls"][0]["arguments"] == {
-        "project_name": "landingpage"
+        "project_name": "demo-shop"
     }
     second_extra = action_log_calls[1].kwargs["extra"]
     assert second_extra["iteration"] == 2
@@ -2497,7 +2497,7 @@ async def test_monitoring_workflow_agent_records_llm_report_time(
                 "tool_calls": [
                     {
                         "tool_name": McpToolName.GROUP_ERRORS,
-                        "arguments": {"project_name": "landingpage"},
+                        "arguments": {"project_name": "demo-shop"},
                     }
                 ],
             }

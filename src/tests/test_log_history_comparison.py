@@ -42,7 +42,7 @@ def test_prompt_grouped_error_compaction_requires_comparison() -> None:
 
 def _grouped_error_run(
     *,
-    project_name: str = "landingpage",
+    project_name: str = "demo-shop",
     source_keys: list[str] | None = None,
     groups: list[dict[str, object]] | None = None,
 ) -> LogAnalysisGroupedErrorRunFingerprint:
@@ -83,14 +83,14 @@ def test_history_comparison_service_compares_grouped_errors_with_yesterday() -> 
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend"],
                         },
                         "result": {
                             "groups": [
                                 {
                                     "fingerprint": "backend:http_4xx:404:/robots.txt",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 1,
@@ -116,7 +116,7 @@ def test_history_comparison_service_compares_grouped_errors_with_yesterday() -> 
             groups=[
                 {
                     "fingerprint": "nginx:http_4xx:404:/.env",
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "category": "http_4xx",
                     "severity": "medium",
                     "count": 3,
@@ -153,14 +153,14 @@ def test_history_comparison_keeps_empty_current_group_errors_as_evidence() -> No
                 "grouped_error_runs": [
                     {
                         "arguments": {
-                            "project_name": "landingpage",
+                            "project_name": "demo-shop",
                             "source_keys": ["backend"],
                         },
                         "result": {
                             "groups": [
                                 {
                                     "fingerprint": "backend:http_4xx:404:/robots.txt",
-                                    "project_name": "landingpage",
+                                    "project_name": "demo-shop",
                                     "category": "http_4xx",
                                     "severity": "medium",
                                     "count": 1,
@@ -194,7 +194,7 @@ def test_history_comparison_keeps_empty_current_group_errors_as_evidence() -> No
     assert result.current_group_count == 0
     assert result.new_fingerprints == []
     assert result.resolved_fingerprints == ["backend:http_4xx:404:/robots.txt"]
-    assert result.current_tool_scope_by_project == {"landingpage": ["backend"]}
+    assert result.current_tool_scope_by_project == {"demo-shop": ["backend"]}
 
 
 def test_history_comparison_builds_compact_grouped_error_delta() -> None:
@@ -214,7 +214,7 @@ def test_history_comparison_builds_compact_grouped_error_delta() -> None:
                                 "groups": [
                                     {
                                         "fingerprint": "frontend:http_4xx:404:/favicon.png",
-                                        "project_name": "landingpage",
+                                        "project_name": "demo-shop",
                                         "category": "http_4xx",
                                         "severity": "medium",
                                         "count": 4,
@@ -260,7 +260,7 @@ def test_history_comparison_builds_compact_grouped_error_delta() -> None:
             groups=[
                 {
                     "fingerprint": "frontend:http_4xx:404:/favicon.png",
-                    "project_name": "landingpage",
+                    "project_name": "demo-shop",
                     "category": "http_4xx",
                     "severity": "medium",
                     "count": 6,
@@ -327,14 +327,14 @@ def test_history_comparison_flags_resolved_high_severity_grouped_errors() -> Non
                     "grouped_error_runs": [
                         {
                             "arguments": {
-                                "project_name": "landingpage",
+                                "project_name": "demo-shop",
                                 "source_keys": ["backend"],
                             },
                             "result": {
                                 "groups": [
                                     {
                                         "fingerprint": "backend:http_5xx:500:/api",
-                                        "project_name": "landingpage",
+                                        "project_name": "demo-shop",
                                         "category": "http_5xx",
                                         "severity": "high",
                                         "count": 15,
@@ -365,14 +365,14 @@ def test_history_comparison_flags_resolved_high_severity_grouped_errors() -> Non
     assert comparison is not None
     assert comparison.resolved_fingerprints == ["backend:http_5xx:500:/api"]
     assert comparison.resolved_high_severity_fingerprints == ["backend:http_5xx:500:/api"]
-    assert comparison.resolved_high_severity_tool_scope_by_project == {"landingpage": ["backend"]}
+    assert comparison.resolved_high_severity_tool_scope_by_project == {"demo-shop": ["backend"]}
     assert comparison.resolved_high_severity_current_scope_covered is True
     compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
         comparison
     )
     assert compact.resolved_high_severity_fingerprint_count == 1
     assert compact.resolved_high_severity_fingerprints == ["backend:http_5xx:500:/api"]
-    assert compact.resolved_high_severity_tool_scope_by_project == {"landingpage": ["backend"]}
+    assert compact.resolved_high_severity_tool_scope_by_project == {"demo-shop": ["backend"]}
     assert compact.resolved_high_severity_current_scope_covered is True
     assert compact.evidence_quality_warnings == [
         "previous_high_severity_grouped_error_fingerprints_absent_from_current"
@@ -396,14 +396,14 @@ def test_history_comparison_warns_when_resolved_high_severity_scope_is_uncovered
                     "grouped_error_runs": [
                         {
                             "arguments": {
-                                "project_name": "landingpage",
+                                "project_name": "demo-shop",
                                 "source_keys": ["backend"],
                             },
                             "result": {
                                 "groups": [
                                     {
                                         "fingerprint": "backend:http_5xx:500:/api",
-                                        "project_name": "landingpage",
+                                        "project_name": "demo-shop",
                                         "category": "http_5xx",
                                         "severity": "high",
                                         "count": 15,
@@ -432,8 +432,8 @@ def test_history_comparison_warns_when_resolved_high_severity_scope_is_uncovered
     )
 
     assert comparison is not None
-    assert comparison.resolved_high_severity_tool_scope_by_project == {"landingpage": ["backend"]}
-    assert comparison.current_tool_scope_by_project == {"landingpage": ["nginx"]}
+    assert comparison.resolved_high_severity_tool_scope_by_project == {"demo-shop": ["backend"]}
+    assert comparison.current_tool_scope_by_project == {"demo-shop": ["nginx"]}
     assert comparison.resolved_high_severity_current_scope_covered is False
     compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
         comparison
@@ -450,7 +450,7 @@ def test_history_comparison_warns_when_resolved_high_severity_scope_is_uncovered
 def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     comparison = LogAnalysisGroupedErrorComparison(
         available=True,
-        current_tool_scope_by_project={"landingpage": ["backend", "nginx"]},
+        current_tool_scope_by_project={"demo-shop": ["backend", "nginx"]},
         previous_group_count=20,
         current_group_count=30,
         new_fingerprints=[f"backend:http_4xx:404:/new-{index}" for index in range(12)],
@@ -460,11 +460,11 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
         improved_fingerprints=["backend:http_4xx:404:/better"],
         new_high_severity_fingerprints=["backend:http_5xx:500:/api"],
         resolved_high_severity_fingerprints=["backend:http_5xx:500:/gone"],
-        resolved_high_severity_tool_scope_by_project={"landingpage": ["backend"]},
+        resolved_high_severity_tool_scope_by_project={"demo-shop": ["backend"]},
         current_changed_groups=[
             LogAnalysisGroupedErrorSignal(
                 fingerprint="backend:http_5xx:500:/api",
-                project_name="landingpage",
+                project_name="demo-shop",
                 category="http_5xx",
                 severity="high",
                 count=3,
@@ -475,7 +475,7 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
             *[
                 LogAnalysisGroupedErrorSignal(
                     fingerprint=f"backend:http_4xx:404:/new-{index}",
-                    project_name="landingpage",
+                    project_name="demo-shop",
                     category="http_4xx",
                     severity="medium",
                     count=index + 1,
@@ -489,7 +489,7 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
         previous_changed_groups=[
             LogAnalysisGroupedErrorSignal(
                 fingerprint=f"backend:http_4xx:404:/old-{index}",
-                project_name="landingpage",
+                project_name="demo-shop",
                 category="http_4xx",
                 severity="medium",
                 count=index + 1,
@@ -507,7 +507,7 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     )
 
     assert compact.available is True
-    assert compact.current_tool_scope_by_project == {"landingpage": ["backend", "nginx"]}
+    assert compact.current_tool_scope_by_project == {"demo-shop": ["backend", "nginx"]}
     assert compact.previous_group_count == 20
     assert compact.current_group_count == 30
     assert compact.new_fingerprint_count == 12
@@ -519,7 +519,7 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     assert compact.new_high_severity_fingerprints == ["backend:http_5xx:500:/api"]
     assert compact.resolved_high_severity_fingerprint_count == 1
     assert compact.resolved_high_severity_fingerprints == ["backend:http_5xx:500:/gone"]
-    assert compact.resolved_high_severity_tool_scope_by_project == {"landingpage": ["backend"]}
+    assert compact.resolved_high_severity_tool_scope_by_project == {"demo-shop": ["backend"]}
     assert compact.resolved_high_severity_current_scope_covered is True
     assert compact.evidence_quality_warnings == [
         "worsened_grouped_error_fingerprints_present",
@@ -542,14 +542,14 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
 def test_history_comparison_flags_empty_grouped_error_baseline_for_prompt() -> None:
     comparison = LogAnalysisGroupedErrorComparison(
         available=True,
-        current_tool_scope_by_project={"landingpage": ["backend"]},
+        current_tool_scope_by_project={"demo-shop": ["backend"]},
         previous_group_count=0,
         current_group_count=1,
         new_fingerprints=["backend:http_4xx:404:/robots.txt"],
         current_changed_groups=[
             LogAnalysisGroupedErrorSignal(
                 fingerprint="backend:http_4xx:404:/robots.txt",
-                project_name="landingpage",
+                project_name="demo-shop",
                 category="http_4xx",
                 severity="medium",
                 count=1,
@@ -592,7 +592,7 @@ def test_history_comparison_builds_missing_log_guard() -> None:
             coverage_snapshot={
                 "projects": [
                     {
-                        "project_name": "landingpage",
+                        "project_name": "demo-shop",
                         "sources": [
                             {
                                 "source_key": "nginx",
@@ -622,8 +622,8 @@ def test_history_comparison_builds_missing_log_guard() -> None:
     )
 
     assert comparison.source_coverage_changed is True
-    assert comparison.changed_sources == ["landingpage.nginx"]
-    assert comparison.tool_scope_by_project == {"landingpage": ["nginx"]}
+    assert comparison.changed_sources == ["demo-shop.nginx"]
+    assert comparison.tool_scope_by_project == {"demo-shop": ["nginx"]}
     assert comparison.recommended_action == RecommendedAction.CALL_TOOLS
 
 
@@ -639,7 +639,7 @@ def test_history_comparison_finds_unsupported_broad_report_claims() -> None:
             "prompt_compacted": {
                 "grouped_error_diff": {
                     "available": True,
-                    "current_tool_scope_by_project": {"landingpage": ["backend"]},
+                    "current_tool_scope_by_project": {"demo-shop": ["backend"]},
                     "previous_group_count": 1,
                     "current_group_count": 1,
                     "rationale": "Grouped errors were compared.",

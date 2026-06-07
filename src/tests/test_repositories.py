@@ -94,7 +94,7 @@ async def test_log_analysis_repository_get_latest_before_date_returns_previous_s
         fingerprints={"coverage_totals": {"404": 12}},
         evidence_fingerprints=["scanner-family:generic-env-probe"],
         known_patterns=[{"family": "scanner", "status": "watch_only"}],
-        coverage_snapshot={"landingpage": {"backend": "collected"}},
+        coverage_snapshot={"demo-shop": {"backend": "collected"}},
     )
     await LogAnalysisFactory.create(
         analysis_date=date(2026, 5, 19),
@@ -122,7 +122,7 @@ async def test_log_analysis_repository_get_latest_before_date_returns_previous_s
     assert baseline.fingerprints.coverage_totals == {"404": 12}
     assert baseline.evidence_fingerprints == ["scanner-family:generic-env-probe"]
     assert baseline.known_patterns == [{"family": "scanner", "status": "watch_only"}]
-    assert baseline.coverage_snapshot == {"landingpage": {"backend": "collected"}}
+    assert baseline.coverage_snapshot == {"demo-shop": {"backend": "collected"}}
 
 
 @pytest.mark.asyncio
@@ -268,7 +268,7 @@ async def test_log_analysis_llm_call_repository_creates_steps() -> None:
             step_type="mcp_tool_call",
             tool_name="inspect_proxy_activity",
             arguments_hash="abc123",
-            arguments_text='{"project_name": "landingpage"}',
+            arguments_text='{"project_name": "demo-shop"}',
             status="succeeded",
             started_at=datetime(2026, 5, 19, 12, tzinfo=UTC),
             finished_at=datetime(2026, 5, 19, 12, 0, 1, tzinfo=UTC),
@@ -285,4 +285,4 @@ async def test_log_analysis_llm_call_repository_creates_steps() -> None:
     assert steps[0].llm_response_text == '{"action": "call_tools"}'
     assert steps[1].tool_name == "inspect_proxy_activity"
     assert steps[1].status == "succeeded"
-    assert steps[1].arguments_text == '{"project_name": "landingpage"}'
+    assert steps[1].arguments_text == '{"project_name": "demo-shop"}'
