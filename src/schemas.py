@@ -901,6 +901,13 @@ class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     resolved_high_severity_current_scope_covered: bool = True
     evidence_quality_warnings: list[str] = Field(default_factory=list)
     next_evidence_hint: str = ""
+    priority_current_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
+        default_factory=list,
+        description=(
+            "Current changed examples ordered for report wording: new high-severity "
+            "families first, then other changed families."
+        ),
+    )
     current_changed_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
         default_factory=list
     )

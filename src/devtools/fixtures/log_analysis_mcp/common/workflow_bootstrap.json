@@ -1,0 +1,162 @@
+{
+  "workflow_name": "analyze_daily_log_bundle",
+  "prompt": "# Monitoring Tool Loop System Prompt\n\nYou are operating inside a bounded monitoring job loop.\n\nYour job:\n- inspect the project, source, tool, and optional skill inventory\n- call deterministic MCP tools when facts are missing\n- call `read_skills` when optional skill metadata matches observed facts\n- return `final_report` only after the chosen tools and skills are sufficient\n\nDecision contract:\n- Use `call_tools` for deterministic evidence such as grouped errors, incident bundles, proxy activity, snapshot reads, filtered views, or follow-up windows.\n- Prefer summary and incident tools before broad text search.\n- Use `read_skills` only for optional skills listed in the prompt context.\n- Choose optional skills from their descriptions and `when_useful` metadata.\n- If deterministic evidence shows bot, scanner, probe, credential, sensitive-path, or suspicious 4xx traffic and `bot_detection` is listed as an optional skill but has not been read yet, return `action=read_skills` for `bot_detection` before `final_report`. Use the skill text for interpretation instead of relying on model memory.\n- Keep detailed interpretation inside retrieved skill text and deterministic tool results, not unstated assumptions.\n- If no optional skill is relevant and evidence is sufficient, finish with `final_report`.\n\nHard rules:\n- you may only use the documented tools provided in the tool list\n- do not invent tools, skill names, source keys, projects, or raw log facts\n- do not ask for filesystem, shell, or network access outside the provided tools\n- do not repeat the same tool call with the same arguments unless new context makes it necessary\n- zero collected lines mean the source was not assessed from logs\n- keep observed evidence, interpretation, coverage gaps, watch-only items, and recommendations separate\n- your response MUST be a single top-level JSON object with an `action` field\n- valid top-level actions are only `call_tools`, `read_skills`, and `final_report`\n- do not wrap the response inside objects like {\"final_report\": {...}}, {\"call_tools\": {...}}, or {\"read_skills\": {...}}\n- when returning `final_report`, follow the dedicated final response format instead of inventing your own field names\n\n# Monitoring Tool Loop User Prompt\n\nYou must respond with JSON only.\n\nChoose one action: `call_tools`, `read_skills`, or `final_report`.\n\nUse `call_tools` when you still need deterministic data or an optional workflow tool result. Use `read_skills` when deterministic evidence shows optional bot-detection or OWASP/security guidance is needed before the final report. If tool results show bot, scanner, probe, credential, sensitive-path, or suspicious 4xx traffic and `bot_detection` is available but not yet read, choose `read_skills` for `bot_detection` before `final_report`.\n\nYou may request one or more tools in a single step.\n\nRequired top-level response shapes:\n\nFor tool calls: {\"action\":\"call_tools\",\"tool_calls\":[{\"tool_name\":\"inspect_proxy_activity\",\"arguments\":{\"project_name\":\"landingpage\",\"source_keys\":[\"nginx\",\"traefik\"]}}]}\n\nFor optional skill reads: {\"action\":\"read_skills\",\"skill_names\":[\"owasp_security\"]}\n\nFor final report: {\"action\":\"final_report\",\"summary\":\"Brief overview of the day's log health (2-3 sentences)\",\"severity\":\"INFO|WARNING|CRITICAL\",\"severity_rationale\":\"One sentence explaining why the severity is INFO, WARNING, or CRITICAL\",\"key_findings\":[\"specific finding 1\",\"specific finding 2\"],\"evidence\":[\"tool-backed fact 1\",\"tool-backed fact 2\"],\"coverage_gaps\":[\"source or check that was unavailable, empty, or inconclusive\"],\"recommendations\":\"Concrete next steps referencing this project's code and services\",\"watch_only_items\":[\"normal recurring noise that does not need immediate action\"],\"trend_summary\":\"1-2 sentences on what changed vs. prior days\"}\n\nDo not return nested action wrappers.",
+  "mandatory_skills": [
+    {
+      "skill_name": "normal_patterns",
+      "resource_uri": "skill://workflow/normal_patterns",
+      "description": "Known healthy log patterns that should not be treated as incidents.",
+      "when_useful": "Always read before interpreting expected recurring log patterns."
+    },
+    {
+      "skill_name": "application_monitoring",
+      "resource_uri": "skill://workflow/application_monitoring",
+      "description": "Checklist of application-level failures and log signals to watch.",
+      "when_useful": "Always read before interpreting application health and failure signals."
+    },
+    {
+      "skill_name": "severity_guide",
+      "resource_uri": "skill://workflow/severity_guide",
+      "description": "Severity classification rules for final monitoring reports.",
+      "when_useful": "Always read before assigning final INFO, WARNING, or CRITICAL severity."
+    },
+    {
+      "skill_name": "recommendations_guide",
+      "resource_uri": "skill://workflow/recommendations_guide",
+      "description": "Rules for producing concrete, project-relevant recommendations.",
+      "when_useful": "Always read before writing final recommendations."
+    }
+  ],
+  "optional_skills": [
+    {
+      "skill_name": "bot_detection",
+      "resource_uri": "skill://workflow/bot_detection",
+      "description": "Guidance for recognizing bot traffic and suspicious probing patterns.",
+      "when_useful": "Use for scanner/probe-heavy traffic, clustered 404/405s, suspicious infrastructure warnings, credential scans, or commodity path probing."
+    },
+    {
+      "skill_name": "owasp_security",
+      "resource_uri": "skill://workflow/owasp_security",
+      "description": "Security interpretation guidance aligned with OWASP-style incident framing.",
+      "when_useful": "Use for auth abuse, injection strings, exploit attempts, successful sensitive-path access, or API/security impact framing."
+    }
+  ],
+  "tools": [
+    {
+      "tool_name": "group_errors",
+      "description": "Group repeated error-like lines from one persisted workflow or session snapshot into compact triage findings. Use it after collect_logs when you need recurring failures, timestamps, source keys, and raw line references. Use source_key for one source or source_keys for multiple sources, but not both, before deciding whether to grep, read files, or recollect a narrower since/until window.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_key", "type": "str | None", "default": null, "required": false},
+        {"name": "max_groups", "type": "int", "default": 50, "required": false}
+      ]
+    },
+    {
+      "tool_name": "inspect_proxy_activity",
+      "description": "Inspect collected proxy-shaped snapshot sources for deterministic ingress signals. Summarizes HTTP status classes, route/status clusters, and upstream-style 502/503/504 errors from persisted logs. This tool reads snapshot files only; it does not run live proxy or shell commands.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_key", "type": "str | None", "default": null, "required": false},
+        {"name": "max_groups", "type": "int", "default": 50, "required": false}
+      ]
+    },
+    {
+      "tool_name": "build_incident_bundle",
+      "description": "Build one compact incident summary from a persisted snapshot. Use it as an entry point, not as a substitute for raw log context. Use source_key for one source or source_keys for multiple sources; do not pass both. Before drawing final conclusions about timing, clustering, or severity, recollect a tighter since/until window or reopen the relevant snapshot files and grep results.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_key", "type": "str | None", "default": null, "required": false},
+        {"name": "max_groups", "type": "int", "default": 50, "required": false},
+        {"name": "max_lines_per_source", "type": "int | None", "default": null, "required": false}
+      ]
+    },
+    {
+      "tool_name": "create_filtered_view",
+      "description": "Create a cleaned deterministic view from a persisted raw snapshot. This keeps the raw snapshot as the source of truth while removing low-signal lines through manifest-selected noise profiles. Use source_key for one source or source_keys for multiple sources; do not pass both. Use view_mode='head' for chronological cleaned lines, view_mode='errors' for incident-oriented lines first, or view_mode='sample' for a broader spread across selected sources. Use it when you want a smaller analysis view before reading or grepping raw files directly.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_key", "type": "str | None", "default": null, "required": false},
+        {"name": "view_mode", "type": "str", "default": "head", "required": false},
+        {"name": "max_lines", "type": "int", "default": 200, "required": false}
+      ]
+    },
+    {
+      "tool_name": "suggest_followup_window",
+      "description": "Convert first_timestamp and last_timestamp from group_errors or build_incident_bundle into a tighter collect_logs since/until window. Use this after grouped analysis when an incident span is too broad and the next step should be recollecting a narrower workflow or session snapshot. This tool does not read logs and does not need project_name or session_id; pass the returned since/until values into collect_logs.",
+      "arguments": [
+        {"name": "first_timestamp", "type": "str", "default": null, "required": true},
+        {"name": "last_timestamp", "type": "str", "default": null, "required": true},
+        {"name": "padding_minutes", "type": "int", "default": 5, "required": false}
+      ]
+    },
+    {"tool_name": "list_projects", "description": "List projects currently available through persisted manifest rows.", "arguments": []},
+    {
+      "tool_name": "collect_logs",
+      "description": "Collect deterministic logs for one or more projects into persisted artifacts for later analysis. MCP chooses the artifact workspace from the authenticated caller. For a new session collection, omit session_id and MCP will create one. For follow-up collection in the same investigation, reuse the returned session_id to collect additional projects or narrower windows. Use source_keys to limit collection to selected sources. Use since/until to collect a narrower incident window. After session collection, use session_id plus project_name with follow-up tools. After workflow collection, use project_name for the newest workflow artifact, or add archive_name when you need one archived workflow artifact.",
+      "arguments": [
+        {"name": "project_names", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "since", "type": "str | None", "default": "24h", "required": false},
+        {"name": "until", "type": "str | None", "default": null, "required": false}
+      ]
+    },
+    {
+      "tool_name": "inspect_live_fail2ban_activity",
+      "description": "Inspect live fail2ban runtime state for a project such as vps-security through a fixed allowlist of fail2ban-client status commands. Returns active jail names, per-jail ban counters, and currently banned IPs when the fail2ban client and host socket are available to MCP. This tool does not run caller-provided shell commands and does not collect historical logs; use collect_logs plus the fail2ban source for historical incident analysis.",
+      "arguments": [
+        {"name": "project_name", "type": "str | None", "default": null, "required": false}
+      ]
+    },
+    {
+      "tool_name": "list_log_snapshot_files",
+      "description": "List saved log files for one persisted snapshot.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false}
+      ]
+    },
+    {
+      "tool_name": "read_log_snapshot_file",
+      "description": "Read one saved log file from a persisted snapshot.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "source_key", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "start_line", "type": "int | None", "default": null, "required": false},
+        {"name": "line_count", "type": "int | None", "default": null, "required": false},
+        {"name": "max_bytes", "type": "int", "default": 200000, "required": false}
+      ]
+    },
+    {
+      "tool_name": "grep_log_snapshot",
+      "description": "Search one persisted workflow or session snapshot with controlled grep semantics. Use grep for an extended regex pattern, for example 'Ban|wp-login|502'. Omit source filters to search all saved files, pass source_key for one source, or pass source_keys for multiple sources; do not pass both.",
+      "arguments": [
+        {"name": "project_name", "type": "str", "default": null, "required": true},
+        {"name": "grep", "type": "str", "default": null, "required": true},
+        {"name": "session_id", "type": "str | None", "default": null, "required": false},
+        {"name": "archive_name", "type": "str | None", "default": null, "required": false},
+        {"name": "source_keys", "type": "list[str] | None", "default": null, "required": false},
+        {"name": "source_key", "type": "str | None", "default": null, "required": false},
+        {"name": "match_offset", "type": "int", "default": 0, "required": false},
+        {"name": "max_matches", "type": "int", "default": 100, "required": false}
+      ]
+    },
+    {"tool_name": "get_mcp_service_status", "description": "Return a compact MCP service status payload for diagnostics.", "arguments": []},
+    {"tool_name": "get_mcp_health_check", "description": "Return the smallest possible MCP health payload.", "arguments": []}
+  ]
+}

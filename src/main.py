@@ -124,6 +124,8 @@ async def log_analysis(
     _echo_list("Coverage gaps", final_report.coverage_gaps)
     typer.echo(f"Recommendations: {final_report.recommendations}")
     _echo_list("Watch-only items", final_report.watch_only_items)
+    typer.echo(f"LLM tokens used: {result.agent_context.llm_tokens_used}")
+    typer.echo(f"LLM cost USD: {result.agent_context.llm_cost_usd:.6f}")
     typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")
     typer.echo(f"Execution time: {result.analysis.execution_time_seconds:.2f}s")
 

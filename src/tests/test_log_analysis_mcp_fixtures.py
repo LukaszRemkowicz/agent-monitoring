@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 import pytest
 from llm_core.providers.mock import MockProvider
 
+from devtools.mcp import FakerMCP
 from schemas import (
     LogAnalysisAgentContext,
     LogAnalysisAllowedAction,
@@ -13,17 +14,11 @@ from schemas import (
     WorkflowBootstrap,
 )
 from tests.conftest import AgentFactory
-from tests.log_analysis_mcp_fixtures import (
-    FixtureBackedMcpWorkflowClient,
-    load_log_analysis_mcp_fixture,
-    load_project_manifest_fixture,
-    load_workflow_bootstrap_fixture,
-)
 
 
 def test_log_analysis_mcp_fixtures_validate_common_workflow_payload() -> None:
-    workflow: WorkflowBootstrap = load_workflow_bootstrap_fixture()
-    collect_logs: dict[str, object] = load_log_analysis_mcp_fixture(
+    workflow: WorkflowBootstrap = FakerMCP.load_workflow_bootstrap_fixture()
+    collect_logs: dict[str, object] = FakerMCP.load_fixture_payload(
         "common",
         "collect_logs_base",
     )
@@ -33,10 +28,25 @@ def test_log_analysis_mcp_fixtures_validate_common_workflow_payload() -> None:
     assert [tool.tool_name for tool in workflow.tools] == [
         McpToolName.GROUP_ERRORS,
         McpToolName.INSPECT_PROXY_ACTIVITY,
-        McpToolName.GREP_LOG_SNAPSHOT,
         McpToolName.BUILD_INCIDENT_BUNDLE,
+        "create_filtered_view",
+        "suggest_followup_window",
+        McpToolName.LIST_PROJECTS,
+        McpToolName.COLLECT_LOGS,
+        "inspect_live_fail2ban_activity",
+        "list_log_snapshot_files",
+        "read_log_snapshot_file",
+        McpToolName.GREP_LOG_SNAPSHOT,
+        "get_mcp_service_status",
+        "get_mcp_health_check",
     ]
-    projects = load_project_manifest_fixture()
+    assert [skill.name for skill in workflow.mandatory_skills] == [
+        "normal_patterns",
+        "application_monitoring",
+        "severity_guide",
+        "recommendations_guide",
+    ]
+    projects = FakerMCP.load_project_manifest_fixture()
     assert [project.project_name for project in projects] == ["landingpage", "vps-security"]
     assert projects[0].source_keys == [
         "nginx",
@@ -52,8 +62,11 @@ def test_log_analysis_mcp_fixtures_validate_common_workflow_payload() -> None:
 
 @pytest.mark.parametrize("scenario", ["sensitive_path_success", "backend_5xx"])
 def test_log_analysis_group_error_fixtures_include_signal_and_noise(scenario: str) -> None:
-    landingpage_group_errors = load_log_analysis_mcp_fixture(scenario, "group_errors")
-    vps_security_group_errors = load_log_analysis_mcp_fixture(
+    landingpage_group_errors = FakerMCP.load_fixture_payload(
+        scenario,
+        "group_errors",
+    )
+    vps_security_group_errors = FakerMCP.load_fixture_payload(
         scenario,
         "group_errors_vps_security",
     )
@@ -81,7 +94,7 @@ def test_log_analysis_group_error_fixtures_include_signal_and_noise(scenario: st
 async def test_fixture_backed_mcp_client_runs_real_agent_loop(
     agent_factory: AgentFactory,
 ) -> None:
-    mcp_client = FixtureBackedMcpWorkflowClient(
+    mcp_client = FakerMCP(
         scenario="sensitive_path_success",
         session_id="phase-9a-session",
     )

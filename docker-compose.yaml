@@ -16,6 +16,24 @@ services:
     volumes:
       - monitoring-db:/var/lib/postgresql
 
+  test-db:
+    profiles: ["devtools"]
+    image: postgres:18
+    environment:
+      POSTGRES_DB: monitoring_test
+      POSTGRES_USER: monitoring_test
+      POSTGRES_PASSWORD: monitoring_test
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "127.0.0.1:${TEST_DATABASE_PORT_HOST:-5439}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitoring_test -d monitoring_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - monitoring-test-db:/var/lib/postgresql
+
   monitoring-app:
     build:
       context: .
@@ -61,5 +79,46 @@ services:
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
     command: ["log_analysis"]
 
+  manual-fixture:
+    profiles: ["devtools"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./src:/app/src
+      - ./migrations:/app/migrations
+      - ./private:/app/private:ro
+    depends_on:
+      test-db:
+        condition: service_healthy
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      TZ: Europe/Warsaw
+      ENVIRONMENT: manual-fixture
+      DATABASE_HOST: test-db
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: monitoring_test
+      DATABASE_USER: monitoring_test
+      DATABASE_PASSWORD: monitoring_test
+      DEBUG: "true"
+      LOG_COLOR: always
+      MONITORING_PROJECT: landingpage
+      MONITORING_PRIVATE_CONTEXT_PATH: /app/private/vps_monitoring_context.md
+    entrypoint:
+      - /app/monitoring-entrypoint.sh
+      - python
+      - -m
+      - devtools.manual_log_analysis
+    command:
+      - --scenario
+      - sensitive_path_success
+
 volumes:
   monitoring-db:
+  monitoring-test-db:

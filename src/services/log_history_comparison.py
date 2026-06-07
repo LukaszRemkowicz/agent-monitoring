@@ -286,6 +286,9 @@ class LogAnalysisHistoryComparisonService:
             if evidence_quality_warnings
             else "history_comparison_may_be_enough_if_examples_show_low_risk_continuity"
         )
+        priority_current_examples: list[LogAnalysisGroupedErrorSignal] = (
+            LogAnalysisHistoryComparisonService._prioritize_current_changed_groups(comparison)
+        )
         return LogAnalysisPromptGroupedErrorComparison(
             available=comparison.available,
             current_tool_scope_by_project=comparison.current_tool_scope_by_project,
@@ -310,6 +313,10 @@ class LogAnalysisHistoryComparisonService:
             ),
             evidence_quality_warnings=evidence_quality_warnings,
             next_evidence_hint=next_evidence_hint,
+            priority_current_examples=[
+                LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
+                for signal in priority_current_examples[:max_examples]
+            ],
             current_changed_examples=[
                 LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
                 for signal in comparison.current_changed_groups[:max_examples]
@@ -320,10 +327,29 @@ class LogAnalysisHistoryComparisonService:
             ],
             rationale=(
                 "Grouped-error comparison is compacted for the prompt: counts are complete, "
-                "high-severity new fingerprints are complete, and changed groups are capped "
-                "to representative examples. Call tools for exact full fingerprint lists."
+                "high-severity new fingerprints are complete, and priority_current_examples "
+                "puts new high-severity current families first for report wording. Changed "
+                "groups are capped to representative examples. Call tools for exact full "
+                "fingerprint lists."
             ),
         )
+
+    @staticmethod
+    def _prioritize_current_changed_groups(
+        comparison: LogAnalysisGroupedErrorComparison,
+    ) -> list[LogAnalysisGroupedErrorSignal]:
+        new_high_severity_fingerprints: set[str] = set(comparison.new_high_severity_fingerprints)
+        high_severity_groups: list[LogAnalysisGroupedErrorSignal] = [
+            group
+            for group in comparison.current_changed_groups
+            if group.fingerprint in new_high_severity_fingerprints
+        ]
+        remaining_groups: list[LogAnalysisGroupedErrorSignal] = [
+            group
+            for group in comparison.current_changed_groups
+            if group.fingerprint not in new_high_severity_fingerprints
+        ]
+        return [*high_severity_groups, *remaining_groups]
 
     @staticmethod
     def _build_grouped_error_evidence_quality_warnings(

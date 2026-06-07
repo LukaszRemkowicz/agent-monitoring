@@ -463,16 +463,28 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
         resolved_high_severity_tool_scope_by_project={"landingpage": ["backend"]},
         current_changed_groups=[
             LogAnalysisGroupedErrorSignal(
-                fingerprint=f"backend:http_4xx:404:/new-{index}",
+                fingerprint="backend:http_5xx:500:/api",
                 project_name="landingpage",
-                category="http_4xx",
-                severity="medium",
-                count=index + 1,
+                category="http_5xx",
+                severity="high",
+                count=3,
                 source_keys=["backend"],
-                request_paths=[f"/new-{index}"],
-                status_codes=[404],
-            )
-            for index in range(12)
+                request_paths=["/api"],
+                status_codes=[500],
+            ),
+            *[
+                LogAnalysisGroupedErrorSignal(
+                    fingerprint=f"backend:http_4xx:404:/new-{index}",
+                    project_name="landingpage",
+                    category="http_4xx",
+                    severity="medium",
+                    count=index + 1,
+                    source_keys=["backend"],
+                    request_paths=[f"/new-{index}"],
+                    status_codes=[404],
+                )
+                for index in range(12)
+            ],
         ],
         previous_changed_groups=[
             LogAnalysisGroupedErrorSignal(
@@ -517,6 +529,8 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     assert compact.next_evidence_hint == (
         "call_tools_for_broader_current_evidence_before_final_report"
     )
+    assert compact.priority_current_examples[0].fingerprint == "backend:http_5xx:500:/api"
+    assert compact.priority_current_examples[0].severity == "high"
     assert len(compact.current_changed_examples) == 8
     assert len(compact.previous_changed_examples) == 8
     dumped = compact.model_dump(mode="json")

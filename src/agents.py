@@ -1351,7 +1351,7 @@ class MonitoringWorkflowAgent:
         request: LLMRequest = LLMRequest(
             messages=tuple(messages),
             options=GenerationOptions(
-                temperature=0.0,
+                temperature=None,
                 response_format=ResponseFormat.JSON_OBJECT,
             ),
             metadata={

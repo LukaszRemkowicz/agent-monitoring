@@ -1231,6 +1231,9 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
     assert grouped_errors["resolved_fingerprint_count"] == 1
     assert grouped_errors["new_high_severity_fingerprints"] == ["nginx:http_5xx:500:/api"]
     assert grouped_errors["new_high_severity_fingerprint_count"] == 1
+    assert grouped_errors["priority_current_examples"][0]["fingerprint"] == (
+        "nginx:http_5xx:500:/api"
+    )
     assert user_prompt["next_required_action"] == LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
     assert [result.tool_name for result in context.tool_results] == [
         McpToolName.INSPECT_PROXY_ACTIVITY,
