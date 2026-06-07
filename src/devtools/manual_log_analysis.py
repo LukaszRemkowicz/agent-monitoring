@@ -23,6 +23,27 @@ from utils.monitoring_context import load_private_monitoring_context
 
 DEFAULT_SCENARIO = "sensitive_path_success"
 SCENARIOS = {"sensitive_path_success", "backend_5xx"}
+PUBLIC_SAFE_MONITORING_CONTEXT = """# Public-Safe Manual Fixture Monitoring Context
+
+This context is synthetic and exists only for devtool fixture runs.
+
+## Synthetic Services
+
+- demo-shop: Demo shop public web application used by fixture scenarios.
+- host-security: synthetic host-level security telemetry project.
+- workflow-mcp: deterministic MCP workflow service that owns log collection,
+  snapshots, and follow-up tools.
+
+## Expected Signals
+
+- A successful 2xx response for sensitive paths such as `/.env` is critical.
+- Blocked scanner probes returning 403 or 404 are watch-only unless they become
+  successful responses or correlate with service impact.
+- Worker or scheduler retry noise is watch-only unless volume grows or
+  correlates with user-facing failures.
+
+Do not infer any real private topology from this context.
+"""
 
 app = typer.Typer(
     name="manual-log-analysis-fixture",
@@ -58,6 +79,14 @@ async def run_manual_fixture(
         "--compare-history/--no-compare-history",
         help="Compare current grouped errors with yesterday's saved analysis before the LLM call.",
     ),
+    use_private_context: bool = typer.Option(
+        False,
+        "--private-context/--public-context",
+        help=(
+            "Use the configured private monitoring context instead of the "
+            "public-safe fixture context."
+        ),
+    ),
 ) -> None:
     """Run the real log-analysis service flow with only the MCP client mocked."""
 
@@ -84,8 +113,8 @@ async def run_manual_fixture(
         agent=MonitoringWorkflowAgent(
             mcp_client,
             llm_provider=get_llm_provider(settings.MONITORING_LLM_STRONG_MODEL),
-            private_monitoring_context=load_private_monitoring_context(
-                settings.MONITORING_PRIVATE_CONTEXT_PATH
+            private_monitoring_context=_resolve_manual_fixture_monitoring_context(
+                use_private_context=use_private_context
             ),
             history_comparison_service=history_comparison_service,
             history_comparison_enabled=compare_history,
@@ -146,6 +175,14 @@ def _echo_list(label: str, values: list[str]) -> None:
 
 def _today_in_log_timezone() -> date:
     return datetime.now(ZoneInfo(settings.LOG_TIMEZONE)).date()
+
+
+def _resolve_manual_fixture_monitoring_context(*, use_private_context: bool) -> str:
+    """Return public-safe fixture context unless the operator opts into private context."""
+
+    if use_private_context:
+        return load_private_monitoring_context(settings.MONITORING_PRIVATE_CONTEXT_PATH)
+    return PUBLIC_SAFE_MONITORING_CONTEXT
 
 
 def main() -> None:

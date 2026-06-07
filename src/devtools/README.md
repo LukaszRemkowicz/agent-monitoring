@@ -40,6 +40,14 @@ Useful comparison run:
 docker compose --profile devtools run --rm manual-fixture --scenario backend_5xx --no-email --no-compare-history
 ```
 
+Manual fixture runs use a public-safe synthetic monitoring context by default.
+Use `--private-context` only when you explicitly want the real local
+`MONITORING_PRIVATE_CONTEXT_PATH` content included in the LLM prompt:
+
+```bash
+docker compose --profile devtools run --rm manual-fixture --scenario backend_5xx --no-email --private-context
+```
+
 The command prints the final report plus LLM usage:
 
 - `LLM tokens used`
@@ -59,8 +67,8 @@ replay the exact same evidence while tuning prompt guards and token usage.
 while replacing only MCP responses. It lets us choose the evidence shape we want
 the agent to reason about:
 
-- `backend_5xx`: today introduces a new high-severity `/api/images` 502 family
-  with related frontend SSR timeout evidence
+- `backend_5xx`: today introduces a new high-severity `/api/catalog` 502 family
+  with related frontend SSR product-page timeout evidence
 - `sensitive_path_success`: today includes a successful sensitive-path response
   that should be treated as critical
 
