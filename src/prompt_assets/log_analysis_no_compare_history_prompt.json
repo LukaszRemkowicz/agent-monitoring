@@ -1,0 +1,28 @@
+{
+  "mode": "no_compare_history",
+  "purpose": "LLM reviews exactly two compact group_errors baselines without a Python diff: evidence.previous_grouped_errors and evidence.current_grouped_errors.",
+  "evidence_contract": {
+    "primary_review": "The primary task is to review evidence.previous_grouped_errors versus evidence.current_grouped_errors before deciding whether final_report is enough or additional tools are needed.",
+    "previous_grouped_errors": "The previous group_errors baseline reconstructed from the stored previous log-analysis run.",
+    "current_grouped_errors": "The new group_errors baseline collected from the current log window before the LLM decision.",
+    "grouped_error_diff": null,
+    "source_coverage": "Current-vs-previous source coverage metadata, not log-content proof."
+  },
+  "decision_rules": [
+    "Start by reviewing the two group_errors baselines: evidence.previous_grouped_errors and evidence.current_grouped_errors.",
+    "Use evidence.previous_grouped_errors and evidence.current_grouped_errors as comparable fingerprint evidence, not as simple counters.",
+    "Do not decide from group_count or run_count alone. First compare fingerprint identity and meaning: fingerprint, project_name, source_keys, category, severity, and status_codes.",
+    "Use the same review technique a human analyst would use: review every compact row in evidence.previous_grouped_errors.fingerprints and evidence.current_grouped_errors.fingerprints as semantic fingerprint families, not literal one-to-one strings only. Identify persisting families, new families, resolved families, shifted families (same pattern moved to a different project/source/status family), and changed families (same semantic family but different severity/source/status meaning).",
+    "The cost-saving final_report path is only for a stable baseline: same affected projects, source ownership, categories, severity posture, status classes, route/message families, and coverage confidence after reviewing the two grouped-error baselines.",
+    "final_report is not an acceptable first action when the previous/current grouped-error baselines materially differ after semantic family normalization. If visible current fingerprints introduce, remove, or shift source ownership, route intent, message meaning, severity posture, status class, project scope, or coverage confidence, use action=call_tools before final_report.",
+    "Before choosing final_report, decide whether the two group_errors baselines are enough to explain what changed, why it matters, and whether the report can be trusted without extra evidence.",
+    "Use action=call_tools when a capable monitoring analyst would need more evidence to judge impact, cause, scope, severity, confidence, source coverage, or whether a changed grouped-error pattern is benign, risky, real user impact, infrastructure impact, security impact, or just scanner noise.",
+    "Use the loaded severity guidance and mandatory skills to decide whether any current grouped-error fingerprint deserves broader investigation. Do not rely on hardcoded status-code examples; infer impact from the fingerprint category, severity, source, route/message meaning, and comparison with the previous baseline.",
+    "Do not call tools solely because counts changed, and do not skip tools solely because all examples look like 4xx scanner noise. First prove from evidence.previous_grouped_errors and evidence.current_grouped_errors that the baseline is stable enough to trust without more current evidence.",
+    "evidence.previous_grouped_errors.fingerprints and evidence.current_grouped_errors.fingerprints are compact rows for every grouped-error fingerprint, not sampled examples and not raw log lines. Review those rows directly; use action=call_tools when materiality, impact, or scope remains unclear.",
+    "When the semantic baseline review requires tools, perform targeted current verification for the affected project/source/fingerprint-family scope before final_report. Do not stop at proxy totals when affected families involve application, scheduler, host-security, or grouped-error content.",
+    "That affected-scope verification should include group_errors for affected projects/source_keys when grouped-error families changed, inspect_proxy_activity for affected proxy/access sources when traffic or upstream behavior matters, relevant optional skills when interpretation is unclear, and live tools only when live state matters.",
+    "A final_report in this mode must synthesize the semantic family baseline review into operational meaning. Say whether the baseline is stable, materially changed, or uncertain; name only material family shifts that affect impact, risk, confidence, or follow-up. Do not enumerate every persisting/new/resolved grouped-error family.",
+    "Do not claim Python deterministic diff evidence in this mode because grouped_error_diff is null."
+  ]
+}

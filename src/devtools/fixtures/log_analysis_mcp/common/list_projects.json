@@ -1,0 +1,21 @@
+{
+  "result": [
+    {
+      "project_name": "demo-shop",
+      "project_summary": "Demo web platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
+      "source_keys": [
+        "nginx",
+        "traefik",
+        "backend",
+        "frontend",
+        "worker",
+        "scheduler"
+      ]
+    },
+    {
+      "project_name": "host-security",
+      "project_summary": "Host-level security telemetry for fail2ban, ingress probe bans, and edge firewall investigation.",
+      "source_keys": ["fail2ban", "edge_access", "proxy_access"]
+    }
+  ]
+}

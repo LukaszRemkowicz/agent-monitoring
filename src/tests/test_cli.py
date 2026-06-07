@@ -19,17 +19,26 @@ import main
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
-from exceptions import McpClientError, PrivateMonitoringContextError
+from exceptions import LogAnalysisAgentError, McpClientError, PrivateMonitoringContextError
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAgentContext,
+    LogAnalysisAllowedAction,
+    LogAnalysisCurrentCoverage,
+    LogAnalysisEvidenceMode,
     LogAnalysisFinalReport,
+    LogAnalysisNextRequiredAction,
     LogAnalysisOut,
     LogAnalysisPreparedPrompt,
+    LogAnalysisPromptCollection,
     LogAnalysisPromptContext,
+    LogAnalysisPromptPhase,
+    LogAnalysisSeverity,
     LogAnalysisWorkflowResult,
     LogCollectionWindow,
+    LogWorkspace,
     McpServiceStatus,
+    McpToolName,
     ProjectManifestSummary,
     SitemapAnalysisOut,
     SnapshotAccessGuidance,
@@ -89,13 +98,13 @@ def _patch_log_analysis_command_dependencies(
     )
     dependencies["llm_provider_factory"] = mocker.patch.object(
         main,
-        "get_monitoring_llm_provider",
+        "get_llm_provider",
         return_value=dependencies["llm_provider"],
     )
     dependencies["context_loader"] = mocker.patch.object(
         main,
         "load_private_monitoring_context",
-        return_value="Private VPS context",
+        return_value="Private Monitoring context",
     )
     dependencies["repository_constructor"] = mocker.patch.object(
         main,
@@ -126,7 +135,7 @@ def _log_analysis_out(analysis_date: date) -> LogAnalysisOut:
         created_at=datetime(2026, 5, 19, tzinfo=UTC),
         analysis_date=analysis_date,
         status="succeeded",
-        summary="Landingpage logs are healthy.",
+        summary="Demo shop logs are healthy.",
         severity="INFO",
         key_findings=["No critical incidents found."],
         recommendations="Keep watching the backend logs.",
@@ -159,28 +168,40 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                 context=LogAnalysisPromptContext(
                     analysis_date=analysis_date,
                     workflow_name=workflow.workflow_name,
-                    current_phase="final_report",
+                    current_phase=LogAnalysisPromptPhase.FINAL_REPORT,
                     completed_steps=[
                         "analyze_daily_log_bundle",
                         "read_mandatory_skills",
                         "list_projects",
                         "collect_logs",
                     ],
-                    allowed_actions=["call_tools", "read_skills", "final_report"],
-                    next_required_action="final_report",
+                    allowed_actions=[
+                        LogAnalysisAllowedAction.CALL_TOOLS,
+                        LogAnalysisAllowedAction.READ_SKILLS,
+                        LogAnalysisAllowedAction.FINAL_REPORT,
+                    ],
+                    evidence_mode=LogAnalysisEvidenceMode.CURRENT_TOOL_RESULTS_AVAILABLE,
+                    current_tool_result_count=1,
+                    current_coverage=LogAnalysisCurrentCoverage(),
+                    next_required_action=LogAnalysisNextRequiredAction.FINAL_REPORT,
                     final_report_allowed=True,
                     available_projects=[
                         ProjectManifestSummary(
-                            project_name="landingpage",
-                            project_summary="Landingpage project.",
+                            project_name="demo-shop",
+                            project_summary="Demo shop project.",
                             source_keys=["backend"],
                         )
                     ],
                     mandatory_skills=[],
                     optional_skills=[],
-                    collection=collect_logs,
+                    collection=LogAnalysisPromptCollection(
+                        action=McpToolName.COLLECT_LOGS,
+                        workspace=LogWorkspace.WORKFLOW,
+                        session_id=collect_logs.session_id,
+                        projects=[],
+                    ),
                     snapshot_access=SnapshotAccessGuidance(
-                        workspace="workflow",
+                        workspace=LogWorkspace.WORKFLOW,
                         session_id=None,
                         session_id_is_for_session_workspace_only=True,
                         workflow_followup_arguments=["project_name", "archive_name"],
@@ -202,12 +223,12 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
             ),
             final_report=LogAnalysisFinalReport(
                 action="final_report",
-                summary="Landingpage logs are healthy.",
-                severity="INFO",
+                summary="Demo shop logs are healthy.",
+                severity=LogAnalysisSeverity.INFO,
                 severity_rationale="INFO because no service-impacting issue was found.",
                 key_findings=["No critical incidents found."],
                 evidence=["group_errors found no repeated backend errors."],
-                coverage_gaps=["celery_beat collected zero lines."],
+                coverage_gaps=["scheduler collected zero lines."],
                 recommendations="Keep watching the backend logs.",
                 watch_only_items=["Routine SSH brute-force traffic blocked by fail2ban."],
                 trend_summary="No prior trend data was available.",
@@ -272,14 +293,14 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert result.exit_code == 0
     assert "Completed log-analysis report analyze_daily_log_bundle" in result.output
     assert "severity=INFO" in result.output
-    assert "Summary: Landingpage logs are healthy." in result.output
+    assert "Summary: Demo shop logs are healthy." in result.output
     assert "Severity rationale: INFO because no service-impacting issue was found." in result.output
     assert "Key findings:" in result.output
     assert "- No critical incidents found." in result.output
     assert "Evidence:" in result.output
     assert "- group_errors found no repeated backend errors." in result.output
     assert "Coverage gaps:" in result.output
-    assert "- celery_beat collected zero lines." in result.output
+    assert "- scheduler collected zero lines." in result.output
     assert "Watch-only items:" in result.output
     assert "- Routine SSH brute-force traffic blocked by fail2ban." in result.output
     assert "Recommendations: Keep watching the backend logs." in result.output
@@ -288,10 +309,10 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert fake_service.calls[0] == {
         "analysis_date": date(2026, 5, 19),
         "log_window": {
-            "since": "2026-05-19T00:00:00Z",
-            "until": "2026-05-20T00:00:00Z",
-            "since_datetime": datetime(2026, 5, 19, tzinfo=UTC),
-            "until_datetime": datetime(2026, 5, 20, tzinfo=UTC),
+            "since": "2026-05-18T22:00:00Z",
+            "until": "2026-05-19T22:00:00Z",
+            "since_datetime": datetime(2026, 5, 18, 22, tzinfo=UTC),
+            "until_datetime": datetime(2026, 5, 19, 22, tzinfo=UTC),
         },
         "force": False,
     }
@@ -300,6 +321,13 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
         dependencies["service_calls"][0]["llm_call_repository"]
         is dependencies["llm_call_repository"]
     )
+    dependencies["llm_provider_factory"].assert_called_once_with("gpt-5")
+    assert dependencies["agent_constructor"].call_args.args[0] is dependencies["mcp_client"]
+    assert (
+        dependencies["agent_constructor"].call_args.kwargs["llm_provider"]
+        is dependencies["llm_provider"]
+    )
+    assert "strong_llm_provider" not in dependencies["agent_constructor"].call_args.kwargs
     dependencies["email_service"].send_log_analysis.assert_awaited_once()
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
 
@@ -341,10 +369,10 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
     assert result.exit_code == 0
     assert fake_service.calls[0]["analysis_date"] == date(2026, 5, 20)
     assert fake_service.calls[0]["log_window"] == {
-        "since": "2026-05-20T00:00:00Z",
-        "until": "2026-05-21T00:00:00Z",
-        "since_datetime": datetime(2026, 5, 20, tzinfo=UTC),
-        "until_datetime": datetime(2026, 5, 21, tzinfo=UTC),
+        "since": "2026-05-19T22:00:00Z",
+        "until": "2026-05-20T22:00:00Z",
+        "since_datetime": datetime(2026, 5, 19, 22, tzinfo=UTC),
+        "until_datetime": datetime(2026, 5, 20, 22, tzinfo=UTC),
     }
     assert "analysis_date=2026-05-20" in result.output
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
@@ -361,7 +389,7 @@ def test_check_mcp_command_calls_mcp_service_status(
         async def get_service_status(self) -> McpServiceStatus:
             self.calls.append("get_service_status")
             return McpServiceStatus(
-                name="mcp-log-server",
+                name="workflow-mcp",
                 status="ok",
                 environment="dev",
                 client_type="workflow_agent",
@@ -383,7 +411,7 @@ def test_check_mcp_command_calls_mcp_service_status(
         "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
     }
     assert "MCP service is reachable" in result.output
-    assert "name=mcp-log-server" in result.output
+    assert "name=workflow-mcp" in result.output
     assert "status=ok" in result.output
 
 
@@ -431,7 +459,7 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     llm_provider = object()
     get_llm_provider = mocker.patch.object(
         main,
-        "get_monitoring_llm_provider",
+        "get_llm_provider",
         return_value=llm_provider,
     )
     email_service = AsyncMock()
@@ -452,7 +480,7 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         main.LLMSummaryBuilder,
     )
     assert build_runner.call_args.kwargs["summary_builder"].llm_provider is llm_provider
-    get_llm_provider.assert_called_once()
+    get_llm_provider.assert_called_once_with(main.settings.MONITORING_LLM_PROVIDER)
     assert "Completed sitemap analysis" in result.output
     assert "severity=INFO" in result.output
     assert "Summary: Sitemap analysis service is ready." in result.output
@@ -824,7 +852,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     async def command() -> None:
         raise McpClientError(
             (
-                "MCP collect_logs error: Unknown project 'landingpage'. "
+                "MCP collect_logs error: Unknown project 'demo-shop'. "
                 "No persisted manifest was found for that project. "
                 "Retry tips: Call list_projects to discover available projects."
             ),
@@ -838,7 +866,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     assert result.exit_code == 1
     assert "MCP call failed" in output
     assert "collect_logs" in output
-    assert "Unknown project 'landingpage'" in output
+    assert "Unknown project 'demo-shop'" in output
     assert "No persisted manifest" in output
     assert "was found for that project" in output
     assert "Call list_projects" in output
@@ -850,6 +878,14 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
 def test_db_decorator_formats_llm_provider_configuration_errors(
     mocker: MockerFixture,
 ) -> None:
+    """Provider config failures should become actionable CLI errors.
+
+    The DB decorator wraps command execution for DB-backed commands. This test
+    verifies that an LLM provider configuration exception is rendered as a
+    concise Click/Typer error with the expected environment-variable guidance,
+    instead of leaking a traceback to the operator.
+    """
+
     class FakeDatabaseLifespan:
         async def __aenter__(self) -> None:
             return None
@@ -877,13 +913,14 @@ def test_db_decorator_formats_llm_provider_configuration_errors(
 
     result = runner.invoke(app)
     output = unstyle(result.output)
+    normalized_output = " ".join(output.split())
 
     assert result.exit_code == 1
-    assert "LLM provider configuration failed" in output
-    assert "OpenAI API" in output
-    assert "key is required" in output
-    assert "OPENAI_API_KEY" in output
-    assert "OPEN_API_KEY" in output
+    assert "LLM provider configuration failed" in normalized_output
+    assert "OpenAI" in normalized_output
+    assert "API key is required" in normalized_output
+    assert "OPENAI_API_KEY" in normalized_output
+    assert "OPEN_API_KEY" in normalized_output
     assert "Traceback" not in output
 
 
@@ -969,6 +1006,51 @@ def test_db_decorator_formats_llm_provider_execution_error_cause(
     assert "OpenAI provider request failed" in output
     assert "RuntimeError" in output
     assert "unsupported parameter 'temperature'" in output
+    assert "Traceback" not in output
+
+
+def test_db_decorator_formats_log_analysis_agent_error_cause(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        try:
+            try:
+                raise RuntimeError("Rate limit reached for gpt-4.1-mini")
+            except RuntimeError as exc:
+                raise ProviderExecutionError("OpenAI provider request failed") from exc
+        except ProviderExecutionError as exc:
+            raise LogAnalysisAgentError("OpenAI provider request failed") from exc
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 1
+    assert "Log-analysis workflow failed" in output
+    assert "OpenAI provider request failed" in output
+    assert "ProviderExecutionError" in output
+    assert "Rate limit reached for gpt-4.1-mini" in output
     assert "Traceback" not in output
 
 
@@ -1129,5 +1211,72 @@ def test_migrate_script_runs_aerich_upgrade(mocker: MockerFixture) -> None:
         raise AssertionError("migrate should exit")
 
     assert calls[0][0] == ["aerich", "upgrade", "--fake"]
-    assert calls[0][1] is False
+    assert calls[0][1] is True
     assert calls[0][2] is False
+
+
+def test_migrate_script_prints_old_format_guidance(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args,
+            1,
+            stdout="",
+            stderr="RuntimeError: Old format of migration file detected\n",
+        )
+
+    mocker.patch("db.cli.subprocess.run", new=fake_run)
+    mocker.patch("db.cli.sys.argv", ["migrate"])
+
+    with pytest.raises(SystemExit) as error:
+        migrate()
+
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert "Database migration failed." in output.err
+    assert "Aerich detected an old-format migration file." in output.err
+    assert "uv run aerich fix-migrations" in output.err
+    assert "Traceback" not in output.err
+
+
+def test_migrate_script_prints_not_null_guidance(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args,
+            1,
+            stdout="",
+            stderr=(
+                'asyncpg.exceptions.NotNullViolationError: column "fingerprints" '
+                'of relation "log_analyses" contains null values\n'
+            ),
+        )
+
+    mocker.patch("db.cli.subprocess.run", new=fake_run)
+    mocker.patch("db.cli.sys.argv", ["migrate"])
+
+    with pytest.raises(SystemExit) as error:
+        migrate()
+
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert "Database migration failed." in output.err
+    assert "tried to add a NOT NULL column" in output.err
+    assert "rename-style migration" in output.err
+    assert "Traceback" not in output.err

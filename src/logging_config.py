@@ -6,8 +6,9 @@ import json
 import logging
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     from conf import Settings
@@ -94,15 +95,17 @@ class JsonFormatter(logging.Formatter):
         *args: Any,
         indent: int | None = None,
         use_color: bool = False,
+        timezone: str = "Europe/Warsaw",
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.indent = indent
         self.use_color = use_color
+        self.timezone = ZoneInfo(timezone)
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
-            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, self.timezone).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": _sanitize_message(record.getMessage()),
@@ -210,12 +213,13 @@ def configure_logging(settings: Settings, stream: Any | None = None) -> logging.
     handler = logging.StreamHandler(output)
     log_format = settings.LOG_FORMAT.lower()
     if log_format == LOG_FORMAT_JSON:
-        handler.setFormatter(JsonFormatter())
+        handler.setFormatter(JsonFormatter(timezone=settings.LOG_TIMEZONE))
     elif log_format == LOG_FORMAT_PRETTY:
         handler.setFormatter(
             JsonFormatter(
                 indent=2,
                 use_color=_use_color(settings.LOG_COLOR.lower(), output),
+                timezone=settings.LOG_TIMEZONE,
             )
         )
     elif log_format == LOG_FORMAT_PLAIN:

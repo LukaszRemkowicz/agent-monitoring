@@ -13,6 +13,7 @@ INIT_MIGRATIONS_REQUIRED_MESSAGES = (
     "You need to run `aerich init-db` first",
     "You may need to run `aerich init-db` first",
 )
+OLD_MIGRATION_FORMAT_MESSAGE = "Old format of migration file detected"
 
 
 def _run_aerich(
@@ -98,12 +99,45 @@ def _run_makemigrations(args: Sequence[str]) -> int:
     return result.returncode
 
 
+def _write_migration_failure_message(output: str) -> None:
+    sys.stderr.write("Database migration failed.\n")
+    if OLD_MIGRATION_FORMAT_MESSAGE in output:
+        sys.stderr.write(
+            "\n"
+            "Aerich detected an old-format migration file.\n"
+            "Fix options:\n"
+            "- If this is an existing applied migration, run `uv run aerich fix-migrations`.\n"
+            "- If this is a new local migration, remove it and regenerate it with "
+            "`uv run makemigrations <name>`.\n"
+        )
+        return
+    if "NotNullViolationError" in output or "contains null values" in output:
+        sys.stderr.write(
+            "\n"
+            "A migration tried to add a NOT NULL column while existing rows have no value.\n"
+            "For renames, use a rename-style migration so existing data is preserved.\n"
+        )
+        return
+    sys.stderr.write("\nRun `uv run migrate` directly to inspect the full Aerich error.\n")
+
+
+def _run_migrate(args: Sequence[str]) -> int:
+    result = _run_aerich(["upgrade", *args], capture_output=True)
+    if result.returncode == 0:
+        _replay_output(result)
+        return result.returncode
+
+    output = f"{result.stdout or ''}{result.stderr or ''}"
+    _write_migration_failure_message(output)
+    return result.returncode
+
+
 def makemigrations() -> None:
     raise SystemExit(_run_makemigrations(sys.argv[1:]))
 
 
 def migrate() -> None:
-    raise SystemExit(_run_aerich(["upgrade", *sys.argv[1:]]).returncode)
+    raise SystemExit(_run_migrate(sys.argv[1:]))
 
 
 def test() -> None:

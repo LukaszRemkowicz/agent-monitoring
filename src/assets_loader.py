@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 
 class PromptAssetLoader:
@@ -35,6 +37,11 @@ class PromptAssetLoader:
             mapping[key.strip()] = value.strip()
         return mapping
 
+    def load_json(self, name: str) -> dict[str, Any]:
+        """Return one JSON prompt asset."""
+
+        return json.loads(self.load_text(name))
+
 
 loader = PromptAssetLoader()
 
@@ -55,3 +62,9 @@ def load_markdown_mapping(name: str) -> dict[str, str]:
     """Return mapping bullet items from the default prompt asset dir."""
 
     return loader.load_markdown_mapping(name)
+
+
+def load_json(name: str) -> dict[str, Any]:
+    """Return one JSON prompt asset from the default prompt asset dir."""
+
+    return loader.load_json(name)

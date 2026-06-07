@@ -1,0 +1,99 @@
+{
+  "action": "group_errors",
+  "analysis_cautions": [],
+  "grouped_error_count": 3,
+  "groups": [
+    {
+      "fingerprint": "host-security:fail2ban:ban:repeat-offender",
+      "category": "security_daemon",
+      "severity": "medium",
+      "count": 4,
+      "source_keys": ["fail2ban"],
+      "request_paths": [],
+      "status_codes": [],
+      "levels": ["notice"],
+      "message_summary": "Fail2ban recorded repeated probe bans.",
+      "first_timestamp": "2026-05-19T01:15:00Z",
+      "last_timestamp": "2026-05-19T22:40:00Z",
+      "first_seen": {
+        "line": "NOTICE [repeat-offender] Ban 198.51.100.77",
+        "line_number": 9,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/fail2ban.log",
+        "source_key": "fail2ban"
+      },
+      "last_seen": {
+        "line": "NOTICE [web-auth] Ban 203.0.113.10",
+        "line_number": 58,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/fail2ban.log",
+        "source_key": "fail2ban"
+      }
+    },
+    {
+      "fingerprint": "host-security:edge:http_403:sensitive-path-blocks",
+      "category": "blocked_sensitive_probe",
+      "severity": "medium",
+      "count": 19,
+      "source_keys": ["edge_access", "proxy_access"],
+      "request_paths": ["/.git/config", "/.aws/credentials"],
+      "status_codes": [403],
+      "levels": [],
+      "message_summary": "Edge logs show blocked sensitive-path probes.",
+      "first_timestamp": "2026-05-19T03:11:00Z",
+      "last_timestamp": "2026-05-19T20:24:00Z",
+      "first_seen": {
+        "line": "198.51.100.77 - - [19/May/2026:03:11:00 +0000] \"GET /.aws/credentials HTTP/1.1\" 403 162",
+        "line_number": 101,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/edge_access.log",
+        "source_key": "edge_access"
+      },
+      "last_seen": {
+        "line": "198.51.100.77 GET /.git/config 403",
+        "line_number": 646,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/proxy_access.log",
+        "source_key": "proxy_access"
+      }
+    },
+    {
+      "fingerprint": "host-security:edge:http_404:php-probes",
+      "category": "http_4xx",
+      "severity": "low",
+      "count": 27,
+      "source_keys": ["edge_access", "proxy_access"],
+      "request_paths": ["/phpinfo.php", "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php"],
+      "status_codes": [404],
+      "levels": [],
+      "message_summary": "Routine PHP exploit probes were blocked at the edge.",
+      "first_timestamp": "2026-05-19T00:40:00Z",
+      "last_timestamp": "2026-05-19T23:02:00Z",
+      "first_seen": {
+        "line": "203.0.113.88 - - [19/May/2026:00:40:00 +0000] \"GET /phpinfo.php HTTP/1.1\" 404 153",
+        "line_number": 22,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/edge_access.log",
+        "source_key": "edge_access"
+      },
+      "last_seen": {
+        "line": "203.0.113.88 GET /vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php 404",
+        "line_number": 719,
+        "line_truncated": false,
+        "output_file": "workflow/host-security/2026-05-19/proxy_access.log",
+        "source_key": "proxy_access"
+      }
+    }
+  ],
+  "matching_line_count": 50,
+  "max_groups": 20,
+  "next_step_tips": ["Use inspect_proxy_activity if edge probe context is needed."],
+  "project_name": "host-security",
+  "requested_project_name": "host-security",
+  "searched_source_keys": ["fail2ban", "edge_access", "proxy_access"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/host-security/2026-05-19",
+  "summary": "Host security telemetry shows fail2ban bans and blocked edge probes without service impact.",
+  "truncated": false,
+  "workspace": "workflow"
+}

@@ -1,0 +1,20 @@
+{
+  "action": "grep_log_snapshot",
+  "project_name": "demo-shop",
+  "source_key": "nginx",
+  "pattern": "/.env",
+  "matching_line_count": 2,
+  "truncated": false,
+  "matches": [
+    {
+      "timestamp": "2026-05-19T02:10:00Z",
+      "source_key": "nginx",
+      "line": "203.0.113.10 - - [19/May/2026:02:10:00 +0000] \"GET /.env HTTP/1.1\" 200 512"
+    },
+    {
+      "timestamp": "2026-05-19T02:11:00Z",
+      "source_key": "nginx",
+      "line": "203.0.113.10 - - [19/May/2026:02:11:00 +0000] \"GET /.env HTTP/1.1\" 200 512"
+    }
+  ]
+}

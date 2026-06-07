@@ -1,0 +1,12 @@
+{
+  "action": "inspect_proxy_activity",
+  "project_name": "demo-shop",
+  "source_keys": ["backend", "nginx"],
+  "status_counts": {
+    "200": 148,
+    "404": 11,
+    "502": 7
+  },
+  "upstream_error_count": 7,
+  "summary": "Proxy activity includes repeated current 502 responses for /api/catalog."
+}

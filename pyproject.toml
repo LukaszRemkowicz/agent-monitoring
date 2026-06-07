@@ -51,6 +51,7 @@ only-include = [
     "src/conf.py",
     "src/agents.py",
     "src/db",
+    "src/devtools",
     "src/decorators.py",
     "src/llm.py",
     "src/logging_config.py",

@@ -9,7 +9,7 @@ import typer
 from agents import MonitoringWorkflowAgent
 from conf import settings
 from decorators import as_async, db
-from llm import get_monitoring_llm_provider
+from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import (
@@ -20,6 +20,7 @@ from repositories import (
 from schemas import SitemapAnalysisOut
 from services.email import MonitoringEmailService
 from services.log_analyse import LogAnalysisService
+from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from services.sitemap import (
     AnalysisRunner,
     Crawler,
@@ -58,6 +59,11 @@ async def log_analysis(
         "--email/--no-email",
         help="Send the analysis email when the job succeeds.",
     ),
+    compare_history: bool = typer.Option(
+        True,
+        "--compare-history/--no-compare-history",
+        help="Compare current grouped errors with yesterday's saved analysis before the LLM call.",
+    ),
 ) -> None:
     """Prepare the MCP workflow bundle for the scheduled log analysis job."""
     parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
@@ -68,13 +74,16 @@ async def log_analysis(
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     log_analysis_repository = LogAnalysisRepository()
+    history_comparison_service = LogAnalysisHistoryComparisonService()
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
-            llm_provider=get_monitoring_llm_provider(settings),
+            llm_provider=get_llm_provider(settings.MONITORING_LLM_STRONG_MODEL),
             private_monitoring_context=load_private_monitoring_context(
                 settings.MONITORING_PRIVATE_CONTEXT_PATH
             ),
+            history_comparison_service=history_comparison_service,
+            history_comparison_enabled=compare_history,
         ),
         repository=log_analysis_repository,
         llm_call_repository=LLMCallRepository(trace_id=trace_id),
@@ -115,6 +124,8 @@ async def log_analysis(
     _echo_list("Coverage gaps", final_report.coverage_gaps)
     typer.echo(f"Recommendations: {final_report.recommendations}")
     _echo_list("Watch-only items", final_report.watch_only_items)
+    typer.echo(f"LLM tokens used: {result.agent_context.llm_tokens_used}")
+    typer.echo(f"LLM cost USD: {result.agent_context.llm_cost_usd:.6f}")
     typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")
     typer.echo(f"Execution time: {result.analysis.execution_time_seconds:.2f}s")
 
@@ -188,7 +199,7 @@ async def sitemap_analysis(
         sitemap_url=sitemap_url,
         crawler=crawler,
         summary_builder=LLMSummaryBuilder(
-            llm_provider=get_monitoring_llm_provider(settings),
+            llm_provider=get_llm_provider(settings.MONITORING_LLM_PROVIDER),
             mcp_client=mcp_client,
         ),
     )

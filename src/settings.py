@@ -19,6 +19,7 @@ ENVIRONMENT = env.str("ENVIRONMENT", default="dev")
 DEBUG = env.bool("DEBUG", default=False)
 LOG_LEVEL = env.str("LOG_LEVEL", default="INFO")
 LOG_FORMAT = env.str("LOG_FORMAT", default=None)
+LOG_TIMEZONE = env.str("LOG_TIMEZONE", default="Europe/Warsaw")
 if DEBUG and LOG_FORMAT in {None, "json"}:
     LOG_FORMAT = "pretty"
 elif LOG_FORMAT is None:
@@ -41,7 +42,7 @@ MONITORING_PRIVATE_CONTEXT_PATH = env.str(
     "MONITORING_PRIVATE_CONTEXT_PATH",
     default=str(REPOSITORY_ROOT / "private/vps_monitoring_context.md"),
 )
-MONITORING_LLM_PROVIDER = env.str("MONITORING_LLM_PROVIDER", default="openai-fast")
+MONITORING_LLM_PROVIDER = env.str("MONITORING_LLM_PROVIDER", default="gpt-4.1-mini")
 MONITORING_LLM_FAST_MODEL = env.str("MONITORING_LLM_FAST_MODEL", default="gpt-4.1-mini")
 MONITORING_LLM_STRONG_MODEL = env.str("MONITORING_LLM_STRONG_MODEL", default="gpt-5")
 OPENAI_API_KEY = env.str("OPENAI_API_KEY", default="")

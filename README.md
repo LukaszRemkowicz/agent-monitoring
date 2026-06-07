@@ -13,10 +13,11 @@ The app currently provides the runtime foundation for monitoring workflows:
 - Typer commands are thin orchestrators that parse options, open database
   lifecycle, call services, and format command output
 - typed result objects describe service responses
-- the shared `llm-core` provider boundary is wired without making live analysis
-  requests yet
+- the shared `llm-core` provider boundary runs log-analysis and sitemap LLM
+  requests through configured providers
 - real workflow intelligence stays inside `src/agents.py`; services prepare
-  application state and agents own MCP bootstrap and future LLM/tool loops
+  application state and agents own MCP bootstrap, deterministic pre-LLM
+  evidence, and LLM/tool loops
 - tests cover service behavior, MCP contracts, and repository boundaries without
   calling live external services
 - Docker Compose, CI/CD, pre-commit, production image builds, and release
@@ -25,12 +26,17 @@ The app currently provides the runtime foundation for monitoring workflows:
 The app does not collect logs itself. MCP remains the source of truth for log
 collection and artifact creation. The log-analysis command requests the MCP
 workflow collection artifact, runs the LLM tool loop through deterministic MCP
-follow-up tools, and persists the validated final report. The next monitoring
-workflow work should:
+follow-up tools, and persists the validated final report with summary, findings,
+severity, recommendations, trend text, grouped-error fingerprints, LLM
+token/cost metadata, and email state. Sitemap analysis fetches sitemap facts
+deterministically, summarizes them with the configured LLM provider, persists
+the report, and can send the monitoring email.
 
-- request sitemap artifacts when the sitemap flow moves beyond record creation
-- save summaries, findings, severity, recommendations, and token/cost metadata
-- send report emails through a dedicated notification boundary
+History-aware log analysis is documented in
+`infra/docs/log_analysis_history_comparison.md`. That document explains how the
+app gives the latest saved report and grouped-error fingerprint comparison to
+the LLM, which Python guardrails still require deterministic MCP tool evidence,
+and how reports must be worded when the LLM chooses a cheaper history-aware path.
 
 Runtime settings are exposed through `src/conf.py`, following
 the Django-style `settings` pattern. Tortoise models live in
@@ -42,11 +48,18 @@ config and startup/shutdown. Migration command aliases live in
 `src/db/cli.py`.
 
 LLM provider setup lives in `src/llm.py` and uses the shared `llm-core`
-package. Configure it with:
+package. `configure_llm_providers()` reads global settings and registers the
+configured model names directly as provider names, plus `mock` for tests and
+local dry runs. `get_llm_provider(provider_name)` creates one registered
+provider by name. Sitemap analysis uses `MONITORING_LLM_PROVIDER`; log analysis
+always uses `MONITORING_LLM_STRONG_MODEL`. Configure it with:
 
-- `MONITORING_LLM_PROVIDER`, defaulting to `openai-fast`
-- `MONITORING_LLM_FAST_MODEL`, defaulting to `gpt-4.1-mini`
-- `MONITORING_LLM_STRONG_MODEL`, defaulting to `gpt-5`
+- `MONITORING_LLM_PROVIDER`, defaulting to `gpt-4.1-mini`, used by sitemap
+  analysis. Set it to a registered model name or `mock`.
+- `MONITORING_LLM_FAST_MODEL`, defaulting to `gpt-4.1-mini`, registered as the
+  cheaper OpenAI provider name
+- `MONITORING_LLM_STRONG_MODEL`, defaulting to `gpt-5`, used by log analysis
+  and registered as the stronger OpenAI provider name
 - `MONITORING_PRIVATE_CONTEXT_PATH`, defaulting to
   `private/vps_monitoring_context.md`
 - `OPENAI_API_KEY`
@@ -92,10 +105,40 @@ docker compose run --rm monitoring-app sitemap-analysis
 docker compose run --rm monitoring-app check-mcp
 ```
 
-Local Compose runs the `migrate` service before `monitoring-app`, so migrations
-are applied through Compose without a wrapper script. The local app container
-uses host networking so `localhost` means the local machine. That keeps the
-runtime close to the host-side commands:
+### Log Analysis Flow
+
+`log_analysis` starts in the Typer command, then delegates real workflow work to
+`LogAnalysisService` and `MonitoringWorkflowAgent`. The initial LLM prompt is
+built once per run; later LLM iterations append tool results, skill results, or
+correction messages to the same conversation instead of rebuilding the original
+prompt.
+
+The high-level flow is:
+
+```text
+run_log_analysis()
+  -> load workflow bundle
+  -> read mandatory skills
+  -> list projects
+  -> collect_logs
+  -> collect current grouped-error baseline
+  -> optionally compare with previous grouped-error fingerprints
+  -> _build_log_analysis_prompt(...)   # called once
+  -> _run_tool_loop(...)
+```
+
+Before the first LLM request, Python calls deterministic MCP `group_errors` for
+the collected projects/source keys. With `--compare-history`, it compares that
+current grouped-error baseline with stored previous grouped-error fingerprints.
+With `--no-compare-history`, it sends compact previous/current grouped-error
+baselines instead of a Python diff. In both modes, current grouped-error
+evidence is already available to the LLM; the LLM decides whether that is enough
+or whether to call more deterministic tools.
+
+Local Compose runs migrations inside the `monitoring-app` entrypoint before
+starting monitoring commands, so migration errors are printed in the same command
+output. The local app container uses host networking so `localhost` means the
+local machine. That keeps the runtime close to the host-side commands:
 `DATABASE_HOST=127.0.0.1`, `DATABASE_PORT=5438`, and
 `LOG_ANALYSIS_MCP_URL=http://127.0.0.1:8001/mcp`. Local Compose also sets
 `DEBUG=true` and `LOG_COLOR=always` for colored, indented JSON logs.
@@ -126,8 +169,11 @@ Useful host-side commands:
 
 ```bash
 uv run makemigrations add_monitoring_models
+uv run migrate
 uv run pytest
 uv run ruff check src
+uv run black --check src
+uv run mypy --explicit-package-bases src
 ```
 
 `uv run makemigrations` delegates to `aerich migrate --offline`, so it can

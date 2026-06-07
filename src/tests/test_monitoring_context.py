@@ -4,17 +4,22 @@ import pytest
 
 from utils.monitoring_context import load_private_monitoring_context
 
+PRIVATE_MONITORING_CONTEXT = (
+    "# Private Monitoring Context\n\n"
+    "Installed services: demo-shop, workflow-mcp, monitor-worker."
+)
+
 
 def test_load_private_monitoring_context_reads_local_file(tmp_path: Path) -> None:
     context_path: Path = tmp_path / "vps_monitoring_context.md"
     context_path.write_text(
-        "# Private VPS Context\n\nInstalled services: portfolio, mcp, monitoring.",
+        PRIVATE_MONITORING_CONTEXT,
         encoding="utf-8",
     )
 
     context: str = load_private_monitoring_context(context_path)
 
-    assert context == "# Private VPS Context\n\nInstalled services: portfolio, mcp, monitoring."
+    assert context == PRIVATE_MONITORING_CONTEXT
 
 
 def test_load_private_monitoring_context_raises_when_file_is_missing(

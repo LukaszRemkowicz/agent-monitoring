@@ -5,7 +5,13 @@ import pytest
 
 from exceptions import McpClientError
 from mcp import McpWorkflowClient
-from schemas import CollectLogsArtifact, ProjectManifestSummary, StructuredContent
+from schemas import (
+    CollectLogsArtifact,
+    LogWorkspace,
+    McpToolName,
+    ProjectManifestSummary,
+    StructuredContent,
+)
 from tests.conftest import build_collect_logs_artifact_payload
 
 
@@ -21,7 +27,7 @@ async def test_mcp_workflow_client_calls_tool_and_returns_structured_content_mod
             "result": {
                 "content": [],
                 "structuredContent": {
-                    "workflow_name": "analyze_daily_log_bundle",
+                    "workflow_name": McpToolName.ANALYZE_DAILY_LOG_BUNDLE,
                     "prompt": "Log Summary Instructions",
                     "mandatory_skills": [
                         {
@@ -42,9 +48,11 @@ async def test_mcp_workflow_client_calls_tool_and_returns_structured_content_mod
         transport=httpx.MockTransport(handler),
     )
 
-    structured_content: StructuredContent = await client.call_tool("analyze_daily_log_bundle")
+    structured_content: StructuredContent = await client.call_tool(
+        McpToolName.ANALYZE_DAILY_LOG_BUNDLE
+    )
 
-    assert structured_content.workflow_name == "analyze_daily_log_bundle"
+    assert structured_content.workflow_name == McpToolName.ANALYZE_DAILY_LOG_BUNDLE
     assert structured_content.mandatory_skills[0].name == "project_context"
     assert len(requests) == 1
     request_payload = httpx.Request(
@@ -53,7 +61,7 @@ async def test_mcp_workflow_client_calls_tool_and_returns_structured_content_mod
         content=requests[0].content,
     ).read()
     assert b'"method":"tools/call"' in request_payload
-    assert b'"name":"analyze_daily_log_bundle"' in request_payload
+    assert f'"name":"{McpToolName.ANALYZE_DAILY_LOG_BUNDLE}"'.encode() in request_payload
 
 
 @pytest.mark.asyncio
@@ -72,7 +80,7 @@ async def test_mcp_workflow_client_get_workflow_bundle_uses_bootstrap_tool() -> 
             json={
                 "result": {
                     "structuredContent": {
-                        "workflow_name": "analyze_daily_log_bundle",
+                        "workflow_name": McpToolName.ANALYZE_DAILY_LOG_BUNDLE,
                         "prompt": "Log Summary Instructions",
                         "mandatory_skills": [
                             {
@@ -95,9 +103,9 @@ async def test_mcp_workflow_client_get_workflow_bundle_uses_bootstrap_tool() -> 
 
     workflow = await client.get_workflow_bundle()
 
-    assert workflow.workflow_name == "analyze_daily_log_bundle"
+    assert workflow.workflow_name == McpToolName.ANALYZE_DAILY_LOG_BUNDLE
     assert workflow.mandatory_skills[0].name == "project_context"
-    assert '"name":"analyze_daily_log_bundle"' in tool_names[0]
+    assert f'"name":"{McpToolName.ANALYZE_DAILY_LOG_BUNDLE}"' in tool_names[0]
 
 
 @pytest.mark.asyncio
@@ -116,7 +124,7 @@ async def test_mcp_workflow_client_get_sitemap_workflow_bundle_uses_bootstrap_to
             json={
                 "result": {
                     "structuredContent": {
-                        "workflow_name": "analyze_sitemap_bundle",
+                        "workflow_name": McpToolName.ANALYZE_SITEMAP_BUNDLE,
                         "prompt": "Sitemap Summary Instructions",
                         "mandatory_skills": [],
                         "optional_skills": [],
@@ -134,9 +142,9 @@ async def test_mcp_workflow_client_get_sitemap_workflow_bundle_uses_bootstrap_to
 
     workflow = await client.get_sitemap_workflow_bundle()
 
-    assert workflow.workflow_name == "analyze_sitemap_bundle"
+    assert workflow.workflow_name == McpToolName.ANALYZE_SITEMAP_BUNDLE
     assert workflow.prompt == "Sitemap Summary Instructions"
-    assert '"name":"analyze_sitemap_bundle"' in tool_names[0]
+    assert f'"name":"{McpToolName.ANALYZE_SITEMAP_BUNDLE}"' in tool_names[0]
 
 
 @pytest.mark.asyncio
@@ -155,7 +163,7 @@ async def test_mcp_workflow_client_get_service_status_uses_status_tool() -> None
             json={
                 "result": {
                     "structuredContent": {
-                        "name": "mcp-log-server",
+                        "name": "workflow-mcp",
                         "status": "ok",
                     },
                 }
@@ -200,12 +208,12 @@ async def test_mcp_workflow_client_collect_logs_omits_project_names_for_jwt_scop
         until="2026-05-20T00:00:00Z",
     )
 
-    assert artifact.action == "collect_logs"
-    assert artifact.projects[0].snapshot_dir == "workflow/landingpage/latest"
+    assert artifact.action == McpToolName.COLLECT_LOGS
+    assert artifact.projects[0].snapshot_dir == "workflow/demo-shop/latest"
     assert artifact.projects[0].sources[0].source_key == "backend"
     assert requests[0]["method"] == "tools/call"
     assert requests[0]["params"] == {
-        "name": "collect_logs",
+        "name": McpToolName.COLLECT_LOGS,
         "arguments": {
             "since": "2026-05-19T00:00:00Z",
             "until": "2026-05-20T00:00:00Z",
@@ -226,15 +234,15 @@ async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> N
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Unknown project 'landingpage'.",
+                                "text": "Unknown project 'demo-shop'.",
                             }
                         ],
                         "structuredContent": {
                             "status": "error",
                             "error_code": "unknown_project",
-                            "message": "Unknown project 'landingpage'.",
+                            "message": "Unknown project 'demo-shop'.",
                             "retry_tips": ["Call list_projects."],
-                            "details": {"requested_project_names": ["landingpage"]},
+                            "details": {"requested_project_names": ["demo-shop"]},
                         },
                         "isError": True,
                     }
@@ -249,9 +257,9 @@ async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> N
             until="2026-05-20T00:00:00Z",
         )
 
-    assert "Unknown project 'landingpage'" in str(error_info.value)
+    assert "Unknown project 'demo-shop'" in str(error_info.value)
     assert "Call list_projects" in str(error_info.value)
-    assert error_info.value.tool_name == "collect_logs"
+    assert error_info.value.tool_name == McpToolName.COLLECT_LOGS
 
 
 @pytest.mark.asyncio
@@ -265,13 +273,13 @@ async def test_mcp_workflow_client_collect_logs_validation_error_lists_fields() 
                 json={
                     "result": {
                         "structuredContent": {
-                            "action": "collect_logs",
-                            "workspace": "workflow",
+                            "action": McpToolName.COLLECT_LOGS,
+                            "workspace": LogWorkspace.WORKFLOW,
                             "projects": [
                                 {
-                                    "project_name": "landingpage",
-                                    "workspace": "workflow",
-                                    "snapshot_dir": "workflow/landingpage/latest",
+                                    "project_name": "demo-shop",
+                                    "workspace": LogWorkspace.WORKFLOW,
+                                    "snapshot_dir": "workflow/demo-shop/latest",
                                     "collected_at": "2026-05-20T00:01:00Z",
                                 }
                             ],
@@ -306,8 +314,8 @@ async def test_mcp_workflow_client_list_projects_uses_discovery_tool() -> None:
                     "structuredContent": {
                         "result": [
                             {
-                                "project_name": "landingpage",
-                                "project_summary": "Landingpage project.",
+                                "project_name": "demo-shop",
+                                "project_summary": "Demo shop project.",
                                 "source_keys": ["backend", "nginx"],
                             },
                             {
@@ -329,10 +337,10 @@ async def test_mcp_workflow_client_list_projects_uses_discovery_tool() -> None:
 
     projects: list[ProjectManifestSummary] = await client.list_projects()
 
-    assert [project.project_name for project in projects] == ["landingpage", "shop"]
+    assert [project.project_name for project in projects] == ["demo-shop", "shop"]
     assert projects[0].source_keys == ["backend", "nginx"]
     assert requests[0]["params"] == {
-        "name": "list_projects",
+        "name": McpToolName.LIST_PROJECTS,
         "arguments": {},
     }
 
@@ -364,7 +372,7 @@ async def test_mcp_workflow_client_list_projects_returns_empty_list() -> None:
 
     assert projects == []
     assert requests[0]["params"] == {
-        "name": "list_projects",
+        "name": McpToolName.LIST_PROJECTS,
         "arguments": {},
     }
 
@@ -399,7 +407,7 @@ async def test_mcp_workflow_client_reads_workflow_skill_resource() -> None:
     skill_text: str = await client.read_resource("skill://workflow/project_context")
 
     assert skill_text == "Project context skill body."
-    assert requests[0]["method"] == "resources/read"
+    assert requests[0]["method"] == McpToolName.READ_RESOURCE
     assert requests[0]["params"] == {"uri": "skill://workflow/project_context"}
 
 
@@ -414,8 +422,8 @@ async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
             json={
                 "result": {
                     "structuredContent": {
-                        "action": "group_errors",
-                        "project_name": "landingpage",
+                        "action": McpToolName.GROUP_ERRORS,
+                        "project_name": "demo-shop",
                         "groups": [{"message": "No repeated errors", "count": 0}],
                     }
                 }
@@ -429,15 +437,15 @@ async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
     )
 
     structured_content: dict[str, object] = await client.call_deterministic_tool(
-        "group_errors",
-        {"project_name": "landingpage"},
+        McpToolName.GROUP_ERRORS,
+        {"project_name": "demo-shop"},
     )
 
-    assert structured_content["action"] == "group_errors"
-    assert structured_content["project_name"] == "landingpage"
+    assert structured_content["action"] == McpToolName.GROUP_ERRORS
+    assert structured_content["project_name"] == "demo-shop"
     assert requests[0]["params"] == {
-        "name": "group_errors",
-        "arguments": {"project_name": "landingpage"},
+        "name": McpToolName.GROUP_ERRORS,
+        "arguments": {"project_name": "demo-shop"},
     }
 
 
@@ -465,13 +473,13 @@ async def test_mcp_workflow_client_deterministic_tool_raises_result_error() -> N
 
     with pytest.raises(McpClientError) as error_info:
         await client.call_deterministic_tool(
-            "group_errors",
-            {"project_name": "landingpage", "source_key": "backend"},
+            McpToolName.GROUP_ERRORS,
+            {"project_name": "demo-shop", "source_key": "backend"},
         )
 
     assert "Unknown source key 'backend'" in str(error_info.value)
     assert "Call list_projects" in str(error_info.value)
-    assert error_info.value.tool_name == "group_errors"
+    assert error_info.value.tool_name == McpToolName.GROUP_ERRORS
 
 
 @pytest.mark.asyncio
@@ -483,7 +491,7 @@ async def test_mcp_workflow_client_requires_workflow_jwt() -> None:
     )
 
     with pytest.raises(RuntimeError, match="MCP_WORKFLOW_JWT is required"):
-        await client.call_tool("analyze_daily_log_bundle")
+        await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)
 
 
 @pytest.mark.asyncio
@@ -497,7 +505,7 @@ async def test_mcp_workflow_client_raises_for_json_rpc_error() -> None:
     )
 
     with pytest.raises(RuntimeError, match="MCP workflow error"):
-        await client.call_tool("analyze_daily_log_bundle")
+        await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)
 
 
 @pytest.mark.asyncio
@@ -511,7 +519,7 @@ async def test_mcp_workflow_client_raises_for_missing_structured_content() -> No
     )
 
     with pytest.raises(RuntimeError, match="expected shape"):
-        await client.call_tool("analyze_daily_log_bundle")
+        await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)
 
 
 @pytest.mark.asyncio
@@ -523,4 +531,4 @@ async def test_mcp_workflow_client_raises_for_non_object_response() -> None:
     )
 
     with pytest.raises(RuntimeError, match="must be a JSON object"):
-        await client.call_tool("analyze_daily_log_bundle")
+        await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)

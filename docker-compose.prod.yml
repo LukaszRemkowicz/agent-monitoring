@@ -30,6 +30,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      TZ: Europe/Warsaw
       ENVIRONMENT: prod
       PYTHONPATH: /app/src
       DATABASE_HOST: db
