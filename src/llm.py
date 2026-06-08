@@ -16,19 +16,14 @@ def configure_llm_providers() -> None:
     register_builtin_providers(
         [
             {
-                "name": settings.MONITORING_LLM_FAST_MODEL,
+                "name": model_name,
                 "provider": "openai",
                 "api_key": settings.OPENAI_API_KEY,
-                "model": settings.MONITORING_LLM_FAST_MODEL,
-                "base_url": settings.OPENAI_BASE_URL or None,
-            },
-            {
-                "name": settings.MONITORING_LLM_STRONG_MODEL,
-                "provider": "openai",
-                "api_key": settings.OPENAI_API_KEY,
-                "model": settings.MONITORING_LLM_STRONG_MODEL,
-                "base_url": settings.OPENAI_BASE_URL or None,
-            },
+                "model": model_name,
+            }
+            for model_name in dict.fromkeys(settings.LLM_MODELS)
+        ]
+        + [
             {
                 "name": "mock",
                 "provider": "mock",

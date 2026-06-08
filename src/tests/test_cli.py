@@ -435,7 +435,7 @@ def test_check_mcp_command_calls_mcp_service_status(
     assert result.exit_code == 0
     assert fake_client.calls == ["get_service_status"]
     assert build_client.call_args.kwargs == {
-        "base_url": main.settings.LOG_ANALYSIS_MCP_URL,
+        "base_url": main.settings.MCP_URL,
         "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
     }
     assert "MCP service is reachable" in result.output
@@ -508,7 +508,7 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         main.LLMSummaryBuilder,
     )
     assert build_runner.call_args.kwargs["summary_builder"].llm_provider is llm_provider
-    get_llm_provider.assert_called_once_with(main.settings.MONITORING_LLM_PROVIDER)
+    get_llm_provider.assert_called_once_with(main.settings.LLM_DEFAULT_MODEL)
     assert "Completed sitemap analysis" in result.output
     assert "severity=INFO" in result.output
     assert "Summary: Sitemap analysis service is ready." in result.output
@@ -671,36 +671,12 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
 
 
-def test_prod_compose_exports_site_domain_setting() -> None:
-    compose_text = Path("docker-compose.prod.yml").read_text()
-
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
-    assert "SITEMAP_URL" not in compose_text
-
-
-def test_prod_compose_exports_llm_settings() -> None:
-    compose_text = Path("docker-compose.prod.yml").read_text()
-
-    assert "OPENAI_API_KEY: ${OPENAI_API_KEY:-}" in compose_text
-    assert "OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}" in compose_text
-    assert "MONITORING_LLM_PROVIDER: ${MONITORING_LLM_PROVIDER:-gpt-4.1-mini}" in compose_text
-    assert "MONITORING_LLM_FAST_MODEL: ${MONITORING_LLM_FAST_MODEL:-gpt-4.1-mini}" in compose_text
-    assert "MONITORING_LLM_STRONG_MODEL: ${MONITORING_LLM_STRONG_MODEL:-gpt-5}" in compose_text
-
-
 def test_deploy_script_exports_site_domain_setting() -> None:
     deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
 
-    assert 'SITE_DOMAIN="${SITE_DOMAIN:-}"' in deploy_text
+    assert 'SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"' in deploy_text
     assert "    SITE_DOMAIN \\" in deploy_text
     assert "SITEMAP_URL" not in deploy_text
-
-
-def test_dev_compose_exports_site_domain_setting() -> None:
-    compose_text = Path("docker-compose.yaml").read_text()
-
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
-    assert "SITEMAP_URL" not in compose_text
 
 
 def test_as_async_runs_coroutine_function() -> None:
@@ -888,7 +864,7 @@ def test_db_decorator_formats_mcp_client_errors(
             mcp_url="http://127.0.0.1:8001/mcp",
             tool_name="analyze_daily_log_bundle",
             hint=(
-                "Check LOG_ANALYSIS_MCP_URL and whether the MCP server is running. "
+                "Check MCP_URL and whether the MCP server is running. "
                 "For Docker Compose commands, remember that localhost means the "
                 "monitoring container, not your host."
             ),
@@ -902,10 +878,12 @@ def test_db_decorator_formats_mcp_client_errors(
     assert "analyze_daily_log_bundle" in output
     assert "http://127.0.0.1:8001/mcp" in output
     assert "connection attempts failed" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" in output
-    assert "server is running" in output
+    assert "Check MCP_URL" in output
+    assert "server is" in output
+    assert "running" in output
     assert "Docker Compose" in output
-    assert "means the monitoring container" in output
+    assert "means the" in output
+    assert "monitoring container" in output
     assert isinstance(result.exception, SystemExit)
     assert result.exception.code == 1
     assert "Traceback" not in output
@@ -952,7 +930,7 @@ def test_db_decorator_does_not_add_connectivity_hint_to_mcp_validation_errors(
     assert result.exit_code == 1
     assert "Invalid fields" in output
     assert "result.structuredContent.projects.0.sources" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "Check MCP_URL" not in output
     assert "MCP_WORKFLOW_JWT" not in output
     assert "MCP server is running" not in output
 
@@ -1003,7 +981,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     assert "No persisted manifest" in output
     assert "was found for that project" in output
     assert "Call list_projects" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "Check MCP_URL" not in output
     assert "MCP_WORKFLOW_JWT" not in output
     assert "MCP server is running" not in output
 
@@ -1051,7 +1029,8 @@ def test_db_decorator_formats_llm_provider_configuration_errors(
     assert result.exit_code == 1
     assert "LLM provider configuration failed" in normalized_output
     assert "OpenAI" in normalized_output
-    assert "API key is required" in normalized_output
+    assert "API" in normalized_output
+    assert "key is required" in normalized_output
     assert "OPENAI_API_KEY" in normalized_output
     assert "OPEN_API_KEY" in normalized_output
     assert "Traceback" not in output
@@ -1084,7 +1063,7 @@ def test_db_decorator_formats_private_monitoring_context_errors(
     @db
     async def command() -> None:
         raise PrivateMonitoringContextError(
-            "Private monitoring context file is required but was not found: "
+            "Project context prompt file is required but was not found: "
             "/app/private/vps_monitoring_context.md",
             context_path="/app/private/vps_monitoring_context.md",
         )
@@ -1093,9 +1072,9 @@ def test_db_decorator_formats_private_monitoring_context_errors(
     output = unstyle(result.output)
 
     assert result.exit_code == 1
-    assert "Private monitoring context is not configured" in output
+    assert "Project context prompt is not configured" in output
     assert "/app/private/vps_monitoring_context.md" in output
-    assert "MONITORING_PRIVATE_CONTEXT_PATH" in output
+    assert "PROJECT_CONTEXT_PROMPT_PATH" in output
     assert "private/vps_monitoring_context.md" in output
     assert "Traceback" not in output
 

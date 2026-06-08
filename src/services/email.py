@@ -55,9 +55,7 @@ class MonitoringEmailConfig(BaseModel):
     from_email: EmailStr
     log_recipients: list[EmailStr] = Field(min_length=1)
     sitemap_recipients: list[EmailStr] = Field(min_length=1)
-    admin_domain: str
     environment: str
-    monitoring_project: str
 
     @classmethod
     def from_settings(cls) -> MonitoringEmailConfig:
@@ -76,9 +74,7 @@ class MonitoringEmailConfig(BaseModel):
                 "from_email": settings.EMAIL_FROM,
                 "log_recipients": log_recipients,
                 "sitemap_recipients": sitemap_recipients,
-                "admin_domain": settings.ADMIN_DOMAIN,
                 "environment": settings.ENVIRONMENT,
-                "monitoring_project": settings.MONITORING_PROJECT,
             }
         )
 
@@ -195,33 +191,27 @@ class MonitoringEmailService:
     def _log_analysis_context(self, analysis: LogAnalysisOut) -> dict[str, Any]:
         return {
             "environment": self.config.environment,
-            "monitoring_project": self.config.monitoring_project,
             "log_analysis": analysis,
             "analysis_date": self._format_email_date(analysis.analysis_date).upper(),
             "log_size": analysis.log_size,
             "execution_time": f"{analysis.execution_time_seconds:.1f}",
-            "admin_domain": self.config.admin_domain,
             "current_year": datetime.now().year,
         }
 
     def _sitemap_analysis_context(self, analysis: SitemapAnalysisOut) -> dict[str, Any]:
         return {
             "environment": self.config.environment,
-            "monitoring_project": self.config.monitoring_project,
             "sitemap_analysis": analysis,
             "analysis_date": self._format_email_date(analysis.analysis_date).upper(),
             "execution_time": f"{analysis.execution_time_seconds:.1f}",
-            "admin_domain": self.config.admin_domain,
             "current_year": datetime.now().year,
         }
 
     def _failure_context(self, failure: MonitoringFailureEmail) -> dict[str, Any]:
         return {
             "environment": self.config.environment,
-            "monitoring_project": self.config.monitoring_project,
             "failure": failure,
             "analysis_date": self._format_email_date(failure.analysis_date).upper(),
-            "admin_domain": self.config.admin_domain,
             "current_year": datetime.now().year,
         }
 

@@ -40,7 +40,7 @@ class McpClientError(RuntimeError):
 
 
 class PrivateMonitoringContextError(RuntimeError):
-    """Raised when mandatory private monitoring context is missing or invalid."""
+    """Raised when the mandatory project context prompt is missing or invalid."""
 
     def __init__(self, message: str, *, context_path: str = "") -> None:
         super().__init__(message)

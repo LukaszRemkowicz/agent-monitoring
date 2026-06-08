@@ -353,7 +353,7 @@ class McpWorkflowClient:
                 mcp_url=self.base_url,
                 tool_name=name,
                 hint=(
-                    "Check LOG_ANALYSIS_MCP_URL and whether the MCP server is running. "
+                    "Check MCP_URL and whether the MCP server is running. "
                     "For Docker Compose commands, remember that localhost means the "
                     "monitoring container, not your host."
                 ),

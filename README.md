@@ -21,9 +21,9 @@ returns references that this app stores with the report.
 
 Run these commands from the production `agent-monitoring` checkout.
 
-### 1. Prepare Private Context
+### 1. Prepare Project Context Prompt
 
-Create the private context file on the VPS:
+Create the project context prompt file on the VPS:
 
 ```bash
 mkdir -p private
@@ -44,10 +44,12 @@ environment:
 DATABASE_NAME=agent_monitoring
 DATABASE_USER=agent_monitoring
 DATABASE_PASSWORD=...
-LOG_ANALYSIS_MCP_URL=https://...
+MCP_URL=https://...
 MCP_WORKFLOW_JWT=...
 OPENAI_API_KEY=...
 EMAIL_HOST=...
+EMAIL_USERNAME=...
+EMAIL_PASSWORD=...
 EMAIL_FROM=...
 EMAIL_TO=...
 SITE_DOMAIN=example.com
@@ -56,12 +58,12 @@ SITE_DOMAIN=example.com
 Optional values:
 
 ```bash
-OPENAI_BASE_URL=
-MONITORING_LLM_PROVIDER=gpt-4.1-mini
-MONITORING_LLM_FAST_MODEL=gpt-4.1-mini
-MONITORING_LLM_STRONG_MODEL=gpt-5
+LLM_DEFAULT_MODEL=gpt-4.1-mini
+LLM_FAST_MODEL=gpt-4.1-mini
+LLM_STRONG_MODEL=gpt-5
 SITEMAP_EMAIL_TO=
-MONITORING_PRIVATE_CONTEXT_DIR=./private
+PROJECT_CONTEXT_PROMPT_DIR=./private
+LOGS_DIR=/var/log/agent-monitoring
 POSTGRES_DATA_DIR=/var/lib/agent-monitoring/postgresql
 ```
 
@@ -114,6 +116,7 @@ The deploy script:
 - verifies the tagged image exists
 - creates a database backup unless `SKIP_BACKUP=true`
 - starts the database service
+- creates the app log directory
 - runs committed migrations unless `SKIP_MIGRATE=true`
 - runs the selected monitoring command, defaulting to `log_analysis`
 - writes the deployed tag to `/var/lib/agent-monitoring/prod/current_tag`
@@ -168,6 +171,12 @@ Cron logs are written to:
 /var/log/devops/cron/agent-monitoring/sitemap-analysis.log
 ```
 
+App logger files are written to:
+
+```text
+/var/log/agent-monitoring/YYYY-MM-DD.jsonl
+```
+
 ## Local Runtime
 
 Use Docker Compose for local DB-backed jobs:
@@ -202,13 +211,15 @@ DATABASE_PORT=5438
 DATABASE_NAME=monitoring
 DATABASE_USER=monitoring
 DATABASE_PASSWORD=monitoring
-LOG_ANALYSIS_MCP_URL=http://127.0.0.1:8001/mcp
+MCP_URL=http://127.0.0.1:8001/mcp
 ```
+
+Local app logs are written to `logs/YYYY-MM-DD.jsonl`.
 
 Override the MCP endpoint when needed:
 
 ```bash
-LOG_ANALYSIS_MCP_URL=https://mcp.example.com/mcp docker compose run --rm monitoring-app check-mcp
+MCP_URL=https://mcp.example.com/mcp docker compose run --rm monitoring-app check-mcp
 ```
 
 ## Developer Commands

@@ -46,6 +46,7 @@ services:
       - ./src:/app/src
       - ./migrations:/app/migrations
       - ./private:/app/private:ro
+      - ./logs:/app/logs
     depends_on:
       db:
         condition: service_healthy
@@ -62,9 +63,9 @@ services:
       DATABASE_PASSWORD: monitoring
       DEBUG: "true"
       LOG_COLOR: always
+      LOGS_DIR: /app/logs
       MONITORING_AUTO_MIGRATE: "true"
-      LOG_ANALYSIS_MCP_URL: ${LOG_ANALYSIS_MCP_URL:-http://127.0.0.1:8001/mcp}
-      MONITORING_PROJECT: landingpage
+      MCP_URL: ${MCP_URL:-http://127.0.0.1:8001/mcp}
       MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
       EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
       EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
@@ -75,7 +76,6 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_TO: ${EMAIL_TO:-}
       SITE_DOMAIN: ${SITE_DOMAIN:-}
-      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
     command: ["log_analysis"]
 
@@ -92,6 +92,7 @@ services:
       - ./src:/app/src
       - ./migrations:/app/migrations
       - ./private:/app/private:ro
+      - ./logs:/app/logs
     depends_on:
       test-db:
         condition: service_healthy
@@ -108,8 +109,7 @@ services:
       DATABASE_PASSWORD: monitoring_test
       DEBUG: "true"
       LOG_COLOR: always
-      MONITORING_PROJECT: landingpage
-      MONITORING_PRIVATE_CONTEXT_PATH: /app/private/vps_monitoring_context.md
+      PROJECT_CONTEXT_PROMPT_PATH: /app/private/vps_monitoring_context.md
     entrypoint:
       - /app/monitoring-entrypoint.sh
       - python

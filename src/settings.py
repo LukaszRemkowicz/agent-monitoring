@@ -20,6 +20,7 @@ DEBUG = env.bool("DEBUG", default=False)
 LOG_LEVEL = env.str("LOG_LEVEL", default="INFO")
 LOG_FORMAT = env.str("LOG_FORMAT", default=None)
 LOG_TIMEZONE = env.str("LOG_TIMEZONE", default="Europe/Warsaw")
+LOGS_DIR = env.str("LOGS_DIR", default=str(REPOSITORY_ROOT / "logs"))
 if DEBUG and LOG_FORMAT in {None, "json"}:
     LOG_FORMAT = "pretty"
 elif LOG_FORMAT is None:
@@ -32,21 +33,21 @@ DATABASE_NAME = env.str("DATABASE_NAME", default="monitoring")
 DATABASE_USER = env.str("DATABASE_USER", default="monitoring")
 DATABASE_PASSWORD = env.str("DATABASE_PASSWORD", default="monitoring")
 
-LOG_ANALYSIS_MCP_URL = env.str(
-    "LOG_ANALYSIS_MCP_URL",
-    default="http://127.0.0.1:8001/mcp",
-)
+MCP_URL = env.str("MCP_URL", default="http://127.0.0.1:8001/mcp")
 MCP_WORKFLOW_JWT = env.str("MCP_WORKFLOW_JWT", default="")
-MONITORING_PROJECT = env.str("MONITORING_PROJECT", default="landingpage")
-MONITORING_PRIVATE_CONTEXT_PATH = env.str(
-    "MONITORING_PRIVATE_CONTEXT_PATH",
+PROJECT_CONTEXT_PROMPT_PATH = env.str(
+    "PROJECT_CONTEXT_PROMPT_PATH",
     default=str(REPOSITORY_ROOT / "private/vps_monitoring_context.md"),
 )
-MONITORING_LLM_PROVIDER = env.str("MONITORING_LLM_PROVIDER", default="gpt-4.1-mini")
-MONITORING_LLM_FAST_MODEL = env.str("MONITORING_LLM_FAST_MODEL", default="gpt-4.1-mini")
-MONITORING_LLM_STRONG_MODEL = env.str("MONITORING_LLM_STRONG_MODEL", default="gpt-5")
+LLM_DEFAULT_MODEL = env.str("LLM_DEFAULT_MODEL", default="gpt-4.1-mini")
+LLM_FAST_MODEL = env.str("LLM_FAST_MODEL", default="gpt-4.1-mini")
+LLM_STRONG_MODEL = env.str("LLM_STRONG_MODEL", default="gpt-5")
+LLM_MODELS = (
+    LLM_DEFAULT_MODEL,
+    LLM_FAST_MODEL,
+    LLM_STRONG_MODEL,
+)
 OPENAI_API_KEY = env.str("OPENAI_API_KEY", default="")
-OPENAI_BASE_URL = env.str("OPENAI_BASE_URL", default="")
 
 EMAIL_BACKEND = env.str("EMAIL_BACKEND", default="smtp")
 EMAIL_HOST = env.str("EMAIL_HOST", default="smtp.gmail.com")
@@ -58,6 +59,5 @@ EMAIL_FROM = env.str("EMAIL_FROM", default="monitoring@example.com")
 EMAIL_TO = env.str("EMAIL_TO", default="")
 
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="")
-ADMIN_DOMAIN = env.str("ADMIN_DOMAIN", default="")
 SITEMAP_EMAIL_TO = env.str("SITEMAP_EMAIL_TO", default="")
 RETENTION_DAYS = env.int("RETENTION_DAYS", default=90)

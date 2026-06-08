@@ -26,11 +26,11 @@ def test_manual_fixture_private_context_is_explicit_opt_in(
     context_loader = mocker.patch.object(
         manual_log_analysis,
         "load_private_monitoring_context",
-        return_value="Real private monitoring context",
+        return_value="Real project context prompt",
     )
     mocker.patch.object(
         manual_log_analysis.settings,
-        "MONITORING_PRIVATE_CONTEXT_PATH",
+        "PROJECT_CONTEXT_PROMPT_PATH",
         Path("/private/context.md"),
     )
 
@@ -38,5 +38,5 @@ def test_manual_fixture_private_context_is_explicit_opt_in(
         use_private_context=True
     )
 
-    assert context == "Real private monitoring context"
+    assert context == "Real project context prompt"
     context_loader.assert_called_once_with(Path("/private/context.md"))

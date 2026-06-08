@@ -72,7 +72,7 @@ async def log_analysis(
     log_window = LogAnalysisService.create_log_collection_window(parsed_analysis_date)
     trace_id = uuid4().hex
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     log_analysis_repository = LogAnalysisRepository()
@@ -80,9 +80,9 @@ async def log_analysis(
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
-            llm_provider=get_llm_provider(settings.MONITORING_LLM_STRONG_MODEL),
+            llm_provider=get_llm_provider(settings.LLM_STRONG_MODEL),
             private_monitoring_context=load_private_monitoring_context(
-                settings.MONITORING_PRIVATE_CONTEXT_PATH
+                settings.PROJECT_CONTEXT_PROMPT_PATH
             ),
             history_comparison_service=history_comparison_service,
             history_comparison_enabled=compare_history,
@@ -196,7 +196,7 @@ async def sitemap_analysis(
 
     sitemap_url: str = build_sitemap_url(site_domain)
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     crawler: Crawler = Crawler(
@@ -210,7 +210,7 @@ async def sitemap_analysis(
         sitemap_url=sitemap_url,
         crawler=crawler,
         summary_builder=LLMSummaryBuilder(
-            llm_provider=get_llm_provider(settings.MONITORING_LLM_PROVIDER),
+            llm_provider=get_llm_provider(settings.LLM_DEFAULT_MODEL),
             mcp_client=mcp_client,
         ),
     )
@@ -294,7 +294,7 @@ async def _send_command_failure_email(
 async def check_mcp() -> None:
     """Check that the MCP service status endpoint is reachable."""
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     logger.info(
@@ -313,7 +313,7 @@ async def check_mcp() -> None:
     )
     typer.echo(
         "MCP service is reachable "
-        f"({settings.LOG_ANALYSIS_MCP_URL}, "
+        f"({settings.MCP_URL}, "
         f"name={status.name}, "
         f"status={status.status}, "
         f"environment={status.environment}, "

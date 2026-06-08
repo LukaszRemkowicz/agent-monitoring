@@ -49,24 +49,25 @@ DRY_RUN="${DRY_RUN:-false}"
 MONITORING_COMMAND="${MONITORING_COMMAND:-log_analysis}"
 ALLOW_EMPTY_POSTGRES_DATA_DIR="${ALLOW_EMPTY_POSTGRES_DATA_DIR:-false}"
 
-DATABASE_NAME="${DATABASE_NAME:-agent_monitoring}"
-DATABASE_USER="${DATABASE_USER:-agent_monitoring}"
+DATABASE_NAME="${DATABASE_NAME:?DATABASE_NAME is required}"
+DATABASE_USER="${DATABASE_USER:?DATABASE_USER is required}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}"
-LOG_ANALYSIS_MCP_URL="${LOG_ANALYSIS_MCP_URL:?LOG_ANALYSIS_MCP_URL is required}"
+MCP_URL="${MCP_URL:?MCP_URL is required}"
 MCP_WORKFLOW_JWT="${MCP_WORKFLOW_JWT:?MCP_WORKFLOW_JWT is required}"
-MONITORING_PROJECT="${MONITORING_PROJECT:-landingpage}"
-EMAIL_HOST="${EMAIL_HOST:?EMAIL_HOST is required}"
-EMAIL_PORT="${EMAIL_PORT:-25}"
-EMAIL_USERNAME="${EMAIL_USERNAME:-}"
-EMAIL_PASSWORD="${EMAIL_PASSWORD:-}"
+OPENAI_API_KEY="${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+EMAIL_HOST="${EMAIL_HOST:-smtp.gmail.com}"
+EMAIL_PORT="${EMAIL_PORT:-587}"
+EMAIL_USERNAME="${EMAIL_USERNAME:?EMAIL_USERNAME is required}"
+EMAIL_PASSWORD="${EMAIL_PASSWORD:?EMAIL_PASSWORD is required}"
 EMAIL_FROM="${EMAIL_FROM:?EMAIL_FROM is required}"
 EMAIL_TO="${EMAIL_TO:?EMAIL_TO is required}"
-SITE_DOMAIN="${SITE_DOMAIN:-}"
+SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"
 SITEMAP_EMAIL_TO="${SITEMAP_EMAIL_TO:-}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}"
 POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
-MONITORING_PRIVATE_CONTEXT_DIR="${MONITORING_PRIVATE_CONTEXT_DIR:-$PROJECT_DIR/private}"
+PROJECT_CONTEXT_PROMPT_DIR="${PROJECT_CONTEXT_PROMPT_DIR:-$PROJECT_DIR/private}"
+LOGS_DIR="${LOGS_DIR:-/var/log/agent-monitoring}"
 
 export \
     ENVIRONMENT \
@@ -75,9 +76,9 @@ export \
     DATABASE_NAME \
     DATABASE_USER \
     DATABASE_PASSWORD \
-    LOG_ANALYSIS_MCP_URL \
+    MCP_URL \
     MCP_WORKFLOW_JWT \
-    MONITORING_PROJECT \
+    OPENAI_API_KEY \
     EMAIL_HOST \
     EMAIL_PORT \
     EMAIL_USERNAME \
@@ -88,7 +89,8 @@ export \
     SITEMAP_EMAIL_TO \
     RETENTION_DAYS \
     POSTGRES_DATA_DIR \
-    MONITORING_PRIVATE_CONTEXT_DIR
+    PROJECT_CONTEXT_PROMPT_DIR \
+    LOGS_DIR
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -113,7 +115,8 @@ printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🧪 Monitoring command: %s\n" "$MONITORING_COMMAND"
 printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
-printf "🔐 Private context directory: %s\n" "$MONITORING_PRIVATE_CONTEXT_DIR"
+printf "🔐 Project context prompt directory: %s\n" "$PROJECT_CONTEXT_PROMPT_DIR"
+printf "🪵 App log directory: %s\n" "$LOGS_DIR"
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
@@ -138,6 +141,10 @@ docker compose "${COMPOSE_ARGS[@]}" config >/dev/null
 printf "✅ Compose config validated\n"
 mkdir -p "$POSTGRES_DATA_DIR"
 printf "✅ Postgres data directory exists: %s\n" "$POSTGRES_DATA_DIR"
+mkdir -p "$PROJECT_CONTEXT_PROMPT_DIR"
+printf "✅ Project context prompt directory exists: %s\n" "$PROJECT_CONTEXT_PROMPT_DIR"
+mkdir -p "$LOGS_DIR"
+printf "✅ App log directory exists: %s\n" "$LOGS_DIR"
 if [[ ! -f "$POSTGRES_PG_VERSION_FILE" && "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
     log_error "Postgres data directory is empty or not initialized: $POSTGRES_DATA_DIR"
     log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"

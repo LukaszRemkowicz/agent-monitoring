@@ -23,7 +23,6 @@ def _email_config(
     *,
     log_recipients: str = "ops@example.com",
     sitemap_recipients: str = "",
-    admin_domain: str = "admin.example.com",
     smtp_host: str = "smtp.example.com",
     smtp_port: int = 2525,
     smtp_username: str = "",
@@ -42,9 +41,7 @@ def _email_config(
         from_email=from_email,
         log_recipients=parsed_log_recipients,
         sitemap_recipients=_parse_test_recipients(sitemap_recipients) or parsed_log_recipients,
-        admin_domain=admin_domain,
         environment="dev",
-        monitoring_project="demo-shop",
     )
 
 
@@ -124,7 +121,6 @@ def test_log_analysis_email_renders_copied_template() -> None:
     )
     with override_settings(
         ENVIRONMENT="dev",
-        ADMIN_DOMAIN="admin.example.com",
         EMAIL_TO="ops@example.com",
     ):
         service = MonitoringEmailService.create_default()
@@ -133,12 +129,10 @@ def test_log_analysis_email_renders_copied_template() -> None:
         "monitoring/log_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "demo-shop",
             "log_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "log_size": "0.0 KB",
             "execution_time": "12.3",
-            "admin_domain": "admin.example.com",
             "current_year": 2026,
         },
     )
@@ -146,35 +140,6 @@ def test_log_analysis_email_renders_copied_template() -> None:
     assert "Portfolio - Daily Log Analysis" in html
     assert "Demo shop logs are healthy." in html
     assert "No critical incidents found." in html
-    assert "https://admin.example.com/admin/monitoring/loganalysis/7/" in html
-
-
-def test_log_analysis_email_omits_admin_link_without_admin_domain() -> None:
-    analysis = LogAnalysisOut(
-        id=7,
-        created_at=datetime(2026, 5, 19, tzinfo=UTC),
-        analysis_date=date(2026, 5, 19),
-        status="SUCCEEDED",
-        summary="Demo shop logs are healthy.",
-        severity="INFO",
-        key_findings=["No critical incidents found."],
-    )
-    service = _email_service(_email_config(admin_domain=""))
-
-    html = service.renderer.render(
-        "monitoring/log_analysis.html",
-        {
-            "environment": "dev",
-            "monitoring_project": "demo-shop",
-            "log_analysis": analysis,
-            "analysis_date": "MAY 19, 2026",
-            "log_size": "0.0 KB",
-            "execution_time": "0.0",
-            "admin_domain": "",
-            "current_year": 2026,
-        },
-    )
-
     assert "View Full Report" not in html
     assert "/admin/monitoring/loganalysis/" not in html
 
@@ -192,7 +157,11 @@ def test_log_analysis_email_context_uses_mcp_artifact_size() -> None:
     )
     service = _email_service(_email_config())
 
-    assert service._log_analysis_context(analysis)["log_size"] == "4.0 KB"
+    context = service._log_analysis_context(analysis)
+
+    assert context["environment"] == "dev"
+    assert "monitoring_project" not in context
+    assert context["log_size"] == "4.0 KB"
 
 
 def test_log_analysis_email_context_uses_mb_for_large_mcp_artifacts() -> None:
@@ -210,7 +179,10 @@ def test_log_analysis_email_context_uses_mb_for_large_mcp_artifacts() -> None:
     )
     service = _email_service(_email_config())
 
-    assert service._log_analysis_context(analysis)["log_size"] == "5.0 MB"
+    context = service._log_analysis_context(analysis)
+
+    assert "monitoring_project" not in context
+    assert context["log_size"] == "5.0 MB"
 
 
 def test_sitemap_analysis_email_renders_copied_template() -> None:
@@ -233,7 +205,6 @@ def test_sitemap_analysis_email_renders_copied_template() -> None:
     )
     with override_settings(
         ENVIRONMENT="dev",
-        ADMIN_DOMAIN="admin.example.com",
         EMAIL_TO="ops@example.com",
     ):
         service = MonitoringEmailService.create_default()
@@ -242,11 +213,9 @@ def test_sitemap_analysis_email_renders_copied_template() -> None:
         "monitoring/sitemap_analysis.html",
         {
             "environment": "dev",
-            "monitoring_project": "demo-shop",
             "sitemap_analysis": analysis,
             "analysis_date": "MAY 19, 2026",
             "execution_time": "4.6",
-            "admin_domain": "admin.example.com",
             "current_year": 2026,
         },
     )
@@ -254,34 +223,6 @@ def test_sitemap_analysis_email_renders_copied_template() -> None:
     assert "Portfolio - Sitemap Analysis" in html
     assert "Sitemap is healthy." in html
     assert "All sitemap URLs are valid." in html
-    assert "https://admin.example.com/admin/monitoring/sitemapanalysis/9/change/" in html
-
-
-def test_sitemap_analysis_email_omits_admin_link_without_admin_domain() -> None:
-    analysis = SitemapAnalysisOut(
-        id=9,
-        created_at=datetime(2026, 5, 19, tzinfo=UTC),
-        analysis_date=date(2026, 5, 19),
-        status="SUCCEEDED",
-        root_sitemap_url="https://example.com/sitemap.xml",
-        summary="Sitemap is healthy.",
-        severity="INFO",
-    )
-    service = _email_service(_email_config(admin_domain=""))
-
-    html = service.renderer.render(
-        "monitoring/sitemap_analysis.html",
-        {
-            "environment": "dev",
-            "monitoring_project": "demo-shop",
-            "sitemap_analysis": analysis,
-            "analysis_date": "MAY 19, 2026",
-            "execution_time": "0.0",
-            "admin_domain": "",
-            "current_year": 2026,
-        },
-    )
-
     assert "View Full Report" not in html
     assert "/admin/monitoring/sitemapanalysis/" not in html
 
@@ -305,7 +246,6 @@ def test_monitoring_email_service_sends_html_email(mocker: MockerFixture) -> Non
         template_name="monitoring/log_analysis.html",
         context={
             "environment": "dev",
-            "monitoring_project": "demo-shop",
             "log_analysis": LogAnalysisOut(
                 id=7,
                 created_at=datetime(2026, 5, 19, tzinfo=UTC),
@@ -318,7 +258,6 @@ def test_monitoring_email_service_sends_html_email(mocker: MockerFixture) -> Non
             "analysis_date": "MAY 19, 2026",
             "log_size": "0.0 KB",
             "execution_time": "0.0",
-            "admin_domain": "",
             "current_year": 2026,
         },
         recipients=service.config.log_recipients,
