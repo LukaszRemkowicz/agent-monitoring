@@ -66,7 +66,7 @@ SITEMAP_EMAIL_TO="${SITEMAP_EMAIL_TO:-}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}"
 POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
-PROJECT_CONTEXT_PROMPT_DIR="${PROJECT_CONTEXT_PROMPT_DIR:-$PROJECT_DIR/private}"
+PROJECT_CONTEXT_PROMPT_PATH="${PROJECT_CONTEXT_PROMPT_PATH:-$PROJECT_DIR/private/vps_monitoring_context.md}"
 LOGS_DIR="${LOGS_DIR:-/var/log/agent-monitoring}"
 
 export \
@@ -89,7 +89,7 @@ export \
     SITEMAP_EMAIL_TO \
     RETENTION_DAYS \
     POSTGRES_DATA_DIR \
-    PROJECT_CONTEXT_PROMPT_DIR \
+    PROJECT_CONTEXT_PROMPT_PATH \
     LOGS_DIR
 
 cleanup() {
@@ -106,6 +106,40 @@ deploy_step() {
     printf "\n%s [DEPLOY] [%s/%s] %s\n" "$icon" "$current" "$total" "$message"
 }
 
+ensure_writable_dir() {
+    local label="$1"
+    local path="$2"
+    local owner
+    local group
+
+    if mkdir -p "$path" 2>/dev/null; then
+        printf "✅ %s exists: %s\n" "$label" "$path"
+        return
+    fi
+
+    owner="$(id -un)"
+    group="$(id -gn)"
+    log_error "Cannot create $label: $path"
+    log_info "Run this once on the VPS, then retry deploy:"
+    log_info "sudo mkdir -p '$path'"
+    log_info "sudo chown -R '$owner:$group' '$path'"
+    exit 1
+}
+
+ensure_readable_file() {
+    local label="$1"
+    local path="$2"
+
+    if [[ -r "$path" ]]; then
+        printf "✅ %s exists: %s\n" "$label" "$path"
+        return
+    fi
+
+    log_error "$label is missing or not readable: $path"
+    log_info "Create the file or set PROJECT_CONTEXT_PROMPT_PATH to the real host path."
+    exit 1
+}
+
 mkdir -p "$STATE_DIR"
 
 printf "\n🚀 Deploying %s\n" "$IMAGE_NAME"
@@ -115,7 +149,7 @@ printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🧪 Monitoring command: %s\n" "$MONITORING_COMMAND"
 printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
-printf "🔐 Project context prompt directory: %s\n" "$PROJECT_CONTEXT_PROMPT_DIR"
+printf "🔐 Project context prompt file: %s\n" "$PROJECT_CONTEXT_PROMPT_PATH"
 printf "🪵 App log directory: %s\n" "$LOGS_DIR"
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
@@ -139,12 +173,9 @@ if [[ "$DRY_RUN" == "true" ]]; then
 fi
 docker compose "${COMPOSE_ARGS[@]}" config >/dev/null
 printf "✅ Compose config validated\n"
-mkdir -p "$POSTGRES_DATA_DIR"
-printf "✅ Postgres data directory exists: %s\n" "$POSTGRES_DATA_DIR"
-mkdir -p "$PROJECT_CONTEXT_PROMPT_DIR"
-printf "✅ Project context prompt directory exists: %s\n" "$PROJECT_CONTEXT_PROMPT_DIR"
-mkdir -p "$LOGS_DIR"
-printf "✅ App log directory exists: %s\n" "$LOGS_DIR"
+ensure_writable_dir "Postgres data directory" "$POSTGRES_DATA_DIR"
+ensure_readable_file "Project context prompt file" "$PROJECT_CONTEXT_PROMPT_PATH"
+ensure_writable_dir "App log directory" "$LOGS_DIR"
 if [[ ! -f "$POSTGRES_PG_VERSION_FILE" && "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
     log_error "Postgres data directory is empty or not initialized: $POSTGRES_DATA_DIR"
     log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"

@@ -21,7 +21,22 @@ returns references that this app stores with the report.
 
 Run these commands from the production `agent-monitoring` checkout.
 
-### 1. Prepare Project Context Prompt
+### 1. Prepare Host Directories
+
+Run this once on the VPS before the first deploy:
+
+```bash
+sudo mkdir -p /var/lib/agent-monitoring/postgresql
+sudo chown -R "$(id -un):$(id -gn)" /var/lib/agent-monitoring
+
+sudo mkdir -p /var/log/agent-monitoring
+sudo chown -R "$(id -un):$(id -gn)" /var/log/agent-monitoring
+```
+
+These directories are outside the checkout, so the deploy script expects them
+to be writable by the production user.
+
+### 2. Prepare Project Context Prompt
 
 Create the project context prompt file on the VPS:
 
@@ -30,12 +45,18 @@ mkdir -p private
 $EDITOR private/vps_monitoring_context.md
 ```
 
+If the real file lives in the private `devops` checkout, set:
+
+```bash
+PROJECT_CONTEXT_PROMPT_PATH=/home/lukasz/devops/agent-monitoring/vps_monitoring_context.md
+```
+
 This file is required for `log_analysis`. It should describe the VPS services,
 domains, ports, and operational expectations that the report needs to understand.
 
 The `private/` directory is ignored by Git.
 
-### 2. Configure Secrets
+### 3. Configure Secrets
 
 Production commands need these values from Doppler, `.env`, or exported shell
 environment:
@@ -62,12 +83,12 @@ LLM_DEFAULT_MODEL=gpt-4.1-mini
 LLM_FAST_MODEL=gpt-4.1-mini
 LLM_STRONG_MODEL=gpt-5
 SITEMAP_EMAIL_TO=
-PROJECT_CONTEXT_PROMPT_DIR=./private
+PROJECT_CONTEXT_PROMPT_PATH=/home/lukasz/devops/agent-monitoring/vps_monitoring_context.md
 LOGS_DIR=/var/log/agent-monitoring
 POSTGRES_DATA_DIR=/var/lib/agent-monitoring/postgresql
 ```
 
-### 3. Build The Release Image
+### 4. Build The Release Image
 
 Use the Git tag created by the release workflow or the tag you are deploying:
 
@@ -81,7 +102,7 @@ The image name is:
 prod-agent-monitoring:<TAG>
 ```
 
-### 4. First VPS Deploy
+### 5. First VPS Deploy
 
 Use this only for a brand-new production database directory:
 
@@ -98,7 +119,7 @@ runs migrations and starts the selected one-shot monitoring command.
 Use the first-init flags once. After
 `$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION` exists, use normal deploys.
 
-### 5. Normal Deploy
+### 6. Normal Deploy
 
 ```bash
 TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
@@ -127,7 +148,7 @@ Run sitemap analysis during deploy instead of log analysis:
 MONITORING_COMMAND=sitemap-analysis TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
 ```
 
-### 6. Manual VPS Checks
+### 7. Manual VPS Checks
 
 After deploy, check MCP:
 
@@ -154,7 +175,7 @@ doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
 Use `--force` only when replacing the existing report for the same date is
 intentional. Use `--no-email` for a persisted dry run without email.
 
-### 7. Install Cron
+### 8. Install Cron
 
 Cron templates and installation live in the separate `devops` repository:
 

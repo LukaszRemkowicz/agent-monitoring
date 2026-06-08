@@ -38,6 +38,7 @@ services:
       DATABASE_USER: ${DATABASE_USER:-}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-}
       LOGS_DIR: ${LOGS_DIR:-/var/log/agent-monitoring}
+      PROJECT_CONTEXT_PROMPT_PATH: ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}
       MCP_URL: ${MCP_URL:-}
       MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
       LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-gpt-4.1-mini}
@@ -56,6 +57,6 @@ services:
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
     volumes:
-      - ${PROJECT_CONTEXT_PROMPT_DIR:-./private}:/app/private:ro
+      - ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:ro
       - ${LOGS_DIR:-/var/log/agent-monitoring}:${LOGS_DIR:-/var/log/agent-monitoring}
     command: ["log_analysis"]
