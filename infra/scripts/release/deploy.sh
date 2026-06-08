@@ -47,7 +47,6 @@ SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 MONITORING_COMMAND="${MONITORING_COMMAND:-log_analysis}"
-ALLOW_EMPTY_POSTGRES_DATA_DIR="${ALLOW_EMPTY_POSTGRES_DATA_DIR:-false}"
 
 DATABASE_NAME="${DATABASE_NAME:?DATABASE_NAME is required}"
 DATABASE_USER="${DATABASE_USER:?DATABASE_USER is required}"
@@ -65,7 +64,6 @@ SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"
 SITEMAP_EMAIL_TO="${SITEMAP_EMAIL_TO:-}"
 RETENTION_DAYS="${RETENTION_DAYS:-90}"
 POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}"
-POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
 PROJECT_CONTEXT_PROMPT_PATH="${PROJECT_CONTEXT_PROMPT_PATH:-$PROJECT_DIR/private/vps_monitoring_context.md}"
 LOGS_DIR="${LOGS_DIR:-/var/log/agent-monitoring}"
 
@@ -176,13 +174,6 @@ printf "✅ Compose config validated\n"
 ensure_writable_dir "Postgres data directory" "$POSTGRES_DATA_DIR"
 ensure_readable_file "Project context prompt file" "$PROJECT_CONTEXT_PROMPT_PATH"
 ensure_writable_dir "App log directory" "$LOGS_DIR"
-if [[ ! -f "$POSTGRES_PG_VERSION_FILE" && "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
-    log_error "Postgres data directory is empty or not initialized: $POSTGRES_DATA_DIR"
-    log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"
-    log_info "Restore/migrate existing production data before deploying this compose file."
-    log_info "For a brand-new environment only, set ALLOW_EMPTY_POSTGRES_DATA_DIR=true."
-    exit 1
-fi
 
 # Step 3: verify the image was built or pulled before starting deployment.
 deploy_step "🔍" 3 8 "Verify release image exists"

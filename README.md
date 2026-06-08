@@ -102,24 +102,7 @@ The image name is:
 prod-agent-monitoring:<TAG>
 ```
 
-### 5. First VPS Deploy
-
-Use this only for a brand-new production database directory:
-
-```bash
-ALLOW_EMPTY_POSTGRES_DATA_DIR=true \
-SKIP_BACKUP=true \
-TAG=v1.2.3 \
-doppler run -- infra/scripts/release/deploy.sh
-```
-
-This lets Postgres initialize the empty data directory, then the deploy script
-runs migrations and starts the selected one-shot monitoring command.
-
-Use the first-init flags once. After
-`$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION` exists, use normal deploys.
-
-### 6. Normal Deploy
+### 5. Deploy
 
 ```bash
 TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
@@ -148,23 +131,26 @@ Run sitemap analysis during deploy instead of log analysis:
 MONITORING_COMMAND=sitemap-analysis TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
 ```
 
-### 7. Manual VPS Checks
+### 6. Production Ad Hoc Commands
 
-After deploy, check MCP:
+Run these from the production `agent-monitoring` checkout. They use the deployed
+image tag recorded by the last successful deploy.
+
+Check MCP:
 
 ```bash
 TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
 doppler run -- docker compose -f docker-compose.prod.yml run --rm app check-mcp
 ```
 
-Run log analysis manually:
+Run log analysis:
 
 ```bash
 TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
 doppler run -- docker compose -f docker-compose.prod.yml run --rm app log_analysis --force --email
 ```
 
-Run sitemap analysis manually:
+Run sitemap analysis:
 
 ```bash
 TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
@@ -175,12 +161,12 @@ doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
 Use `--force` only when replacing the existing report for the same date is
 intentional. Use `--no-email` for a persisted dry run without email.
 
-### 8. Install Cron
+### 7. Install Cron
 
 Cron templates and installation live in the separate `devops` repository:
 
 ```bash
-cd /devops
+cd ~/devops
 git pull
 bash cron/agent-monitoring.sh
 ```
