@@ -107,7 +107,7 @@ def db[**P, T](
                 ) from None
             except PrivateMonitoringContextError as exc:
                 logger.error(
-                    "private monitoring context failed",
+                    "project context prompt failed",
                     extra={
                         "event": "private_monitoring_context_failed",
                         "context_path": exc.context_path,
@@ -115,10 +115,10 @@ def db[**P, T](
                     },
                 )
                 raise click.ClickException(
-                    "Private monitoring context is not configured.\n"
+                    "Project context prompt is not configured.\n"
                     f"Reason: {exc}.\n"
                     "Create the file at private/vps_monitoring_context.md, "
-                    "mount it into Docker Compose, or set MONITORING_PRIVATE_CONTEXT_PATH "
+                    "mount it into Docker Compose, or set PROJECT_CONTEXT_PROMPT_PATH "
                     "to the correct path."
                 ) from None
             except LogAnalysisAgentError as exc:
@@ -127,7 +127,7 @@ def db[**P, T](
                     "log-analysis agent failed",
                     extra={
                         "event": "log_analysis_agent_failed",
-                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "default_model": settings.LLM_DEFAULT_MODEL,
                         "error": error_detail,
                     },
                 )
@@ -139,13 +139,13 @@ def db[**P, T](
                     "LLM provider configuration failed",
                     extra={
                         "event": "llm_provider_configuration_failed",
-                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "default_model": settings.LLM_DEFAULT_MODEL,
                         "error": str(exc),
                     },
                 )
                 raise click.ClickException(
                     "LLM provider configuration failed "
-                    f"(provider={settings.MONITORING_LLM_PROVIDER}). "
+                    f"(model={settings.LLM_DEFAULT_MODEL}). "
                     f"Reason: {exc}. "
                     "Check OPENAI_API_KEY in .env, Doppler, or the shell. "
                     "The variable name must be OPENAI_API_KEY, not OPEN_API_KEY."
@@ -156,13 +156,13 @@ def db[**P, T](
                     "LLM provider request failed",
                     extra={
                         "event": "llm_provider_request_failed",
-                        "provider": settings.MONITORING_LLM_PROVIDER,
+                        "default_model": settings.LLM_DEFAULT_MODEL,
                         "error": provider_error_detail,
                     },
                 )
                 raise click.ClickException(
                     "LLM provider request failed "
-                    f"(provider={settings.MONITORING_LLM_PROVIDER}).\n"
+                    f"(model={settings.LLM_DEFAULT_MODEL}).\n"
                     f"Reason: {provider_error_detail}."
                 ) from None
 

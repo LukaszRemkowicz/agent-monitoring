@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import traceback
 from datetime import date
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import click
 import typer
 
 from agents import MonitoringWorkflowAgent
@@ -18,7 +20,7 @@ from repositories import (
     SitemapAnalysisRepository,
 )
 from schemas import SitemapAnalysisOut
-from services.email import MonitoringEmailService
+from services.email import MonitoringEmailService, MonitoringFailureEmail
 from services.log_analyse import LogAnalysisService
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from services.sitemap import (
@@ -57,7 +59,7 @@ async def log_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the analysis email when the job succeeds.",
+        help="Send success or failure notification email for this job.",
     ),
     compare_history: bool = typer.Option(
         True,
@@ -70,7 +72,7 @@ async def log_analysis(
     log_window = LogAnalysisService.create_log_collection_window(parsed_analysis_date)
     trace_id = uuid4().hex
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     log_analysis_repository = LogAnalysisRepository()
@@ -78,9 +80,9 @@ async def log_analysis(
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
-            llm_provider=get_llm_provider(settings.MONITORING_LLM_STRONG_MODEL),
+            llm_provider=get_llm_provider(settings.LLM_STRONG_MODEL),
             private_monitoring_context=load_private_monitoring_context(
-                settings.MONITORING_PRIVATE_CONTEXT_PATH
+                settings.PROJECT_CONTEXT_PROMPT_PATH
             ),
             history_comparison_service=history_comparison_service,
             history_comparison_enabled=compare_history,
@@ -88,11 +90,20 @@ async def log_analysis(
         repository=log_analysis_repository,
         llm_call_repository=LLMCallRepository(trace_id=trace_id),
     )
-    result = await service.run_log_analysis(
-        analysis_date=parsed_analysis_date,
-        log_window=log_window,
-        force=force,
-    )
+    try:
+        result = await service.run_log_analysis(
+            analysis_date=parsed_analysis_date,
+            log_window=log_window,
+            force=force,
+        )
+    except Exception as exc:
+        await _send_command_failure_email(
+            command_name="log_analysis",
+            analysis_date=parsed_analysis_date,
+            exc=exc,
+            send_email=send_email,
+        )
+        raise
     if send_email:
         email_service = MonitoringEmailService.create_default()
         await email_service.send_log_analysis(result.analysis)
@@ -158,7 +169,7 @@ async def sitemap_analysis(
     send_email: bool = typer.Option(
         True,
         "--email/--no-email",
-        help="Send the sitemap email when the job succeeds.",
+        help="Send success or failure notification email for this job.",
     ),
 ) -> None:
     """Run the deterministic sitemap analysis job."""
@@ -185,7 +196,7 @@ async def sitemap_analysis(
 
     sitemap_url: str = build_sitemap_url(site_domain)
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     crawler: Crawler = Crawler(
@@ -199,14 +210,35 @@ async def sitemap_analysis(
         sitemap_url=sitemap_url,
         crawler=crawler,
         summary_builder=LLMSummaryBuilder(
-            llm_provider=get_llm_provider(settings.MONITORING_LLM_PROVIDER),
+            llm_provider=get_llm_provider(settings.LLM_DEFAULT_MODEL),
             mcp_client=mcp_client,
         ),
     )
-    analysis: SitemapAnalysisOut = await runner.run(
-        analysis_date=parsed_analysis_date,
-        force=force,
-    )
+    try:
+        analysis: SitemapAnalysisOut = await runner.run(
+            analysis_date=parsed_analysis_date,
+            force=force,
+        )
+    except Exception as exc:
+        await _send_command_failure_email(
+            command_name="sitemap-analysis",
+            analysis_date=parsed_analysis_date,
+            exc=exc,
+            send_email=send_email,
+        )
+        raise
+    if analysis.status.upper() == "FAILED":
+        failure_exc = RuntimeError(analysis.error_message or "Sitemap analysis failed.")
+        await _send_command_failure_email(
+            command_name="sitemap-analysis",
+            analysis_date=parsed_analysis_date,
+            exc=failure_exc,
+            send_email=send_email,
+        )
+        raise click.ClickException(
+            "Sitemap analysis failed. "
+            f"Reason: {analysis.error_message or 'No error message was stored.'}"
+        )
     if send_email:
         email_service = MonitoringEmailService.create_default()
         await email_service.send_sitemap_analysis(analysis)
@@ -226,12 +258,43 @@ async def sitemap_analysis(
     typer.echo(f"Execution time: {analysis.execution_time_seconds:.2f}s")
 
 
+async def _send_command_failure_email(
+    *,
+    command_name: str,
+    analysis_date: date,
+    exc: Exception,
+    send_email: bool,
+) -> None:
+    if not send_email:
+        return
+    failure = MonitoringFailureEmail(
+        command_name=command_name,
+        analysis_date=analysis_date,
+        error_type=type(exc).__name__,
+        error_message=str(exc),
+        traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
+    try:
+        email_service = MonitoringEmailService.create_default()
+        await email_service.send_monitoring_failure(failure)
+    except Exception as email_exc:
+        logger.error(
+            "failed to send monitoring failure email",
+            extra={
+                "event": "monitoring_failure_email_failed",
+                "command_name": command_name,
+                "analysis_date": str(analysis_date),
+                "error": str(email_exc),
+            },
+        )
+
+
 @app.command("check-mcp")
 @as_async()
 async def check_mcp() -> None:
     """Check that the MCP service status endpoint is reachable."""
     mcp_client = McpWorkflowClient(
-        base_url=settings.LOG_ANALYSIS_MCP_URL,
+        base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     logger.info(
@@ -250,7 +313,7 @@ async def check_mcp() -> None:
     )
     typer.echo(
         "MCP service is reachable "
-        f"({settings.LOG_ANALYSIS_MCP_URL}, "
+        f"({settings.MCP_URL}, "
         f"name={status.name}, "
         f"status={status.status}, "
         f"environment={status.environment}, "

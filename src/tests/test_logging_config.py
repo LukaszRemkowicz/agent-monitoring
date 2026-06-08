@@ -4,6 +4,9 @@ import io
 import json
 import logging
 import re
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -103,13 +106,14 @@ def test_json_formatter_ignores_empty_exception_info() -> None:
     assert "exception" not in payload
 
 
-def test_configure_logging_supports_json_and_child_loggers() -> None:
+def test_configure_logging_supports_json_and_child_loggers(tmp_path: Path) -> None:
     stream = io.StringIO()
     settings = Settings(
         {
             "LOG_LEVEL": "INFO",
             "LOG_FORMAT": "json",
             "LOG_TIMEZONE": "Europe/Warsaw",
+            "LOGS_DIR": str(tmp_path),
         }
     )
 
@@ -123,7 +127,39 @@ def test_configure_logging_supports_json_and_child_loggers() -> None:
     assert payload["timestamp"].endswith("+02:00")
 
 
-def test_configure_logging_supports_pretty_json_logs() -> None:
+def test_default_logs_dir_points_to_project_logs_dir() -> None:
+    from settings import LOGS_DIR, REPOSITORY_ROOT
+
+    assert LOGS_DIR == str(REPOSITORY_ROOT / "logs")
+
+
+def test_configure_logging_writes_json_file_log(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    logs_dir = tmp_path / "nested"
+    today = datetime.now(ZoneInfo("Europe/Warsaw")).date().isoformat()
+    log_file_path = logs_dir / f"{today}.jsonl"
+    settings = Settings(
+        {
+            "LOG_LEVEL": "INFO",
+            "LOG_FORMAT": "plain",
+            "LOG_COLOR": "never",
+            "LOG_TIMEZONE": "Europe/Warsaw",
+            "LOGS_DIR": str(logs_dir),
+        }
+    )
+
+    configure_logging(settings, stream=stream)
+    get_logger("tests").info("persisted", extra={"project": "demo-shop"})
+
+    assert "INFO [agent_monitoring.tests] persisted" in stream.getvalue()
+    payload = json.loads(log_file_path.read_text(encoding="utf-8"))
+    assert payload["logger"] == "agent_monitoring.tests"
+    assert payload["message"] == "persisted"
+    assert payload["project"] == "demo-shop"
+    assert payload["timestamp"].endswith("+02:00")
+
+
+def test_configure_logging_supports_pretty_json_logs(tmp_path: Path) -> None:
     stream = io.StringIO()
     settings = Settings(
         {
@@ -131,6 +167,7 @@ def test_configure_logging_supports_pretty_json_logs() -> None:
             "LOG_FORMAT": "pretty",
             "LOG_COLOR": "always",
             "LOG_TIMEZONE": "Europe/Warsaw",
+            "LOGS_DIR": str(tmp_path),
         }
     )
 

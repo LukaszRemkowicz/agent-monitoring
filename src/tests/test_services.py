@@ -50,6 +50,7 @@ from services.sitemap import (
     LLMSummaryBuilder,
     SitemapAuditReport,
     SitemapIssue,
+    SitemapIssueCategory,
 )
 from tests.conftest import build_collect_logs_artifact_payload
 
@@ -767,19 +768,63 @@ async def test_sitemap_analysis_service_creates_workflow_record() -> None:
     assert repository.created[0]["analysis_date"] == date(2026, 5, 19)
     assert repository.created[0]["root_sitemap_url"] == "https://example.com/sitemap.xml"
     assert repository.created[0]["status"] == RunStatus.SUCCEEDED
-    assert repository.created[0]["summary"] == "Sitemap summary service result."
+    assert repository.created[0]["summary"] == ("Sitemap audit completed with no issues detected.")
     assert crawler.calls == 1
-    assert len(summary_builder.calls) == 1
-    assert summary_builder.calls[0][1] == {}
+    assert summary_builder.calls == []
     assert result.status == RunStatus.SUCCEEDED
     assert repository.created[0]["total_sitemaps"] == 1
     assert repository.created[0]["total_urls"] == 2
     assert repository.created[0]["issue_summary"] == {}
     assert repository.created[0]["issues"] == []
+    assert repository.created[0]["severity"] == "INFO"
+    assert repository.created[0]["key_findings"] == [
+        "All sitemap URLs resolved without deterministic issues."
+    ]
+    assert repository.created[0]["recommendations"] == "No action needed."
+    assert repository.created[0]["trend_summary"] == (
+        "No sitemap issues were detected in this run."
+    )
+    assert repository.created[0]["gpt_tokens_used"] == 0
+    assert repository.created[0]["gpt_cost_usd"] == 0.0
+    assert repository.saved == []
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_service_uses_llm_summary_when_issues_exist() -> None:
+    repository = FakeSitemapAnalysisRepository()
+    issue = SitemapIssue(
+        url="https://example.com/missing",
+        category=SitemapIssueCategory.BROKEN_URL,
+        message="URL returned an error status.",
+        status_code=404,
+    )
+    report = SitemapAuditReport(
+        root_sitemap_url="https://example.com/sitemap.xml",
+        total_sitemaps=1,
+        total_urls=1,
+        issues=[issue],
+    )
+    crawler = FakeCrawler(report)
+    summary_builder = FakeLLMSummaryBuilder()
+    runner = AnalysisRunner(
+        repository=repository,
+        sitemap_url="https://example.com/sitemap.xml",
+        crawler=crawler,
+        summary_builder=summary_builder,
+    )
+
+    result = await runner.run(
+        analysis_date=date(2026, 5, 19),
+        force=False,
+    )
+
+    assert result.status == RunStatus.SUCCEEDED
+    assert len(summary_builder.calls) == 1
+    assert summary_builder.calls[0] == (report, {"broken_url": 1})
+    assert repository.created[0]["summary"] == "Sitemap summary service result."
     assert repository.created[0]["severity"] == "WARNING"
     assert repository.created[0]["gpt_tokens_used"] == 10
     assert repository.created[0]["gpt_cost_usd"] == 0.0025
-    assert repository.saved == []
 
 
 @pytest.mark.asyncio
@@ -878,4 +923,4 @@ async def test_sitemap_analysis_service_allows_existing_date_with_force() -> Non
     assert crawler.calls == 1
     assert len(repository.saved) == 1
     assert repository.saved[0]["status"] == RunStatus.SUCCEEDED
-    assert repository.saved[0]["summary"] == "Sitemap summary service result."
+    assert repository.saved[0]["summary"] == ("Sitemap audit completed with no issues detected.")

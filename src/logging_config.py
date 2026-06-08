@@ -7,6 +7,7 @@ import logging
 import re
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -234,7 +235,28 @@ def configure_logging(settings: Settings, stream: Any | None = None) -> logging.
         raise ValueError(f"Unsupported LOG_FORMAT: {settings.LOG_FORMAT}")
 
     logger.addHandler(handler)
+
+    file_handler = _build_file_handler(
+        logs_dir=settings.LOGS_DIR,
+        timezone=settings.LOG_TIMEZONE,
+    )
+    logger.addHandler(file_handler)
     return logger
+
+
+def _build_file_handler(
+    *,
+    logs_dir: str,
+    timezone: str,
+) -> logging.FileHandler:
+    """Return a JSON file handler for today's dated log file."""
+
+    log_date = datetime.now(ZoneInfo(timezone)).date().isoformat()
+    path = Path(logs_dir) / f"{log_date}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setFormatter(JsonFormatter(timezone=timezone))
+    return handler
 
 
 def get_logger(name: str | None = None) -> logging.Logger:

@@ -83,7 +83,7 @@ async def run_manual_fixture(
         False,
         "--private-context/--public-context",
         help=(
-            "Use the configured private monitoring context instead of the "
+            "Use the configured project context prompt instead of the "
             "public-safe fixture context."
         ),
     ),
@@ -112,7 +112,7 @@ async def run_manual_fixture(
     service = LogAnalysisService(
         agent=MonitoringWorkflowAgent(
             mcp_client,
-            llm_provider=get_llm_provider(settings.MONITORING_LLM_STRONG_MODEL),
+            llm_provider=get_llm_provider(settings.LLM_STRONG_MODEL),
             private_monitoring_context=_resolve_manual_fixture_monitoring_context(
                 use_private_context=use_private_context
             ),
@@ -178,10 +178,10 @@ def _today_in_log_timezone() -> date:
 
 
 def _resolve_manual_fixture_monitoring_context(*, use_private_context: bool) -> str:
-    """Return public-safe fixture context unless the operator opts into private context."""
+    """Return public-safe fixture context unless the operator opts into project context."""
 
     if use_private_context:
-        return load_private_monitoring_context(settings.MONITORING_PRIVATE_CONTEXT_PATH)
+        return load_private_monitoring_context(settings.PROJECT_CONTEXT_PROMPT_PATH)
     return PUBLIC_SAFE_MONITORING_CONTEXT
 
 

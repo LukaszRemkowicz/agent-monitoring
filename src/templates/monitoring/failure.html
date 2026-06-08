@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio - Monitoring Failure</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #f8fafc;
+            color: #0f172a;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        .wrapper {
+            width: 100%;
+            padding: 24px 0;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+        }
+
+        .header {
+            padding: 24px;
+            background: #7f1d1d;
+            color: #ffffff;
+        }
+
+        .content {
+            padding: 24px;
+        }
+
+        .label {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .value {
+            margin: 6px 0 18px;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 16px;
+            font-size: 13px;
+            line-height: 1.45;
+            overflow-x: auto;
+        }
+
+        .footer {
+            padding: 18px 24px;
+            color: #64748b;
+            font-size: 12px;
+            background: #f8fafc;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrapper">
+        <div class="container">
+            <div class="header">
+                <h1 style="margin:0; font-size:24px;">Portfolio - Monitoring Failure</h1>
+                <p style="margin:8px 0 0;">{{ environment|upper }}</p>
+            </div>
+            <div class="content">
+                <div class="label">Command</div>
+                <div class="value">{{ failure.command_name }}</div>
+
+                <div class="label">Analysis Date</div>
+                <div class="value">{{ analysis_date }}</div>
+
+                <div class="label">Error Type</div>
+                <div class="value">{{ failure.error_type }}</div>
+
+                <div class="label">Error Message</div>
+                <div class="value">{{ failure.error_message }}</div>
+
+                <div class="label">Traceback</div>
+                <pre>{{ failure.traceback_text }}</pre>
+            </div>
+            <div class="footer">
+                This email was sent because the scheduled monitoring command failed.
+                Inspect the command log and stored monitoring row before rerunning manually.
+                &copy; {{ current_year }}
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

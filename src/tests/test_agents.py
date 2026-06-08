@@ -362,6 +362,10 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert optional_skill_status_by_name["bot_detection"]["already_retrieved"] is False
     assert followup_payload["initial_context_reference"]["current_coverage_available"] is True
     assert followup_payload["current_tool_result_count"] == 1
+    followup_instructions = "\n".join(followup_payload["instructions"])
+    assert "blocked_probe" in followup_instructions
+    assert "empty upstream_addr/upstream_status" in followup_instructions
+    assert "real upstream 5xx" in followup_instructions
     assert followup_payload["next_required_action"] == (
         LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
     )
@@ -406,6 +410,10 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert isinstance(instructions, list)
     assert instructions
     assert all(isinstance(instruction, str) for instruction in instructions)
+    joined_instructions = "\n".join(instructions)
+    assert "blocked_probe" in joined_instructions
+    assert "empty upstream_addr/upstream_status" in joined_instructions
+    assert "real upstream 5xx" in joined_instructions
     assert set(user_prompt["report_contract"]) == {
         "summary",
         "severity",

@@ -42,7 +42,7 @@ docker compose --profile devtools run --rm manual-fixture --scenario backend_5xx
 
 Manual fixture runs use a public-safe synthetic monitoring context by default.
 Use `--private-context` only when you explicitly want the real local
-`MONITORING_PRIVATE_CONTEXT_PATH` content included in the LLM prompt:
+`PROJECT_CONTEXT_PROMPT_PATH` content included in the LLM prompt:
 
 ```bash
 docker compose --profile devtools run --rm manual-fixture --scenario backend_5xx --no-email --private-context

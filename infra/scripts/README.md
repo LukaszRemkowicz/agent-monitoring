@@ -87,9 +87,12 @@ Deploy behavior:
 - creates the production Postgres host data directory before starting `db`;
   default: `/var/lib/agent-monitoring/postgresql`, override with
   `POSTGRES_DATA_DIR`
-- mounts the private monitoring context directory into the app container;
-  default: `private/`, override with `MONITORING_PRIVATE_CONTEXT_DIR`.
-  The app validates the mandatory context file at runtime.
+- mounts the project context prompt directory into the app container;
+  default: `private/`, override with `PROJECT_CONTEXT_PROMPT_DIR`.
+  The app validates the mandatory prompt file at runtime.
+- mounts the app log directory into the app container; default:
+  `/var/log/agent-monitoring`, override with `LOGS_DIR`.
+  The app writes dated JSON logs there.
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`
@@ -108,8 +111,21 @@ backup commands expect this marker file to exist:
 $POSTGRES_DATA_DIR/data/pgdata/PG_VERSION
 ```
 
-For a brand-new environment only, initialize deliberately with
-`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` and usually `SKIP_BACKUP=true`.
+For a brand-new production VPS only, initialize the empty Postgres data
+directory deliberately:
+
+```bash
+TAG=v1.2.3 doppler run -- infra/scripts/release/build.sh
+
+ALLOW_EMPTY_POSTGRES_DATA_DIR=true \
+SKIP_BACKUP=true \
+TAG=v1.2.3 \
+doppler run -- infra/scripts/release/deploy.sh
+```
+
+Use that first-init override once. After `$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION`
+exists, use the normal deploy command so the script takes a backup before
+running migrations.
 
 Dry run:
 

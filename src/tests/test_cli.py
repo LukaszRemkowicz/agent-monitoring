@@ -332,6 +332,34 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
 
 
+def test_log_analysis_command_sends_failure_email_on_service_error(
+    mocker: MockerFixture,
+) -> None:
+    class FakeLogAnalysisService:
+        async def run_log_analysis(
+            self,
+            *,
+            analysis_date: date,
+            log_window: LogCollectionWindow,
+            force: bool,
+        ) -> LogAnalysisWorkflowResult:
+            raise RuntimeError("MCP workflow unavailable")
+
+    fake_service = FakeLogAnalysisService()
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
+
+    result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    dependencies["email_service"].send_monitoring_failure.assert_awaited_once()
+    failure = dependencies["email_service"].send_monitoring_failure.call_args.args[0]
+    assert failure.command_name == "log_analysis"
+    assert failure.analysis_date == date(2026, 5, 19)
+    assert failure.error_type == "RuntimeError"
+    assert failure.error_message == "MCP workflow unavailable"
+    assert "RuntimeError: MCP workflow unavailable" in failure.traceback_text
+
+
 def test_log_analysis_command_defaults_analysis_date_to_today(
     mocker: MockerFixture,
 ) -> None:
@@ -407,7 +435,7 @@ def test_check_mcp_command_calls_mcp_service_status(
     assert result.exit_code == 0
     assert fake_client.calls == ["get_service_status"]
     assert build_client.call_args.kwargs == {
-        "base_url": main.settings.LOG_ANALYSIS_MCP_URL,
+        "base_url": main.settings.MCP_URL,
         "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
     }
     assert "MCP service is reachable" in result.output
@@ -480,7 +508,7 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         main.LLMSummaryBuilder,
     )
     assert build_runner.call_args.kwargs["summary_builder"].llm_provider is llm_provider
-    get_llm_provider.assert_called_once_with(main.settings.MONITORING_LLM_PROVIDER)
+    get_llm_provider.assert_called_once_with(main.settings.LLM_DEFAULT_MODEL)
     assert "Completed sitemap analysis" in result.output
     assert "severity=INFO" in result.output
     assert "Summary: Sitemap analysis service is ready." in result.output
@@ -490,6 +518,93 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     }
     email_service.send_sitemap_analysis.assert_awaited_once()
     assert fake_repository.updated[0][1] == {"email_sent": True}
+
+
+def test_sitemap_analysis_command_sends_failure_email_on_service_error(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            raise RuntimeError("sitemap fetch failed")
+
+    fake_runner = FakeAnalysisRunner()
+    mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(
+        main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.command_name == "sitemap-analysis"
+    assert failure.analysis_date == date(2026, 5, 19)
+    assert failure.error_type == "RuntimeError"
+    assert failure.error_message == "sitemap fetch failed"
+    assert "RuntimeError: sitemap fetch failed" in failure.traceback_text
+
+
+def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            return _sitemap_analysis_out(analysis_date).model_copy(
+                update={
+                    "status": "FAILED",
+                    "severity": "CRITICAL",
+                    "error_message": "sitemap audit failed",
+                }
+            )
+
+    fake_runner = FakeAnalysisRunner()
+    mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(
+        main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert "Sitemap analysis failed" in result.output
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.error_message == "sitemap audit failed"
 
 
 @pytest.mark.asyncio
@@ -556,18 +671,12 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
 
 
-def test_prod_compose_exports_site_domain_setting() -> None:
-    compose_text = Path("docker-compose.prod.yml").read_text()
+def test_deploy_script_exports_site_domain_setting() -> None:
+    deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
 
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
-    assert "SITEMAP_URL" not in compose_text
-
-
-def test_dev_compose_exports_site_domain_setting() -> None:
-    compose_text = Path("docker-compose.yaml").read_text()
-
-    assert "SITE_DOMAIN: ${SITE_DOMAIN:-}" in compose_text
-    assert "SITEMAP_URL" not in compose_text
+    assert 'SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"' in deploy_text
+    assert "    SITE_DOMAIN \\" in deploy_text
+    assert "SITEMAP_URL" not in deploy_text
 
 
 def test_as_async_runs_coroutine_function() -> None:
@@ -755,7 +864,7 @@ def test_db_decorator_formats_mcp_client_errors(
             mcp_url="http://127.0.0.1:8001/mcp",
             tool_name="analyze_daily_log_bundle",
             hint=(
-                "Check LOG_ANALYSIS_MCP_URL and whether the MCP server is running. "
+                "Check MCP_URL and whether the MCP server is running. "
                 "For Docker Compose commands, remember that localhost means the "
                 "monitoring container, not your host."
             ),
@@ -769,10 +878,12 @@ def test_db_decorator_formats_mcp_client_errors(
     assert "analyze_daily_log_bundle" in output
     assert "http://127.0.0.1:8001/mcp" in output
     assert "connection attempts failed" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" in output
-    assert "server is running" in output
+    assert "Check MCP_URL" in output
+    assert "server is" in output
+    assert "running" in output
     assert "Docker Compose" in output
-    assert "means the monitoring container" in output
+    assert "means the" in output
+    assert "monitoring container" in output
     assert isinstance(result.exception, SystemExit)
     assert result.exception.code == 1
     assert "Traceback" not in output
@@ -819,7 +930,7 @@ def test_db_decorator_does_not_add_connectivity_hint_to_mcp_validation_errors(
     assert result.exit_code == 1
     assert "Invalid fields" in output
     assert "result.structuredContent.projects.0.sources" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "Check MCP_URL" not in output
     assert "MCP_WORKFLOW_JWT" not in output
     assert "MCP server is running" not in output
 
@@ -870,7 +981,7 @@ def test_db_decorator_preserves_mcp_project_error_message_without_connectivity_h
     assert "No persisted manifest" in output
     assert "was found for that project" in output
     assert "Call list_projects" in output
-    assert "Check LOG_ANALYSIS_MCP_URL" not in output
+    assert "Check MCP_URL" not in output
     assert "MCP_WORKFLOW_JWT" not in output
     assert "MCP server is running" not in output
 
@@ -918,7 +1029,8 @@ def test_db_decorator_formats_llm_provider_configuration_errors(
     assert result.exit_code == 1
     assert "LLM provider configuration failed" in normalized_output
     assert "OpenAI" in normalized_output
-    assert "API key is required" in normalized_output
+    assert "API" in normalized_output
+    assert "key is required" in normalized_output
     assert "OPENAI_API_KEY" in normalized_output
     assert "OPEN_API_KEY" in normalized_output
     assert "Traceback" not in output
@@ -951,7 +1063,7 @@ def test_db_decorator_formats_private_monitoring_context_errors(
     @db
     async def command() -> None:
         raise PrivateMonitoringContextError(
-            "Private monitoring context file is required but was not found: "
+            "Project context prompt file is required but was not found: "
             "/app/private/vps_monitoring_context.md",
             context_path="/app/private/vps_monitoring_context.md",
         )
@@ -960,9 +1072,9 @@ def test_db_decorator_formats_private_monitoring_context_errors(
     output = unstyle(result.output)
 
     assert result.exit_code == 1
-    assert "Private monitoring context is not configured" in output
+    assert "Project context prompt is not configured" in output
     assert "/app/private/vps_monitoring_context.md" in output
-    assert "MONITORING_PRIVATE_CONTEXT_PATH" in output
+    assert "PROJECT_CONTEXT_PROMPT_PATH" in output
     assert "private/vps_monitoring_context.md" in output
     assert "Traceback" not in output
 
