@@ -551,10 +551,12 @@ class AnalysisRunner:
             report: SitemapAuditReport = await self.crawler.audit()
             fetch_duration_seconds: float = round(monotonic() - fetch_started_at, 3)
             issue_summary: dict[str, int] = self.crawler.summarize_issues(report.issues)
-            summary_fields: dict[str, object] = await self.summary_builder.summarize(
-                report,
-                issue_summary,
-            )
+            summary_fields: dict[str, object] = self._build_clean_summary()
+            if report.issues:
+                summary_fields = await self.summary_builder.summarize(
+                    report,
+                    issue_summary,
+                )
             execution_time_seconds: float = round(monotonic() - execution_started_at, 3)
             completed_analysis = SitemapAnalysisIn.model_validate(
                 {
@@ -619,6 +621,20 @@ class AnalysisRunner:
             },
         )
         return updated_analysis
+
+    @staticmethod
+    def _build_clean_summary() -> dict[str, object]:
+        """Return deterministic summary fields for clean sitemap audits."""
+
+        return {
+            "summary": "Sitemap audit completed with no issues detected.",
+            "severity": SitemapAnalysis.Severity.INFO,
+            "key_findings": ["All sitemap URLs resolved without deterministic issues."],
+            "recommendations": "No action needed.",
+            "trend_summary": "No sitemap issues were detected in this run.",
+            "gpt_tokens_used": 0,
+            "gpt_cost_usd": 0.0,
+        }
 
 
 def build_sitemap_url(site_domain: str) -> str:

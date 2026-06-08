@@ -678,6 +678,24 @@ def test_prod_compose_exports_site_domain_setting() -> None:
     assert "SITEMAP_URL" not in compose_text
 
 
+def test_prod_compose_exports_llm_settings() -> None:
+    compose_text = Path("docker-compose.prod.yml").read_text()
+
+    assert "OPENAI_API_KEY: ${OPENAI_API_KEY:-}" in compose_text
+    assert "OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}" in compose_text
+    assert "MONITORING_LLM_PROVIDER: ${MONITORING_LLM_PROVIDER:-gpt-4.1-mini}" in compose_text
+    assert "MONITORING_LLM_FAST_MODEL: ${MONITORING_LLM_FAST_MODEL:-gpt-4.1-mini}" in compose_text
+    assert "MONITORING_LLM_STRONG_MODEL: ${MONITORING_LLM_STRONG_MODEL:-gpt-5}" in compose_text
+
+
+def test_deploy_script_exports_site_domain_setting() -> None:
+    deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
+
+    assert 'SITE_DOMAIN="${SITE_DOMAIN:-}"' in deploy_text
+    assert "    SITE_DOMAIN \\" in deploy_text
+    assert "SITEMAP_URL" not in deploy_text
+
+
 def test_dev_compose_exports_site_domain_setting() -> None:
     compose_text = Path("docker-compose.yaml").read_text()
 

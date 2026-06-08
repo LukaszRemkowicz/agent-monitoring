@@ -108,8 +108,21 @@ backup commands expect this marker file to exist:
 $POSTGRES_DATA_DIR/data/pgdata/PG_VERSION
 ```
 
-For a brand-new environment only, initialize deliberately with
-`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` and usually `SKIP_BACKUP=true`.
+For a brand-new production VPS only, initialize the empty Postgres data
+directory deliberately:
+
+```bash
+TAG=v1.2.3 doppler run -- infra/scripts/release/build.sh
+
+ALLOW_EMPTY_POSTGRES_DATA_DIR=true \
+SKIP_BACKUP=true \
+TAG=v1.2.3 \
+doppler run -- infra/scripts/release/deploy.sh
+```
+
+Use that first-init override once. After `$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION`
+exists, use the normal deploy command so the script takes a backup before
+running migrations.
 
 Dry run:
 
