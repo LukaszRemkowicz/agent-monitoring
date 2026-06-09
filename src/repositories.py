@@ -126,6 +126,20 @@ class LogAnalysisRepository:
         )
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
+    async def recent_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
+        """Return recent log-analysis reports regardless of status."""
+
+        analyses: list[LogAnalysis] = await self.filter().order_by("-analysis_date").limit(limit)
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def failed_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
+        """Return recent failed log-analysis reports."""
+
+        analyses: list[LogAnalysis] = (
+            await self.filter(status=RunStatus.FAILED).order_by("-analysis_date").limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
     async def critical_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
         """Return recent critical log-analysis reports."""
 
@@ -223,6 +237,30 @@ class SitemapAnalysisRepository:
         if analysis is None:
             return None
         return SitemapAnalysisOut.from_model(analysis)
+
+    async def recent_reports(self, *, limit: int = 20) -> list[SitemapAnalysisOut]:
+        """Return recent sitemap-analysis reports regardless of status."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.filter().order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def failed_reports(self, *, limit: int = 20) -> list[SitemapAnalysisOut]:
+        """Return recent failed sitemap-analysis reports."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.filter(status=RunStatus.FAILED).order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def unsent_emails(self, *, limit: int = 50) -> list[SitemapAnalysisOut]:
+        """Return sitemap-analysis reports whose notification email is still unsent."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.model.objects.unsent_emails().order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
 
 
 class LLMCallRepository:

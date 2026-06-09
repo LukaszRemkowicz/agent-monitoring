@@ -179,6 +179,34 @@ async def test_log_analysis_repository_returns_operational_reads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_analysis_repository_returns_recent_reports_and_failed_runs() -> None:
+    repository = LogAnalysisRepository()
+    older_report = await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 17),
+        status="succeeded",
+        summary="Older report.",
+    )
+    failed_report = await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 18),
+        status="failed",
+        severity=LogAnalysis.Severity.CRITICAL.value,
+        summary="Failed report.",
+    )
+    newest_report = await LogAnalysisFactory.create(
+        analysis_date=date(2026, 5, 19),
+        status="succeeded",
+        summary="Newest report.",
+    )
+
+    recent_reports = await repository.recent_reports(limit=2)
+    failed_reports = await repository.failed_reports(limit=5)
+
+    assert [report.id for report in recent_reports] == [newest_report.id, failed_report.id]
+    assert older_report.id not in [report.id for report in recent_reports]
+    assert [report.id for report in failed_reports] == [failed_report.id]
+
+
+@pytest.mark.asyncio
 async def test_sitemap_analysis_repository_filters_with_model_manager() -> None:
     repository = SitemapAnalysisRepository()
     analysis = await SitemapAnalysisFactory.create(severity=SitemapAnalysis.Severity.WARNING.value)
@@ -237,6 +265,40 @@ async def test_sitemap_analysis_repository_updates_contract_with_kwargs() -> Non
     assert updated.id == analysis.id
     assert updated.status == "succeeded"
     assert updated.summary == "Sitemap analysis service is ready."
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_repository_operator_filters() -> None:
+    repository = SitemapAnalysisRepository()
+    older_report = await SitemapAnalysisFactory.create(
+        analysis_date=date(2026, 5, 17),
+        status="succeeded",
+        summary="Older sitemap report.",
+        email_sent=True,
+    )
+    failed_report = await SitemapAnalysisFactory.create(
+        analysis_date=date(2026, 5, 18),
+        status="failed",
+        severity=SitemapAnalysis.Severity.CRITICAL.value,
+        summary="Failed sitemap report.",
+        email_sent=True,
+    )
+    unsent_report = await SitemapAnalysisFactory.create(
+        analysis_date=date(2026, 5, 19),
+        status="succeeded",
+        severity=SitemapAnalysis.Severity.WARNING.value,
+        summary="Sitemap email is pending.",
+        email_sent=False,
+    )
+
+    recent_reports = await repository.recent_reports(limit=2)
+    failed_reports = await repository.failed_reports(limit=5)
+    unsent_emails = await repository.unsent_emails(limit=5)
+
+    assert [report.id for report in recent_reports] == [unsent_report.id, failed_report.id]
+    assert older_report.id not in [report.id for report in recent_reports]
+    assert [report.id for report in failed_reports] == [failed_report.id]
+    assert [report.id for report in unsent_emails] == [unsent_report.id]
 
 
 @pytest.mark.asyncio

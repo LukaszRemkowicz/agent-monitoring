@@ -161,6 +161,34 @@ doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
 Use `--force` only when replacing the existing report for the same date is
 intentional. Use `--no-email` for a persisted dry run without email.
 
+Inspect stored reports without rerunning analysis:
+
+```bash
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports log list --limit 5
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports log show --date YYYY-MM-DD
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports sitemap list --limit 5
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports sitemap show --date YYYY-MM-DD
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports attention --limit 10
+```
+
+Add `--json` to any `monitoring reports ...` command when Codex or another
+tool should consume the output. Use `monitoring reports --help` and subcommand
+`--help` for the full option list.
+
 ### 7. Install Cron
 
 Cron templates and installation live in the separate `devops` repository:
@@ -199,6 +227,16 @@ Run local jobs with explicit rerun and email behavior:
 ```bash
 doppler run -- docker compose run --rm monitoring-app log_analysis --force --email
 doppler run -- docker compose run --rm monitoring-app sitemap-analysis --force --email
+```
+
+Inspect local stored reports:
+
+```bash
+docker compose run --rm monitoring-app monitoring reports log list --limit 5
+docker compose run --rm monitoring-app monitoring reports log show --date YYYY-MM-DD
+docker compose run --rm monitoring-app monitoring reports sitemap list --limit 5
+docker compose run --rm monitoring-app monitoring reports sitemap show --date YYYY-MM-DD
+docker compose run --rm monitoring-app monitoring reports attention --limit 10 --json
 ```
 
 Useful flags:

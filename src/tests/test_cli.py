@@ -1,4 +1,5 @@
 import inspect
+import json
 import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from tortoise.exceptions import IntegrityError
 from typer.testing import CliRunner
 
 import main
+import reports_cli
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
@@ -47,6 +49,26 @@ from schemas import (
 from tests.conftest import build_collect_logs_artifact_payload, override_settings
 
 runner = CliRunner()
+
+
+class FakeDatabaseLifespan:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+
+def _patch_report_command_lifespan(mocker: MockerFixture) -> None:
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
 
 
 def _patch_log_analysis_command_dependencies(
@@ -240,6 +262,208 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
             llm_report_execution_time_seconds=4.32,
         ),
     )
+
+
+def _stored_log_report(
+    analysis_date: date = date(2026, 5, 19),
+    *,
+    status: str = "succeeded",
+    email_sent: bool = True,
+) -> LogAnalysisOut:
+    return _log_analysis_out(analysis_date).model_copy(
+        update={
+            "status": status,
+            "email_sent": email_sent,
+            "mcp_artifact": {
+                "collect_logs": build_collect_logs_artifact_payload(
+                    resolved_source_keys=["backend", "nginx"],
+                    include_unavailable_nginx=True,
+                )
+            },
+            "mcp_collect_logs_id": "workflow/demo-shop/latest",
+            "log_window_since": datetime(2026, 5, 19, tzinfo=UTC),
+            "log_window_until": datetime(2026, 5, 20, tzinfo=UTC),
+            "key_findings": ["No critical incidents found."],
+            "evidence_fingerprints": ["nginx:http_4xx:404:/.env"],
+            "coverage_snapshot": {
+                "projects": [
+                    {
+                        "project_name": "demo-shop",
+                        "sources": [
+                            {"source_key": "backend", "status": "collected"},
+                            {"source_key": "nginx", "status": "unavailable"},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+
+def _stored_sitemap_report(
+    analysis_date: date = date(2026, 5, 19),
+    *,
+    status: str = "succeeded",
+    email_sent: bool = True,
+) -> SitemapAnalysisOut:
+    return SitemapAnalysisOut(
+        id=7,
+        created_at=datetime(2026, 5, 19, tzinfo=UTC),
+        analysis_date=analysis_date,
+        status=status,
+        root_sitemap_url="https://example.com/sitemap.xml",
+        total_sitemaps=2,
+        total_urls=42,
+        issue_summary={"canonical_mismatch": 1},
+        issues=[
+            {
+                "category": "canonical_mismatch",
+                "url": "https://example.com/bad",
+                "message": "Canonical points elsewhere.",
+            }
+        ],
+        summary="One deterministic sitemap issue was found.",
+        severity="WARNING",
+        key_findings=["One canonical mismatch."],
+        recommendations="Fix the canonical URL.",
+        execution_time_seconds=1.5,
+        email_sent=email_sent,
+        error_message="sitemap failed" if status == "failed" else "",
+    )
+
+
+def test_reports_log_list_prints_recent_reports(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report(email_sent=False)
+
+    class FakeLogAnalysisRepository:
+        async def recent_reports(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 3
+            return [report]
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "log", "list", "--limit", "3"])
+
+    assert result.exit_code == 0
+    assert "Recent log-analysis reports" in result.output
+    assert "2026-05-19" in result.output
+    assert "INFO" in result.output
+    assert "email=pending" in result.output
+    assert "Demo shop logs are healthy." in result.output
+
+
+def test_reports_log_show_prints_mcp_reference_hints(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report()
+
+    class FakeLogAnalysisRepository:
+        async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "log", "show", "--date", "2026-05-19"])
+
+    assert result.exit_code == 0
+    assert "Log report 2026-05-19" in result.output
+    assert "MCP artifact reference: workflow/demo-shop/latest" in result.output
+    assert "MCP follow-up hints" in result.output
+    assert "project_name=demo-shop" in result.output
+    assert "source backend: collected" in result.output
+    assert "source nginx: unavailable" in result.output
+    assert "nginx:http_4xx:404:/.env" in result.output
+
+
+def test_reports_sitemap_commands_support_text_and_json(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_sitemap_report()
+
+    class FakeSitemapAnalysisRepository:
+        async def recent_reports(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 5
+            return [report]
+
+        async def get_by_date(self, analysis_date: date) -> SitemapAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "SitemapAnalysisRepository",
+        return_value=FakeSitemapAnalysisRepository(),
+    )
+
+    list_result = runner.invoke(main.app, ["reports", "sitemap", "list", "--limit", "5"])
+    show_result = runner.invoke(
+        main.app,
+        ["reports", "sitemap", "show", "--date", "2026-05-19", "--json"],
+    )
+
+    assert list_result.exit_code == 0
+    assert "Recent sitemap-analysis reports" in list_result.output
+    assert "issues=1" in list_result.output
+    assert "https://example.com/sitemap.xml" in list_result.output
+    assert show_result.exit_code == 0
+    payload = json.loads(show_result.output)
+    assert payload["analysis_date"] == "2026-05-19"
+    assert payload["issue_count"] == 1
+    assert payload["issues"][0]["category"] == "canonical_mismatch"
+
+
+def test_reports_attention_json_lists_failed_and_unsent_runs(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    failed_log = _stored_log_report(
+        analysis_date=date(2026, 5, 18),
+        status="failed",
+        email_sent=True,
+    )
+    unsent_sitemap = _stored_sitemap_report(email_sent=False)
+
+    class FakeLogAnalysisRepository:
+        async def failed_reports(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 10
+            return [failed_log]
+
+        async def unsent_emails(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 10
+            return []
+
+    class FakeSitemapAnalysisRepository:
+        async def failed_reports(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 10
+            return []
+
+        async def unsent_emails(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 10
+            return [unsent_sitemap]
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+    mocker.patch.object(
+        reports_cli,
+        "SitemapAnalysisRepository",
+        return_value=FakeSitemapAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "attention", "--limit", "10", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["failed_log_reports"][0]["analysis_date"] == "2026-05-18"
+    assert payload["unsent_sitemap_reports"][0]["analysis_date"] == "2026-05-19"
 
 
 def _sitemap_analysis_out(analysis_date: date) -> SitemapAnalysisOut:

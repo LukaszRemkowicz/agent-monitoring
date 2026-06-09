@@ -4,7 +4,12 @@ import typer
 
 from conf import settings
 from logging_config import configure_logging
-from main import check_mcp, log_analysis, sitemap_analysis
+from main import app, check_mcp, log_analysis, sitemap_analysis
+
+
+def monitoring_entry() -> None:
+    configure_logging(settings)
+    app()
 
 
 def log_analysis_entry() -> None:
