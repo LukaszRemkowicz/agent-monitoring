@@ -376,6 +376,7 @@ def _log_report_detail_payload(report: LogAnalysisOut) -> dict[str, Any]:
             "evidence_fingerprints": report.evidence_fingerprints,
             "coverage_sources": _log_coverage_sources(report),
             "mcp_followup_hints": _log_mcp_followup_hints(report),
+            "mcp_artifact_retention_notice": _log_mcp_artifact_retention_notice(report),
         }
     )
     return payload
@@ -409,6 +410,12 @@ def _echo_log_report_detail(report: LogAnalysisOut, payload: dict[str, Any]) -> 
     typer.echo(f"Log window: {payload['log_window_since']} -> {payload['log_window_until']}")
     typer.echo(f"MCP artifact reference: {report.mcp_collect_logs_id or 'none'}")
     typer.echo(f"Collected log size: {payload['log_size']}")
+    notice = payload["mcp_artifact_retention_notice"]
+    typer.echo("MCP artifact retention:")
+    typer.echo(f"- {notice['message']}")
+    typer.echo(f"- raw_logs_owner={notice['raw_logs_owner']}")
+    typer.echo(f"- monitoring_app_copies_raw_logs={notice['monitoring_app_copies_raw_logs']}")
+    typer.echo(f"- reference={notice['reference'] or 'none'}")
     _echo_list("Key findings", report.key_findings)
     _echo_list("Evidence fingerprints", report.evidence_fingerprints)
     typer.echo("Coverage:")
@@ -528,6 +535,29 @@ def _log_coverage_sources(report: LogAnalysisOut) -> list[dict[str, str]]:
 def _collect_logs_payload(report: LogAnalysisOut) -> dict[str, Any]:
     collect_logs = report.mcp_artifact.get("collect_logs", report.mcp_artifact)
     return collect_logs if isinstance(collect_logs, dict) else {}
+
+
+def _log_mcp_artifact_retention_notice(report: LogAnalysisOut) -> dict[str, Any]:
+    reference = report.mcp_collect_logs_id or _first_log_artifact_reference(report)
+    return {
+        "raw_logs_owner": "mcp",
+        "monitoring_app_copies_raw_logs": False,
+        "reference": reference,
+        "message": (
+            "Raw logs stay in MCP-owned artifacts and are not copied into "
+            "agent-monitoring. Stored summaries and findings remain useful if "
+            "the MCP artifact expires, but raw follow-up may no longer resolve."
+        ),
+    }
+
+
+def _first_log_artifact_reference(report: LogAnalysisOut) -> str:
+    collect_logs: dict[str, Any] = _collect_logs_payload(report)
+    for project in _artifact_projects(collect_logs):
+        snapshot_dir = _string_value(project.get("snapshot_dir"))
+        if snapshot_dir:
+            return snapshot_dir
+    return ""
 
 
 def _artifact_projects(collect_logs: dict[str, Any]) -> list[dict[str, Any]]:

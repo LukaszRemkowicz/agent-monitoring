@@ -382,6 +382,8 @@ def test_reports_log_show_prints_mcp_reference_hints(mocker: MockerFixture) -> N
     assert "source backend: collected" in result.output
     assert "source nginx: unavailable" in result.output
     assert "nginx:http_4xx:404:/.env" in result.output
+    assert "MCP artifact retention" in result.output
+    assert "Raw logs stay in MCP-owned artifacts" in result.output
 
 
 def test_reports_sitemap_commands_support_text_and_json(mocker: MockerFixture) -> None:
@@ -418,6 +420,42 @@ def test_reports_sitemap_commands_support_text_and_json(mocker: MockerFixture) -
     assert payload["analysis_date"] == "2026-05-19"
     assert payload["issue_count"] == 1
     assert payload["issues"][0]["category"] == "canonical_mismatch"
+
+
+def test_reports_log_show_json_includes_mcp_artifact_retention_notice(
+    mocker: MockerFixture,
+) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report()
+
+    class FakeLogAnalysisRepository:
+        async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(
+        main.app,
+        ["reports", "log", "show", "--date", "2026-05-19", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["mcp_artifact_retention_notice"] == {
+        "raw_logs_owner": "mcp",
+        "monitoring_app_copies_raw_logs": False,
+        "reference": "workflow/demo-shop/latest",
+        "message": (
+            "Raw logs stay in MCP-owned artifacts and are not copied into "
+            "agent-monitoring. Stored summaries and findings remain useful if "
+            "the MCP artifact expires, but raw follow-up may no longer resolve."
+        ),
+    }
 
 
 def test_reports_attention_json_lists_failed_and_unsent_runs(mocker: MockerFixture) -> None:

@@ -189,6 +189,13 @@ Add `--json` to any `monitoring reports ...` command when Codex or another
 tool should consume the output. Use `monitoring reports --help` and subcommand
 `--help` for the full option list.
 
+Stored log reports keep summaries, findings, evidence fingerprints, and MCP
+artifact references. Raw logs stay in MCP-owned artifacts and are not copied
+into this app. If MCP artifact retention expires an old raw-log artifact, the
+stored report remains useful for review and trend history, but raw follow-up
+from the MCP reference may no longer resolve. `monitoring reports log show`
+prints this MCP artifact retention notice alongside the follow-up hints.
+
 Clean up stored monitoring DB rows after the configured retention window:
 
 ```bash
