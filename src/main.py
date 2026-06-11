@@ -14,7 +14,7 @@ from decorators import as_async, db
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
-from reports_cli import reports_app
+from reports_cli import cleanup_app, reports_app
 from repositories import (
     LLMCallRepository,
     LogAnalysisRepository,
@@ -40,6 +40,7 @@ app = typer.Typer(
     pretty_exceptions_show_locals=False,
 )
 app.add_typer(reports_app, name="reports")
+app.add_typer(cleanup_app, name="cleanup")
 
 logger = get_logger()
 

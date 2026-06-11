@@ -189,6 +189,24 @@ Add `--json` to any `monitoring reports ...` command when Codex or another
 tool should consume the output. Use `monitoring reports --help` and subcommand
 `--help` for the full option list.
 
+Clean up stored monitoring DB rows after the configured retention window:
+
+```bash
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring cleanup reports
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring cleanup reports --confirm
+```
+
+The cleanup command is a dry run unless `--confirm` is provided. It uses
+`RETENTION_DAYS` by default, deletes old log reports and sitemap reports, and
+preserves recent successful log-analysis history needed for trend comparison.
+It does not delete log-analysis LLM/tool-call audit rows. Add `--json` for
+machine-readable output.
+
 ### 7. Install Cron
 
 Cron templates and installation live in the separate `devops` repository:
@@ -239,11 +257,20 @@ docker compose run --rm monitoring-app monitoring reports sitemap show --date YY
 docker compose run --rm monitoring-app monitoring reports attention --limit 10 --json
 ```
 
+Dry-run and confirm local retention cleanup:
+
+```bash
+docker compose run --rm monitoring-app monitoring cleanup reports
+docker compose run --rm monitoring-app monitoring cleanup reports --confirm
+```
+
 Useful flags:
 
 - `--force`: replace an existing report for the same analysis date.
 - `--email`: send the report email after the job succeeds.
 - `--no-email`: run and persist the report without sending email.
+- `--confirm`: delete retention cleanup candidates; cleanup commands dry-run
+  without it.
 - `--compare-history`: compare current grouped errors with the latest saved
   successful log-analysis run before the LLM call.
 - `--no-compare-history`: disable the Python history comparison shortcut.

@@ -171,6 +171,45 @@ class LogAnalysisRepository:
         )
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
+    async def retention_candidate_ids(
+        self,
+        *,
+        older_than_days: int,
+        keep_recent_successful: int = 5,
+    ) -> list[int]:
+        """Return cleanup candidate ids while preserving recent successful history."""
+
+        protected_ids = await self._recent_successful_history_ids(limit=keep_recent_successful)
+        queryset = self.model.objects.older_than(older_than_days)
+        if protected_ids:
+            queryset = queryset.exclude(id__in=protected_ids)
+        analyses: list[LogAnalysis] = await queryset.order_by("analysis_date")
+        return [analysis.id for analysis in analyses]
+
+    async def delete_retention_candidates(
+        self,
+        *,
+        older_than_days: int,
+        keep_recent_successful: int = 5,
+    ) -> int:
+        """Delete cleanup candidates and return the deleted row count."""
+
+        candidate_ids: list[int] = await self.retention_candidate_ids(
+            older_than_days=older_than_days,
+            keep_recent_successful=keep_recent_successful,
+        )
+        if not candidate_ids:
+            return 0
+        return await self.filter(id__in=candidate_ids).delete()
+
+    async def _recent_successful_history_ids(self, *, limit: int) -> list[int]:
+        if limit <= 0:
+            return []
+        analyses: list[LogAnalysis] = (
+            await self.filter(status=RunStatus.SUCCEEDED).order_by("-analysis_date").limit(limit)
+        )
+        return [analysis.id for analysis in analyses]
+
 
 class SitemapAnalysisRepository:
     """Database access boundary for sitemap-analysis rows."""
@@ -261,6 +300,24 @@ class SitemapAnalysisRepository:
             await self.model.objects.unsent_emails().order_by("-analysis_date").limit(limit)
         )
         return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def retention_candidate_ids(self, *, older_than_days: int) -> list[int]:
+        """Return sitemap-analysis ids old enough for retention cleanup."""
+
+        analyses: list[SitemapAnalysis] = await self.model.objects.older_than(
+            older_than_days
+        ).order_by("analysis_date")
+        return [analysis.id for analysis in analyses]
+
+    async def delete_retention_candidates(self, *, older_than_days: int) -> int:
+        """Delete old sitemap-analysis rows and return the deleted row count."""
+
+        candidate_ids: list[int] = await self.retention_candidate_ids(
+            older_than_days=older_than_days
+        )
+        if not candidate_ids:
+            return 0
+        return await self.filter(id__in=candidate_ids).delete()
 
 
 class LLMCallRepository:

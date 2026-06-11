@@ -8,13 +8,16 @@ from typing import Any
 import click
 import typer
 
+from conf import settings
 from decorators import as_async, db
 from repositories import LogAnalysisRepository, SitemapAnalysisRepository
 from schemas import LogAnalysisOut, SitemapAnalysisOut
+from services.cleanup import MonitoringCleanupService
 
 reports_app = typer.Typer(help="Inspect stored monitoring reports.")
 log_reports_app = typer.Typer(help="Inspect stored log-analysis reports.")
 sitemap_reports_app = typer.Typer(help="Inspect stored sitemap-analysis reports.")
+cleanup_app = typer.Typer(help="Clean up stored monitoring data.")
 reports_app.add_typer(log_reports_app, name="log")
 reports_app.add_typer(sitemap_reports_app, name="sitemap")
 
@@ -185,6 +188,49 @@ async def reports_attention(
         "Unsent sitemap emails",
         unsent_sitemap_reports,
         _format_sitemap_report_row,
+    )
+
+
+@cleanup_app.command("reports")
+@as_async()
+@db
+async def cleanup_reports(
+    retention_days: int = typer.Option(
+        settings.RETENTION_DAYS,
+        "--retention-days",
+        min=1,
+        help=(
+            "Delete report rows older than this many days, except protected "
+            "recent successful log-analysis history."
+        ),
+    ),
+    confirm: bool = typer.Option(
+        False,
+        "--confirm",
+        help="Actually delete cleanup candidates. Without this flag, only print a dry run.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print machine-readable JSON instead of compact text.",
+    ),
+) -> None:
+    """Dry-run or delete old report rows while keeping recent successful log history."""
+
+    result = await MonitoringCleanupService().cleanup_reports(
+        retention_days=retention_days,
+        dry_run=not confirm,
+    )
+    if json_output:
+        _echo_json(result)
+        return
+    label = "Cleanup reports dry run" if result["dry_run"] else "Deleted cleanup candidates"
+    counts = result["counts"]
+    typer.echo(
+        f"{label}: retention_days={result['retention_days']} "
+        f"log_analyses={counts['log_analyses']} "
+        f"sitemap_analyses={counts['sitemap_analyses']} "
+        f"total={result['total']}"
     )
 
 

@@ -466,6 +466,80 @@ def test_reports_attention_json_lists_failed_and_unsent_runs(mocker: MockerFixtu
     assert payload["unsent_sitemap_reports"][0]["analysis_date"] == "2026-05-19"
 
 
+def test_cleanup_reports_defaults_to_dry_run(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    cleanup_service = AsyncMock()
+    cleanup_service.cleanup_reports.return_value = {
+        "retention_days": 30,
+        "dry_run": True,
+        "counts": {
+            "log_analyses": 2,
+            "sitemap_analyses": 1,
+        },
+        "total": 3,
+    }
+
+    mocker.patch.object(
+        reports_cli,
+        "MonitoringCleanupService",
+        return_value=cleanup_service,
+    )
+
+    result = runner.invoke(main.app, ["cleanup", "reports", "--retention-days", "30"])
+
+    assert result.exit_code == 0
+    cleanup_service.cleanup_reports.assert_awaited_once_with(
+        retention_days=30,
+        dry_run=True,
+    )
+    assert "Cleanup reports dry run" in result.output
+    assert "log_analyses=2" in result.output
+    assert "sitemap_analyses=1" in result.output
+    assert "log_analysis_llm_calls" not in result.output
+    assert "total=3" in result.output
+
+
+def test_cleanup_reports_confirm_deletes_candidates(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    cleanup_service = AsyncMock()
+    cleanup_service.cleanup_reports.return_value = {
+        "retention_days": 90,
+        "dry_run": False,
+        "counts": {
+            "log_analyses": 1,
+            "sitemap_analyses": 0,
+        },
+        "total": 1,
+    }
+
+    mocker.patch.object(
+        reports_cli,
+        "MonitoringCleanupService",
+        return_value=cleanup_service,
+    )
+
+    result = runner.invoke(main.app, ["cleanup", "reports", "--confirm"])
+
+    assert result.exit_code == 0
+    cleanup_service.cleanup_reports.assert_awaited_once_with(
+        retention_days=90,
+        dry_run=False,
+    )
+    assert "Deleted cleanup candidates" in result.output
+    assert "log_analyses=1" in result.output
+    assert "log_analysis_llm_calls" not in result.output
+    assert "total=1" in result.output
+
+
+def test_cleanup_reports_help_mentions_protected_history() -> None:
+    result = runner.invoke(main.app, ["cleanup", "reports", "--help"])
+
+    assert result.exit_code == 0
+    assert "keeping recent successful log history" in unstyle(result.output)
+    assert "protected recent successful" in unstyle(result.output)
+    assert "log-analysis history" in unstyle(result.output)
+
+
 def _sitemap_analysis_out(analysis_date: date) -> SitemapAnalysisOut:
     return SitemapAnalysisOut(
         id=1,

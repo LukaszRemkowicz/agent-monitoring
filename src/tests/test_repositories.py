@@ -179,6 +179,50 @@ async def test_log_analysis_repository_returns_operational_reads() -> None:
 
 
 @pytest.mark.asyncio
+async def test_log_analysis_repository_retention_excludes_recent_successful_history() -> None:
+    repository = LogAnalysisRepository()
+    today = date.today()
+    very_old_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=60),
+        status="succeeded",
+        summary="Very old report can be deleted.",
+        email_sent=True,
+    )
+    protected_history_report = await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=40),
+        status="succeeded",
+        summary="Old but still part of recent successful history.",
+        email_sent=True,
+    )
+    await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=2),
+        status="succeeded",
+        summary="Recent successful report.",
+        email_sent=True,
+    )
+    await LogAnalysisFactory.create(
+        analysis_date=today - timedelta(days=1),
+        status="succeeded",
+        summary="Newest successful report.",
+        email_sent=True,
+    )
+
+    candidate_ids = await repository.retention_candidate_ids(
+        older_than_days=30,
+        keep_recent_successful=3,
+    )
+    deleted_count = await repository.delete_retention_candidates(
+        older_than_days=30,
+        keep_recent_successful=3,
+    )
+
+    assert candidate_ids == [very_old_report.id]
+    assert deleted_count == 1
+    assert await LogAnalysis.filter(id=very_old_report.id).exists() is False
+    assert await LogAnalysis.filter(id=protected_history_report.id).exists() is True
+
+
+@pytest.mark.asyncio
 async def test_log_analysis_repository_returns_recent_reports_and_failed_runs() -> None:
     repository = LogAnalysisRepository()
     older_report = await LogAnalysisFactory.create(
@@ -299,6 +343,32 @@ async def test_sitemap_analysis_repository_operator_filters() -> None:
     assert older_report.id not in [report.id for report in recent_reports]
     assert [report.id for report in failed_reports] == [failed_report.id]
     assert [report.id for report in unsent_emails] == [unsent_report.id]
+
+
+@pytest.mark.asyncio
+async def test_sitemap_analysis_repository_deletes_retention_candidates() -> None:
+    repository = SitemapAnalysisRepository()
+    today = date.today()
+    old_report = await SitemapAnalysisFactory.create(
+        analysis_date=today - timedelta(days=60),
+        status="succeeded",
+        summary="Old sitemap report.",
+        email_sent=True,
+    )
+    recent_report = await SitemapAnalysisFactory.create(
+        analysis_date=today - timedelta(days=2),
+        status="succeeded",
+        summary="Recent sitemap report.",
+        email_sent=True,
+    )
+
+    candidate_ids = await repository.retention_candidate_ids(older_than_days=30)
+    deleted_count = await repository.delete_retention_candidates(older_than_days=30)
+
+    assert candidate_ids == [old_report.id]
+    assert deleted_count == 1
+    assert await SitemapAnalysis.filter(id=old_report.id).exists() is False
+    assert await SitemapAnalysis.filter(id=recent_report.id).exists() is True
 
 
 @pytest.mark.asyncio
