@@ -774,11 +774,10 @@ class MonitoringWorkflowAgent:
     ) -> list[dict[str, Any]]:
         """Build scoped `group_errors` arguments from the current log collection.
 
-        `collect_logs` tells us which projects and source keys were actually
-        resolved for this run, while `group_errors` expects explicit MCP
-        arguments. This bridge keeps the pre-LLM grouped-error baseline scoped
-        to observed sources instead of asking for broad/all-project analysis or
-        guessing source names from previous history.
+        `collect_logs` tells us which project sources produced snapshot files,
+        while `group_errors` expects explicit MCP arguments. This bridge keeps
+        the pre-LLM grouped-error baseline scoped to usable snapshots instead of
+        asking MCP to inspect unavailable sources.
         """
 
         arguments_list: list[dict[str, Any]] = []
@@ -786,12 +785,21 @@ class MonitoringWorkflowAgent:
             project_name: str = project.project_name
             if not project_name:
                 continue
+            resolved_source_keys: set[str] = set(project.resolved_source_keys)
             source_keys: list[str] = sorted(
-                {source.source_key for source in project.sources if source.source_key}
+                {
+                    source.source_key
+                    for source in project.sources
+                    if source.source_key
+                    and source.source_key in resolved_source_keys
+                    and source.status == LogSourceCollectionStatus.COLLECTED
+                    and source.output_file
+                }
             )
+            if not source_keys:
+                continue
             arguments: dict[str, Any] = {"project_name": project_name}
-            if source_keys:
-                arguments["source_keys"] = source_keys
+            arguments["source_keys"] = source_keys
             arguments_list.append(arguments)
         return arguments_list
 
