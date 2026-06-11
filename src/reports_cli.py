@@ -312,6 +312,7 @@ def _format_sitemap_report_row(report: SitemapAnalysisOut) -> str:
         f"status={report.status} "
         f"issues={len(report.issues)} "
         f"email={_email_state(report)} "
+        f"duration={report.execution_time_seconds:.2f}s "
         f"root={report.root_sitemap_url} "
         f"summary={report.summary}"
     )
@@ -447,6 +448,8 @@ def _echo_sitemap_report_detail(report: SitemapAnalysisOut, payload: dict[str, A
     typer.echo(f"Summary: {report.summary}")
     _echo_list("Key findings", report.key_findings)
     typer.echo(f"Recommendations: {report.recommendations or 'none'}")
+    typer.echo(f"Trend: {report.trend_summary or 'none'}")
+    typer.echo(f"Execution time: {report.execution_time_seconds:.2f}s")
     typer.echo("Issue summary:")
     if not report.issue_summary:
         typer.echo("- none")

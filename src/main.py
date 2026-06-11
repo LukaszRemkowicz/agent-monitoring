@@ -30,8 +30,8 @@ from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from services.sitemap import (
     AnalysisRunner,
     Crawler,
+    HTTPXSitemapFetcher,
     LLMSummaryBuilder,
-    SitemapHTTPClient,
     build_sitemap_url,
 )
 from utils.monitoring_context import load_private_monitoring_context
@@ -191,33 +191,35 @@ async def sitemap_analysis(
     parsed_analysis_date: date = (
         date.fromisoformat(analysis_date) if analysis_date else date.today()
     )
-    site_domain: str = settings.SITE_DOMAIN.strip()
-    if not site_domain:
+    sitemap_public_host: str = settings.SITEMAP_PUBLIC_HOST.strip()
+    if not sitemap_public_host:
         typer.echo(
-            "SITE_DOMAIN is required to run sitemap analysis. "
-            "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+            "SITEMAP_PUBLIC_HOST is required to run sitemap analysis. "
+            "Set SITEMAP_PUBLIC_HOST=example.com or SITEMAP_PUBLIC_HOST=https://example.com.",
             err=True,
         )
         raise typer.Exit(code=1)
-    parsed_site_domain = urlparse(site_domain if "://" in site_domain else f"https://{site_domain}")
+    parsed_site_domain = urlparse(
+        sitemap_public_host if "://" in sitemap_public_host else f"https://{sitemap_public_host}"
+    )
     if not parsed_site_domain.netloc or parsed_site_domain.path.rstrip("/"):
         typer.echo(
-            "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
-            "Set SITE_DOMAIN=example.com or "
-            "SITE_DOMAIN=https://example.com.",
+            "SITEMAP_PUBLIC_HOST must be a domain or origin, not a sitemap URL or path. "
+            "Set SITEMAP_PUBLIC_HOST=example.com or "
+            "SITEMAP_PUBLIC_HOST=https://example.com.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    sitemap_url: str = build_sitemap_url(site_domain)
+    sitemap_url: str = build_sitemap_url(sitemap_public_host)
     mcp_client = McpWorkflowClient(
         base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     crawler: Crawler = Crawler(
-        client=SitemapHTTPClient(),
+        client=HTTPXSitemapFetcher(),
         sitemap_url=sitemap_url,
-        site_domain=site_domain,
+        site_domain=sitemap_public_host,
     )
     sitemap_repository = SitemapAnalysisRepository()
     runner: AnalysisRunner = AnalysisRunner(

@@ -341,6 +341,7 @@ def _stored_sitemap_report(
         severity="WARNING",
         key_findings=["One canonical mismatch."],
         recommendations="Fix the canonical URL.",
+        trend_summary="Canonical mismatch is new since the previous run.",
         execution_time_seconds=1.5,
         email_sent=email_sent,
         error_message="sitemap failed" if status == "failed" else "",
@@ -425,16 +426,24 @@ def test_reports_sitemap_commands_support_text_and_json(mocker: MockerFixture) -
         main.app,
         ["reports", "sitemap", "show", "--date", "2026-05-19", "--json"],
     )
+    show_text_result = runner.invoke(
+        main.app,
+        ["reports", "sitemap", "show", "--date", "2026-05-19"],
+    )
 
     assert list_result.exit_code == 0
     assert "Recent sitemap-analysis reports" in list_result.output
     assert "issues=1" in list_result.output
+    assert "duration=1.50s" in list_result.output
     assert "https://example.com/sitemap.xml" in list_result.output
     assert show_result.exit_code == 0
     payload = json.loads(show_result.output)
     assert payload["analysis_date"] == "2026-05-19"
     assert payload["issue_count"] == 1
     assert payload["issues"][0]["category"] == "canonical_mismatch"
+    assert show_text_result.exit_code == 0
+    assert "Execution time: 1.50s" in show_text_result.output
+    assert "Trend: Canonical mismatch is new since the previous run." in show_text_result.output
 
 
 def test_reports_log_show_json_includes_mcp_artifact_retention_notice(
@@ -924,7 +933,7 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     )
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
@@ -991,7 +1000,7 @@ def test_sitemap_analysis_command_sends_failure_email_on_service_error(
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code != 0
@@ -1048,7 +1057,7 @@ def test_sitemap_analysis_command_records_failed_delivery_when_report_email_fail
     email_service.send_sitemap_analysis.side_effect = RuntimeError("SMTP timeout")
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code != 0
@@ -1102,7 +1111,7 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code != 0
@@ -1119,14 +1128,14 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_command_requires_site_domain(
+async def test_sitemap_analysis_command_requires_sitemap_public_host(
     mocker: MockerFixture,
 ) -> None:
     sitemap_analysis_command = cast(Any, main.sitemap_analysis)
     build_runner = mocker.patch.object(main, "AnalysisRunner")
     echo = mocker.patch.object(main.typer, "echo")
 
-    with override_settings(SITE_DOMAIN=""):
+    with override_settings(SITEMAP_PUBLIC_HOST=""):
         with pytest.raises(typer.Exit) as exc_info:
             await sitemap_analysis_command.__wrapped__.__wrapped__(
                 analysis_date="2026-05-19",
@@ -1137,21 +1146,21 @@ async def test_sitemap_analysis_command_requires_site_domain(
     assert exc_info.value.exit_code == 1
     build_runner.assert_not_called()
     echo.assert_called_once_with(
-        "SITE_DOMAIN is required to run sitemap analysis. "
-        "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+        "SITEMAP_PUBLIC_HOST is required to run sitemap analysis. "
+        "Set SITEMAP_PUBLIC_HOST=example.com or SITEMAP_PUBLIC_HOST=https://example.com.",
         err=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
+async def test_sitemap_analysis_command_rejects_sitemap_url_as_public_host(
     mocker: MockerFixture,
 ) -> None:
     sitemap_analysis_command = cast(Any, main.sitemap_analysis)
     build_runner = mocker.patch.object(main, "AnalysisRunner")
     echo = mocker.patch.object(main.typer, "echo")
 
-    with override_settings(SITE_DOMAIN="https://example.com/sitemap.xml"):
+    with override_settings(SITEMAP_PUBLIC_HOST="https://example.com/sitemap.xml"):
         with pytest.raises(typer.Exit) as exc_info:
             await sitemap_analysis_command.__wrapped__.__wrapped__(
                 analysis_date="2026-05-19",
@@ -1162,9 +1171,9 @@ async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
     assert exc_info.value.exit_code == 1
     build_runner.assert_not_called()
     echo.assert_called_once_with(
-        "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
-        "Set SITE_DOMAIN=example.com or "
-        "SITE_DOMAIN=https://example.com.",
+        "SITEMAP_PUBLIC_HOST must be a domain or origin, not a sitemap URL or path. "
+        "Set SITEMAP_PUBLIC_HOST=example.com or "
+        "SITEMAP_PUBLIC_HOST=https://example.com.",
         err=True,
     )
 
@@ -1182,11 +1191,15 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
 
 
-def test_deploy_script_exports_site_domain_setting() -> None:
+def test_deploy_script_exports_sitemap_public_host_setting() -> None:
     deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
 
-    assert 'SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"' in deploy_text
-    assert "    SITE_DOMAIN \\" in deploy_text
+    assert (
+        'SITEMAP_PUBLIC_HOST="${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}"'
+        in deploy_text
+    )
+    assert "    SITEMAP_PUBLIC_HOST \\" in deploy_text
+    assert "SITEMAP_INTERNAL_BASE_URL" not in deploy_text
     assert "SITEMAP_URL" not in deploy_text
 
 

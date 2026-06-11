@@ -155,10 +155,15 @@ class SitemapFetcher(Protocol):
     async def get(self, url: str, *, allow_redirects: bool = True) -> SitemapHTTPResponse: ...
 
 
-class SitemapHTTPClient(SitemapFetcher):
+class HTTPXSitemapFetcher(SitemapFetcher):
     """Fetch sitemap and page URLs with httpx."""
 
-    def __init__(self, *, timeout_seconds: float = 10.0, verify_ssl: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 10.0,
+        verify_ssl: bool = True,
+    ) -> None:
         self.timeout_seconds = timeout_seconds
         self.verify_ssl = verify_ssl
 
