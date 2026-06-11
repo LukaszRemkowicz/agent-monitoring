@@ -138,8 +138,15 @@ def test_log_analysis_email_renders_copied_template() -> None:
     )
 
     assert "Portfolio - Daily Log Analysis" in html
+    assert "DEV" in html
+    assert "INFO" in html
+    assert "12.3s" in html
     assert "Demo shop logs are healthy." in html
     assert "No critical incidents found." in html
+    assert "Keep watching the backend logs." in html
+    assert "Scanner noise is stable." in html
+    assert "@media (prefers-color-scheme: dark)" in html
+    assert "u+.body" in html
     assert "View Full Report" not in html
     assert "/admin/monitoring/loganalysis/" not in html
 
@@ -221,8 +228,18 @@ def test_sitemap_analysis_email_renders_copied_template() -> None:
     )
 
     assert "Portfolio - Sitemap Analysis" in html
+    assert "DEV" in html
+    assert "INFO" in html
+    assert "4.6s" in html
+    assert "Sitemap Files" in html
+    assert "URLs Checked" in html
     assert "Sitemap is healthy." in html
+    assert "https://example.com/sitemap.xml" in html
     assert "All sitemap URLs are valid." in html
+    assert "No action needed." in html
+    assert "No change from prior run." in html
+    assert "@media (prefers-color-scheme: dark)" in html
+    assert "u+.body" in html
     assert "View Full Report" not in html
     assert "/admin/monitoring/sitemapanalysis/" not in html
 

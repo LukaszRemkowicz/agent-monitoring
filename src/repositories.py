@@ -6,6 +6,7 @@ from typing import Any
 from tortoise.queryset import QuerySet
 
 from db.models import (
+    EmailDelivery,
     LogAnalysis,
     LogAnalysisLLMCall,
     RunStatus,
@@ -13,6 +14,8 @@ from db.models import (
 )
 from logging_config import get_logger
 from schemas import (
+    EmailDeliveryIn,
+    EmailDeliveryOut,
     LogAnalysisIn,
     LogAnalysisLLMCallIn,
     LogAnalysisLLMCallOut,
@@ -22,6 +25,30 @@ from schemas import (
 )
 
 logger = get_logger(__name__)
+
+
+class EmailDeliveryRepository:
+    """Database access boundary for monitoring email delivery attempts."""
+
+    model: type[EmailDelivery] = EmailDelivery
+
+    async def create(self, data: EmailDeliveryIn) -> EmailDeliveryOut:
+        delivery = await self.model.objects.create(**data.model_dump())
+        return EmailDeliveryOut.from_model(delivery)
+
+    async def recent(self, *, limit: int = 20) -> list[EmailDeliveryOut]:
+        deliveries: list[EmailDelivery] = (
+            await self.model.objects.all().order_by("-attempted_at", "-id").limit(limit)
+        )
+        return [EmailDeliveryOut.from_model(delivery) for delivery in deliveries]
+
+    async def failed(self, *, limit: int = 20) -> list[EmailDeliveryOut]:
+        deliveries: list[EmailDelivery] = (
+            await self.model.objects.filter(status=EmailDelivery.Status.FAILED)
+            .order_by("-attempted_at", "-id")
+            .limit(limit)
+        )
+        return [EmailDeliveryOut.from_model(delivery) for delivery in deliveries]
 
 
 class LogAnalysisRepository:
@@ -126,6 +153,20 @@ class LogAnalysisRepository:
         )
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
 
+    async def recent_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
+        """Return recent log-analysis reports regardless of status."""
+
+        analyses: list[LogAnalysis] = await self.filter().order_by("-analysis_date").limit(limit)
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def failed_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
+        """Return recent failed log-analysis reports."""
+
+        analyses: list[LogAnalysis] = (
+            await self.filter(status=RunStatus.FAILED).order_by("-analysis_date").limit(limit)
+        )
+        return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
     async def critical_reports(self, *, limit: int = 20) -> list[LogAnalysisOut]:
         """Return recent critical log-analysis reports."""
 
@@ -156,6 +197,45 @@ class LogAnalysisRepository:
             .limit(limit)
         )
         return [LogAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def retention_candidate_ids(
+        self,
+        *,
+        older_than_days: int,
+        keep_recent_successful: int = 5,
+    ) -> list[int]:
+        """Return cleanup candidate ids while preserving recent successful history."""
+
+        protected_ids = await self._recent_successful_history_ids(limit=keep_recent_successful)
+        queryset = self.model.objects.older_than(older_than_days)
+        if protected_ids:
+            queryset = queryset.exclude(id__in=protected_ids)
+        analyses: list[LogAnalysis] = await queryset.order_by("analysis_date")
+        return [analysis.id for analysis in analyses]
+
+    async def delete_retention_candidates(
+        self,
+        *,
+        older_than_days: int,
+        keep_recent_successful: int = 5,
+    ) -> int:
+        """Delete cleanup candidates and return the deleted row count."""
+
+        candidate_ids: list[int] = await self.retention_candidate_ids(
+            older_than_days=older_than_days,
+            keep_recent_successful=keep_recent_successful,
+        )
+        if not candidate_ids:
+            return 0
+        return await self.filter(id__in=candidate_ids).delete()
+
+    async def _recent_successful_history_ids(self, *, limit: int) -> list[int]:
+        if limit <= 0:
+            return []
+        analyses: list[LogAnalysis] = (
+            await self.filter(status=RunStatus.SUCCEEDED).order_by("-analysis_date").limit(limit)
+        )
+        return [analysis.id for analysis in analyses]
 
 
 class SitemapAnalysisRepository:
@@ -223,6 +303,48 @@ class SitemapAnalysisRepository:
         if analysis is None:
             return None
         return SitemapAnalysisOut.from_model(analysis)
+
+    async def recent_reports(self, *, limit: int = 20) -> list[SitemapAnalysisOut]:
+        """Return recent sitemap-analysis reports regardless of status."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.filter().order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def failed_reports(self, *, limit: int = 20) -> list[SitemapAnalysisOut]:
+        """Return recent failed sitemap-analysis reports."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.filter(status=RunStatus.FAILED).order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def unsent_emails(self, *, limit: int = 50) -> list[SitemapAnalysisOut]:
+        """Return sitemap-analysis reports whose notification email is still unsent."""
+
+        analyses: list[SitemapAnalysis] = (
+            await self.model.objects.unsent_emails().order_by("-analysis_date").limit(limit)
+        )
+        return [SitemapAnalysisOut.from_model(analysis) for analysis in analyses]
+
+    async def retention_candidate_ids(self, *, older_than_days: int) -> list[int]:
+        """Return sitemap-analysis ids old enough for retention cleanup."""
+
+        analyses: list[SitemapAnalysis] = await self.model.objects.older_than(
+            older_than_days
+        ).order_by("analysis_date")
+        return [analysis.id for analysis in analyses]
+
+    async def delete_retention_candidates(self, *, older_than_days: int) -> int:
+        """Delete old sitemap-analysis rows and return the deleted row count."""
+
+        candidate_ids: list[int] = await self.retention_candidate_ids(
+            older_than_days=older_than_days
+        )
+        if not candidate_ids:
+            return 0
+        return await self.filter(id__in=candidate_ids).delete()
 
 
 class LLMCallRepository:

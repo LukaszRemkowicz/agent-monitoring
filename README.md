@@ -73,7 +73,7 @@ EMAIL_USERNAME=...
 EMAIL_PASSWORD=...
 EMAIL_FROM=...
 EMAIL_TO=...
-SITE_DOMAIN=example.com
+SITEMAP_PUBLIC_HOST=example.com
 ```
 
 Optional values:
@@ -161,6 +161,66 @@ doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
 Use `--force` only when replacing the existing report for the same date is
 intentional. Use `--no-email` for a persisted dry run without email.
 
+Inspect stored reports without rerunning analysis:
+
+```bash
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports log list --limit 5
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports log show --date YYYY-MM-DD
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports sitemap list --limit 5
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports sitemap show --date YYYY-MM-DD
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring reports attention --limit 10
+```
+
+Add `--json` to any `monitoring reports ...` command when Codex or another
+tool should consume the output. Use `monitoring reports --help` and subcommand
+`--help` for the full option list.
+
+Stored log reports keep summaries, findings, evidence fingerprints, and MCP
+artifact references. Raw logs stay in MCP-owned artifacts and are not copied
+into this app. If MCP artifact retention expires an old raw-log artifact, the
+stored report remains useful for review and trend history, but raw follow-up
+from the MCP reference may no longer resolve. `monitoring reports log show`
+prints this MCP artifact retention notice alongside the follow-up hints.
+
+Clean up stored monitoring DB rows after the configured retention window:
+
+```bash
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring cleanup reports
+
+TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
+doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
+  monitoring cleanup reports --confirm
+```
+
+The cleanup command is a dry run unless `--confirm` is provided. It uses
+`RETENTION_DAYS` as the shared fallback, with
+`LOG_ANALYSIS_RETENTION_DAYS` and `SITEMAP_ANALYSIS_RETENTION_DAYS` available
+when the report categories need different windows. It deletes old log reports
+and sitemap reports, but preserves the most recent successful log-analysis
+history rows needed for trend comparison. That protected count defaults to
+`LOG_ANALYSIS_PROTECTED_HISTORY_COUNT=5`.
+
+The report cleanup command does not delete log-analysis LLM/tool-call audit
+rows. `CRITICAL`, failed, and unsent rows currently use the same category
+cutoff as other report rows unless they are part of protected successful log
+history. Add `--json` for machine-readable output.
+
 ### 7. Install Cron
 
 Cron templates and installation live in the separate `devops` repository:
@@ -201,11 +261,37 @@ doppler run -- docker compose run --rm monitoring-app log_analysis --force --ema
 doppler run -- docker compose run --rm monitoring-app sitemap-analysis --force --email
 ```
 
+Inspect local stored reports:
+
+```bash
+docker compose run --rm monitoring-app monitoring reports log list --limit 5
+docker compose run --rm monitoring-app monitoring reports log show --date YYYY-MM-DD
+docker compose run --rm monitoring-app monitoring reports sitemap list --limit 5
+docker compose run --rm monitoring-app monitoring reports sitemap show --date YYYY-MM-DD
+docker compose run --rm monitoring-app monitoring reports attention --limit 10 --json
+```
+
+Dry-run and confirm local retention cleanup:
+
+```bash
+docker compose run --rm monitoring-app monitoring cleanup reports
+docker compose run --rm monitoring-app monitoring cleanup reports \
+  --log-retention-days 90 --sitemap-retention-days 30
+docker compose run --rm monitoring-app monitoring cleanup reports --confirm
+```
+
 Useful flags:
 
 - `--force`: replace an existing report for the same analysis date.
 - `--email`: send the report email after the job succeeds.
 - `--no-email`: run and persist the report without sending email.
+- `--confirm`: delete retention cleanup candidates; cleanup commands dry-run
+  without it.
+- `--retention-days`: shared fallback retention window for report cleanup.
+- `--log-retention-days`: log-analysis report cleanup window.
+- `--sitemap-retention-days`: sitemap-analysis report cleanup window.
+- `--protected-log-history-count`: recent successful log-analysis rows to keep
+  for trend history.
 - `--compare-history`: compare current grouped errors with the latest saved
   successful log-analysis run before the LLM call.
 - `--no-compare-history`: disable the Python history comparison shortcut.

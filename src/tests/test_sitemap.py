@@ -21,7 +21,7 @@ from services.sitemap import (
 pytestmark = pytest.mark.asyncio
 
 
-class FakeSitemapHTTPClient:
+class FakeSitemapFetcher:
     def __init__(
         self,
         responses: dict[tuple[str, bool], SitemapHTTPResponse],
@@ -59,7 +59,7 @@ class FakeSitemapWorkflowClient(McpWorkflowClient):
 
 
 async def test_sitemap_audit_expands_nested_sitemaps_without_issues() -> None:
-    client = FakeSitemapHTTPClient(
+    client = FakeSitemapFetcher(
         {
             (
                 "https://example.com/sitemap.xml",
@@ -122,7 +122,7 @@ async def test_sitemap_audit_expands_nested_sitemaps_without_issues() -> None:
 
 
 async def test_sitemap_audit_detects_deterministic_issues() -> None:
-    client = FakeSitemapHTTPClient(
+    client = FakeSitemapFetcher(
         {
             (
                 "https://example.com/sitemap.xml",

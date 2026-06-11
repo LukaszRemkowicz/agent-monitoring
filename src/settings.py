@@ -58,6 +58,18 @@ EMAIL_PASSWORD = env.str("EMAIL_PASSWORD", default="")
 EMAIL_FROM = env.str("EMAIL_FROM", default="monitoring@example.com")
 EMAIL_TO = env.str("EMAIL_TO", default="")
 
-SITE_DOMAIN = env.str("SITE_DOMAIN", default="")
+SITEMAP_PUBLIC_HOST = env.str("SITEMAP_PUBLIC_HOST", default="")
 SITEMAP_EMAIL_TO = env.str("SITEMAP_EMAIL_TO", default="")
 RETENTION_DAYS = env.int("RETENTION_DAYS", default=90)
+LOG_ANALYSIS_RETENTION_DAYS = env.int(
+    "LOG_ANALYSIS_RETENTION_DAYS",
+    default=RETENTION_DAYS,
+)
+SITEMAP_ANALYSIS_RETENTION_DAYS = env.int(
+    "SITEMAP_ANALYSIS_RETENTION_DAYS",
+    default=RETENTION_DAYS,
+)
+LOG_ANALYSIS_PROTECTED_HISTORY_COUNT = env.int(
+    "LOG_ANALYSIS_PROTECTED_HISTORY_COUNT",
+    default=5,
+)

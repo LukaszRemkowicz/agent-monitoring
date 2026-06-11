@@ -1218,6 +1218,49 @@ class LogAnalysisIn(BaseModel):
         return format_byte_size(collect_log_artifact_byte_count(self.mcp_artifact))
 
 
+class EmailDeliveryIn(BaseModel):
+    """Validated email delivery attempt passed into the repository layer."""
+
+    report_kind: str
+    report_id: int | None = None
+    analysis_date: date | None = None
+    recipient_target: str
+    recipients: list[str] = Field(default_factory=list)
+    subject: str = ""
+    status: str
+    sent_at: datetime | None = None
+    provider_message_id: str | None = None
+    error_message: str = ""
+
+
+class EmailDeliveryOut(EmailDeliveryIn):
+    """Validated email delivery attempt returned by repositories."""
+
+    id: int
+    created_at: datetime
+    attempted_at: datetime
+
+    @classmethod
+    def from_model(cls, delivery: Any) -> EmailDeliveryOut:
+        return cls.model_validate(
+            {
+                "id": delivery.id,
+                "created_at": delivery.created_at,
+                "attempted_at": delivery.attempted_at,
+                "report_kind": delivery.report_kind,
+                "report_id": delivery.report_id,
+                "analysis_date": delivery.analysis_date,
+                "recipient_target": delivery.recipient_target,
+                "recipients": delivery.recipients,
+                "subject": delivery.subject,
+                "status": delivery.status,
+                "sent_at": delivery.sent_at,
+                "provider_message_id": delivery.provider_message_id,
+                "error_message": delivery.error_message,
+            }
+        )
+
+
 class LogAnalysisOut(LogAnalysisIn):
     """Validated log-analysis data returned by the repository layer."""
 

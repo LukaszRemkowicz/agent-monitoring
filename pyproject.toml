@@ -34,6 +34,7 @@ dev = [
 ]
 
 [project.scripts]
+monitoring = "scripts:monitoring_entry"
 log_analysis = "scripts:log_analysis_entry"
 sitemap-analysis = "scripts:sitemap_analysis_entry"
 check-mcp = "scripts:check_mcp_entry"

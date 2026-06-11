@@ -1,4 +1,5 @@
 import inspect
+import json
 import subprocess
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ from tortoise.exceptions import IntegrityError
 from typer.testing import CliRunner
 
 import main
+import reports_cli
 from db import cli as db_cli
 from db.cli import makemigrations, migrate
 from decorators import as_async, db
@@ -47,6 +49,35 @@ from schemas import (
 from tests.conftest import build_collect_logs_artifact_payload, override_settings
 
 runner = CliRunner()
+
+
+class FakeDatabaseLifespan:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        return None
+
+
+class FakeEmailDeliveryRepository:
+    def __init__(self) -> None:
+        self.created: list[Any] = []
+
+    async def create(self, data: Any) -> Any:
+        self.created.append(data)
+        return data
+
+
+def _patch_report_command_lifespan(mocker: MockerFixture) -> None:
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
 
 
 def _patch_log_analysis_command_dependencies(
@@ -82,6 +113,7 @@ def _patch_log_analysis_command_dependencies(
         agent=object(),
         llm_provider=object(),
         repository=FakeLogAnalysisRepository(),
+        email_delivery_repository=FakeEmailDeliveryRepository(),
         llm_call_repository=object(),
         email_service=email_service,
         service_calls=service_calls,
@@ -115,6 +147,11 @@ def _patch_log_analysis_command_dependencies(
         main,
         "LLMCallRepository",
         return_value=dependencies["llm_call_repository"],
+    )
+    dependencies["email_delivery_repository_constructor"] = mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=dependencies["email_delivery_repository"],
     )
     dependencies["email_service_factory"] = mocker.patch.object(
         main.MonitoringEmailService,
@@ -242,6 +279,361 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
     )
 
 
+def _stored_log_report(
+    analysis_date: date = date(2026, 5, 19),
+    *,
+    status: str = "succeeded",
+    email_sent: bool = True,
+) -> LogAnalysisOut:
+    return _log_analysis_out(analysis_date).model_copy(
+        update={
+            "status": status,
+            "email_sent": email_sent,
+            "mcp_artifact": {
+                "collect_logs": build_collect_logs_artifact_payload(
+                    resolved_source_keys=["backend", "nginx"],
+                    include_unavailable_nginx=True,
+                )
+            },
+            "mcp_collect_logs_id": "workflow/demo-shop/latest",
+            "log_window_since": datetime(2026, 5, 19, tzinfo=UTC),
+            "log_window_until": datetime(2026, 5, 20, tzinfo=UTC),
+            "key_findings": ["No critical incidents found."],
+            "evidence_fingerprints": ["nginx:http_4xx:404:/.env"],
+            "coverage_snapshot": {
+                "projects": [
+                    {
+                        "project_name": "demo-shop",
+                        "sources": [
+                            {"source_key": "backend", "status": "collected"},
+                            {"source_key": "nginx", "status": "unavailable"},
+                        ],
+                    }
+                ]
+            },
+        }
+    )
+
+
+def _stored_sitemap_report(
+    analysis_date: date = date(2026, 5, 19),
+    *,
+    status: str = "succeeded",
+    email_sent: bool = True,
+) -> SitemapAnalysisOut:
+    return SitemapAnalysisOut(
+        id=7,
+        created_at=datetime(2026, 5, 19, tzinfo=UTC),
+        analysis_date=analysis_date,
+        status=status,
+        root_sitemap_url="https://example.com/sitemap.xml",
+        total_sitemaps=2,
+        total_urls=42,
+        issue_summary={"canonical_mismatch": 1},
+        issues=[
+            {
+                "category": "canonical_mismatch",
+                "url": "https://example.com/bad",
+                "message": "Canonical points elsewhere.",
+            }
+        ],
+        summary="One deterministic sitemap issue was found.",
+        severity="WARNING",
+        key_findings=["One canonical mismatch."],
+        recommendations="Fix the canonical URL.",
+        trend_summary="Canonical mismatch is new since the previous run.",
+        execution_time_seconds=1.5,
+        email_sent=email_sent,
+        error_message="sitemap failed" if status == "failed" else "",
+    )
+
+
+def test_reports_log_list_prints_recent_reports(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report(email_sent=False)
+
+    class FakeLogAnalysisRepository:
+        async def recent_reports(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 3
+            return [report]
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "log", "list", "--limit", "3"])
+
+    assert result.exit_code == 0
+    assert "Recent log-analysis reports" in result.output
+    assert "2026-05-19" in result.output
+    assert "INFO" in result.output
+    assert "email=pending" in result.output
+    assert "Demo shop logs are healthy." in result.output
+
+
+def test_reports_log_show_prints_mcp_reference_hints(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report()
+
+    class FakeLogAnalysisRepository:
+        async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "log", "show", "--date", "2026-05-19"])
+
+    assert result.exit_code == 0
+    assert "Log report 2026-05-19" in result.output
+    assert "MCP artifact reference: workflow/demo-shop/latest" in result.output
+    assert "MCP follow-up hints" in result.output
+    assert "project_name=demo-shop" in result.output
+    assert "source backend: collected" in result.output
+    assert "source nginx: unavailable" in result.output
+    assert "nginx:http_4xx:404:/.env" in result.output
+    assert "MCP artifact retention" in result.output
+    assert "Raw logs stay in MCP-owned artifacts" in result.output
+
+
+def test_reports_sitemap_commands_support_text_and_json(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_sitemap_report()
+
+    class FakeSitemapAnalysisRepository:
+        async def recent_reports(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 5
+            return [report]
+
+        async def get_by_date(self, analysis_date: date) -> SitemapAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "SitemapAnalysisRepository",
+        return_value=FakeSitemapAnalysisRepository(),
+    )
+
+    list_result = runner.invoke(main.app, ["reports", "sitemap", "list", "--limit", "5"])
+    show_result = runner.invoke(
+        main.app,
+        ["reports", "sitemap", "show", "--date", "2026-05-19", "--json"],
+    )
+    show_text_result = runner.invoke(
+        main.app,
+        ["reports", "sitemap", "show", "--date", "2026-05-19"],
+    )
+
+    assert list_result.exit_code == 0
+    assert "Recent sitemap-analysis reports" in list_result.output
+    assert "issues=1" in list_result.output
+    assert "duration=1.50s" in list_result.output
+    assert "https://example.com/sitemap.xml" in list_result.output
+    assert show_result.exit_code == 0
+    payload = json.loads(show_result.output)
+    assert payload["analysis_date"] == "2026-05-19"
+    assert payload["issue_count"] == 1
+    assert payload["issues"][0]["category"] == "canonical_mismatch"
+    assert show_text_result.exit_code == 0
+    assert "Execution time: 1.50s" in show_text_result.output
+    assert "Trend: Canonical mismatch is new since the previous run." in show_text_result.output
+
+
+def test_reports_log_show_json_includes_mcp_artifact_retention_notice(
+    mocker: MockerFixture,
+) -> None:
+    _patch_report_command_lifespan(mocker)
+    report = _stored_log_report()
+
+    class FakeLogAnalysisRepository:
+        async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
+            assert analysis_date == date(2026, 5, 19)
+            return report
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+
+    result = runner.invoke(
+        main.app,
+        ["reports", "log", "show", "--date", "2026-05-19", "--json"],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["mcp_artifact_retention_notice"] == {
+        "raw_logs_owner": "mcp",
+        "monitoring_app_copies_raw_logs": False,
+        "reference": "workflow/demo-shop/latest",
+        "message": (
+            "Raw logs stay in MCP-owned artifacts and are not copied into "
+            "agent-monitoring. Stored summaries and findings remain useful if "
+            "the MCP artifact expires, but raw follow-up may no longer resolve."
+        ),
+    }
+
+
+def test_reports_attention_json_lists_failed_and_unsent_runs(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    failed_log = _stored_log_report(
+        analysis_date=date(2026, 5, 18),
+        status="failed",
+        email_sent=True,
+    )
+    unsent_sitemap = _stored_sitemap_report(email_sent=False)
+
+    class FakeLogAnalysisRepository:
+        async def failed_reports(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 10
+            return [failed_log]
+
+        async def unsent_emails(self, *, limit: int) -> list[LogAnalysisOut]:
+            assert limit == 10
+            return []
+
+    class FakeSitemapAnalysisRepository:
+        async def failed_reports(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 10
+            return []
+
+        async def unsent_emails(self, *, limit: int) -> list[SitemapAnalysisOut]:
+            assert limit == 10
+            return [unsent_sitemap]
+
+    mocker.patch.object(
+        reports_cli,
+        "LogAnalysisRepository",
+        return_value=FakeLogAnalysisRepository(),
+    )
+    mocker.patch.object(
+        reports_cli,
+        "SitemapAnalysisRepository",
+        return_value=FakeSitemapAnalysisRepository(),
+    )
+
+    result = runner.invoke(main.app, ["reports", "attention", "--limit", "10", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["failed_log_reports"][0]["analysis_date"] == "2026-05-18"
+    assert payload["unsent_sitemap_reports"][0]["analysis_date"] == "2026-05-19"
+
+
+def test_cleanup_reports_defaults_to_dry_run(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    cleanup_service = AsyncMock()
+    cleanup_service.cleanup_reports.return_value = {
+        "retention_days": {
+            "log_analyses": 30,
+            "sitemap_analyses": 30,
+        },
+        "protected_log_history_count": 5,
+        "dry_run": True,
+        "counts": {
+            "log_analyses": 2,
+            "sitemap_analyses": 1,
+        },
+        "total": 3,
+    }
+
+    mocker.patch.object(
+        reports_cli,
+        "MonitoringCleanupService",
+        return_value=cleanup_service,
+    )
+
+    result = runner.invoke(main.app, ["cleanup", "reports", "--retention-days", "30"])
+
+    assert result.exit_code == 0
+    cleanup_service.cleanup_reports.assert_awaited_once_with(
+        log_retention_days=30,
+        sitemap_retention_days=30,
+        protected_log_history_count=5,
+        dry_run=True,
+    )
+    assert "Cleanup reports dry run" in result.output
+    assert "log_retention_days=30" in result.output
+    assert "sitemap_retention_days=30" in result.output
+    assert "protected_log_history=5" in result.output
+    assert "log_analyses=2" in result.output
+    assert "sitemap_analyses=1" in result.output
+    assert "log_analysis_llm_calls" not in result.output
+    assert "total=3" in result.output
+
+
+def test_cleanup_reports_confirm_deletes_candidates(mocker: MockerFixture) -> None:
+    _patch_report_command_lifespan(mocker)
+    cleanup_service = AsyncMock()
+    cleanup_service.cleanup_reports.return_value = {
+        "retention_days": {
+            "log_analyses": 90,
+            "sitemap_analyses": 14,
+        },
+        "protected_log_history_count": 5,
+        "dry_run": False,
+        "counts": {
+            "log_analyses": 1,
+            "sitemap_analyses": 0,
+        },
+        "total": 1,
+    }
+
+    mocker.patch.object(
+        reports_cli,
+        "MonitoringCleanupService",
+        return_value=cleanup_service,
+    )
+
+    result = runner.invoke(
+        main.app,
+        [
+            "cleanup",
+            "reports",
+            "--log-retention-days",
+            "90",
+            "--sitemap-retention-days",
+            "14",
+            "--confirm",
+        ],
+    )
+
+    assert result.exit_code == 0
+    cleanup_service.cleanup_reports.assert_awaited_once_with(
+        log_retention_days=90,
+        sitemap_retention_days=14,
+        protected_log_history_count=5,
+        dry_run=False,
+    )
+    assert "Deleted cleanup candidates" in result.output
+    assert "log_retention_days=90" in result.output
+    assert "sitemap_retention_days=14" in result.output
+    assert "log_analyses=1" in result.output
+    assert "log_analysis_llm_calls" not in result.output
+    assert "total=1" in result.output
+
+
+def test_cleanup_reports_help_mentions_protected_history() -> None:
+    result = runner.invoke(main.app, ["cleanup", "reports", "--help"])
+
+    assert result.exit_code == 0
+    assert "keeping recent successful log history" in unstyle(result.output)
+    assert "protected recent" in unstyle(result.output)
+    assert "successful log-analysis" in unstyle(result.output)
+    assert "history" in unstyle(result.output)
+    assert "--log-retention-days" in unstyle(result.output)
+    assert "--sitemap-retention" in unstyle(result.output)
+    assert "--protected-log-histor" in unstyle(result.output)
+
+
 def _sitemap_analysis_out(analysis_date: date) -> SitemapAnalysisOut:
     return SitemapAnalysisOut(
         id=1,
@@ -330,6 +722,12 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert "strong_llm_provider" not in dependencies["agent_constructor"].call_args.kwargs
     dependencies["email_service"].send_log_analysis.assert_awaited_once()
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "log_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "log"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 def test_log_analysis_command_sends_failure_email_on_service_error(
@@ -358,6 +756,41 @@ def test_log_analysis_command_sends_failure_email_on_service_error(
     assert failure.error_type == "RuntimeError"
     assert failure.error_message == "MCP workflow unavailable"
     assert "RuntimeError: MCP workflow unavailable" in failure.traceback_text
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
+
+
+def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
+    mocker: MockerFixture,
+) -> None:
+    class FakeLogAnalysisService:
+        async def run_log_analysis(
+            self,
+            *,
+            analysis_date: date,
+            log_window: LogCollectionWindow,
+            force: bool,
+        ) -> LogAnalysisWorkflowResult:
+            return _log_analysis_result(analysis_date)
+
+    fake_service = FakeLogAnalysisService()
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
+    dependencies["email_service"].send_log_analysis.side_effect = RuntimeError("SMTP timeout")
+
+    result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert dependencies["repository"].updated == []
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "log_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "log"
+    assert delivery.status == "failed"
+    assert delivery.error_message == "SMTP timeout"
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -491,10 +924,16 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         return_value=llm_provider,
     )
     email_service = AsyncMock()
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code == 0
@@ -518,6 +957,12 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     }
     email_service.send_sitemap_analysis.assert_awaited_once()
     assert fake_repository.updated[0][1] == {"email_sent": True}
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "sitemap_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "sitemap"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 def test_sitemap_analysis_command_sends_failure_email_on_service_error(
@@ -543,13 +988,19 @@ def test_sitemap_analysis_command_sends_failure_email_on_service_error(
     fake_runner = FakeAnalysisRunner()
     mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
     mocker.patch.object(main, "get_llm_provider", return_value=object())
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(
         main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
     )
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code != 0
@@ -560,6 +1011,63 @@ def test_sitemap_analysis_command_sends_failure_email_on_service_error(
     assert failure.error_type == "RuntimeError"
     assert failure.error_message == "sitemap fetch failed"
     assert "RuntimeError: sitemap fetch failed" in failure.traceback_text
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
+
+
+def test_sitemap_analysis_command_records_failed_delivery_when_report_email_fails(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[SitemapAnalysisOut, dict[str, Any]]] = []
+
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            return _sitemap_analysis_out(analysis_date)
+
+    fake_repository = FakeSitemapAnalysisRepository()
+    email_delivery_repository = FakeEmailDeliveryRepository()
+    mocker.patch.object(main, "AnalysisRunner", return_value=FakeAnalysisRunner())
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
+    email_service = AsyncMock()
+    email_service.send_sitemap_analysis.side_effect = RuntimeError("SMTP timeout")
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert fake_repository.updated == []
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "sitemap_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "sitemap"
+    assert delivery.status == "failed"
+    assert delivery.error_message == "SMTP timeout"
 
 
 def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
@@ -591,13 +1099,19 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
     fake_runner = FakeAnalysisRunner()
     mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
     mocker.patch.object(main, "get_llm_provider", return_value=object())
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(
         main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
     )
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
-    with override_settings(SITE_DOMAIN="example.com"):
+    with override_settings(SITEMAP_PUBLIC_HOST="example.com"):
         result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
 
     assert result.exit_code != 0
@@ -605,17 +1119,23 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
     email_service.send_monitoring_failure.assert_awaited_once()
     failure = email_service.send_monitoring_failure.call_args.args[0]
     assert failure.error_message == "sitemap audit failed"
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_command_requires_site_domain(
+async def test_sitemap_analysis_command_requires_sitemap_public_host(
     mocker: MockerFixture,
 ) -> None:
     sitemap_analysis_command = cast(Any, main.sitemap_analysis)
     build_runner = mocker.patch.object(main, "AnalysisRunner")
     echo = mocker.patch.object(main.typer, "echo")
 
-    with override_settings(SITE_DOMAIN=""):
+    with override_settings(SITEMAP_PUBLIC_HOST=""):
         with pytest.raises(typer.Exit) as exc_info:
             await sitemap_analysis_command.__wrapped__.__wrapped__(
                 analysis_date="2026-05-19",
@@ -626,21 +1146,21 @@ async def test_sitemap_analysis_command_requires_site_domain(
     assert exc_info.value.exit_code == 1
     build_runner.assert_not_called()
     echo.assert_called_once_with(
-        "SITE_DOMAIN is required to run sitemap analysis. "
-        "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+        "SITEMAP_PUBLIC_HOST is required to run sitemap analysis. "
+        "Set SITEMAP_PUBLIC_HOST=example.com or SITEMAP_PUBLIC_HOST=https://example.com.",
         err=True,
     )
 
 
 @pytest.mark.asyncio
-async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
+async def test_sitemap_analysis_command_rejects_sitemap_url_as_public_host(
     mocker: MockerFixture,
 ) -> None:
     sitemap_analysis_command = cast(Any, main.sitemap_analysis)
     build_runner = mocker.patch.object(main, "AnalysisRunner")
     echo = mocker.patch.object(main.typer, "echo")
 
-    with override_settings(SITE_DOMAIN="https://example.com/sitemap.xml"):
+    with override_settings(SITEMAP_PUBLIC_HOST="https://example.com/sitemap.xml"):
         with pytest.raises(typer.Exit) as exc_info:
             await sitemap_analysis_command.__wrapped__.__wrapped__(
                 analysis_date="2026-05-19",
@@ -651,9 +1171,9 @@ async def test_sitemap_analysis_command_rejects_sitemap_url_as_site_domain(
     assert exc_info.value.exit_code == 1
     build_runner.assert_not_called()
     echo.assert_called_once_with(
-        "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
-        "Set SITE_DOMAIN=example.com or "
-        "SITE_DOMAIN=https://example.com.",
+        "SITEMAP_PUBLIC_HOST must be a domain or origin, not a sitemap URL or path. "
+        "Set SITEMAP_PUBLIC_HOST=example.com or "
+        "SITEMAP_PUBLIC_HOST=https://example.com.",
         err=True,
     )
 
@@ -671,11 +1191,15 @@ def test_typer_commands_wrap_async_callbacks() -> None:
     assert inspect.iscoroutinefunction(check_mcp.__wrapped__)
 
 
-def test_deploy_script_exports_site_domain_setting() -> None:
+def test_deploy_script_exports_sitemap_public_host_setting() -> None:
     deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
 
-    assert 'SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required}"' in deploy_text
-    assert "    SITE_DOMAIN \\" in deploy_text
+    assert (
+        'SITEMAP_PUBLIC_HOST="${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}"'
+        in deploy_text
+    )
+    assert "    SITEMAP_PUBLIC_HOST \\" in deploy_text
+    assert "SITEMAP_INTERNAL_BASE_URL" not in deploy_text
     assert "SITEMAP_URL" not in deploy_text
 
 

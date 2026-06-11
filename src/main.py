@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import traceback
-from datetime import date
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -10,24 +11,27 @@ import typer
 
 from agents import MonitoringWorkflowAgent
 from conf import settings
+from db.models import EmailDelivery
 from decorators import as_async, db
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
+from reports_cli import cleanup_app, reports_app
 from repositories import (
+    EmailDeliveryRepository,
     LLMCallRepository,
     LogAnalysisRepository,
     SitemapAnalysisRepository,
 )
-from schemas import SitemapAnalysisOut
+from schemas import EmailDeliveryIn, SitemapAnalysisOut
 from services.email import MonitoringEmailService, MonitoringFailureEmail
 from services.log_analyse import LogAnalysisService
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from services.sitemap import (
     AnalysisRunner,
     Crawler,
+    HTTPXSitemapFetcher,
     LLMSummaryBuilder,
-    SitemapHTTPClient,
     build_sitemap_url,
 )
 from utils.monitoring_context import load_private_monitoring_context
@@ -38,6 +42,8 @@ app = typer.Typer(
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
+app.add_typer(reports_app, name="reports")
+app.add_typer(cleanup_app, name="cleanup")
 
 logger = get_logger()
 
@@ -106,7 +112,16 @@ async def log_analysis(
         raise
     if send_email:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_log_analysis(result.analysis)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_log_analysis(result.analysis),
+            report_kind=EmailDelivery.ReportKind.LOG_ANALYSIS,
+            report_id=result.analysis.id,
+            analysis_date=result.analysis.analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.LOG,
+            recipients=_email_recipients(email_service, "log_recipients"),
+            subject=_email_subject(email_service, "_log_analysis_subject", result.analysis),
+        )
         result = result.model_copy(
             update={
                 "analysis": await log_analysis_repository.update(
@@ -176,33 +191,35 @@ async def sitemap_analysis(
     parsed_analysis_date: date = (
         date.fromisoformat(analysis_date) if analysis_date else date.today()
     )
-    site_domain: str = settings.SITE_DOMAIN.strip()
-    if not site_domain:
+    sitemap_public_host: str = settings.SITEMAP_PUBLIC_HOST.strip()
+    if not sitemap_public_host:
         typer.echo(
-            "SITE_DOMAIN is required to run sitemap analysis. "
-            "Set SITE_DOMAIN=example.com or SITE_DOMAIN=https://example.com.",
+            "SITEMAP_PUBLIC_HOST is required to run sitemap analysis. "
+            "Set SITEMAP_PUBLIC_HOST=example.com or SITEMAP_PUBLIC_HOST=https://example.com.",
             err=True,
         )
         raise typer.Exit(code=1)
-    parsed_site_domain = urlparse(site_domain if "://" in site_domain else f"https://{site_domain}")
+    parsed_site_domain = urlparse(
+        sitemap_public_host if "://" in sitemap_public_host else f"https://{sitemap_public_host}"
+    )
     if not parsed_site_domain.netloc or parsed_site_domain.path.rstrip("/"):
         typer.echo(
-            "SITE_DOMAIN must be a domain or origin, not a sitemap URL or path. "
-            "Set SITE_DOMAIN=example.com or "
-            "SITE_DOMAIN=https://example.com.",
+            "SITEMAP_PUBLIC_HOST must be a domain or origin, not a sitemap URL or path. "
+            "Set SITEMAP_PUBLIC_HOST=example.com or "
+            "SITEMAP_PUBLIC_HOST=https://example.com.",
             err=True,
         )
         raise typer.Exit(code=1)
 
-    sitemap_url: str = build_sitemap_url(site_domain)
+    sitemap_url: str = build_sitemap_url(sitemap_public_host)
     mcp_client = McpWorkflowClient(
         base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
     )
     crawler: Crawler = Crawler(
-        client=SitemapHTTPClient(),
+        client=HTTPXSitemapFetcher(),
         sitemap_url=sitemap_url,
-        site_domain=site_domain,
+        site_domain=sitemap_public_host,
     )
     sitemap_repository = SitemapAnalysisRepository()
     runner: AnalysisRunner = AnalysisRunner(
@@ -241,7 +258,16 @@ async def sitemap_analysis(
         )
     if send_email:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_sitemap_analysis(analysis)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_sitemap_analysis(analysis),
+            report_kind=EmailDelivery.ReportKind.SITEMAP_ANALYSIS,
+            report_id=analysis.id,
+            analysis_date=analysis.analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.SITEMAP,
+            recipients=_email_recipients(email_service, "sitemap_recipients"),
+            subject=_email_subject(email_service, "_sitemap_analysis_subject", analysis),
+        )
         analysis = await sitemap_repository.update(analysis, email_sent=True)
     typer.echo(
         "Completed sitemap analysis "
@@ -276,7 +302,17 @@ async def _send_command_failure_email(
     )
     try:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_monitoring_failure(failure)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_monitoring_failure(failure),
+            report_kind=EmailDelivery.ReportKind.MONITORING_FAILURE,
+            report_id=None,
+            analysis_date=analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.FAILURE,
+            recipients=_email_recipients(email_service, "log_recipients"),
+            subject=_email_subject(email_service, "_failure_subject", failure),
+            suppress_send_errors=True,
+        )
     except Exception as email_exc:
         logger.error(
             "failed to send monitoring failure email",
@@ -287,6 +323,73 @@ async def _send_command_failure_email(
                 "error": str(email_exc),
             },
         )
+
+
+async def _send_and_record_email_delivery(
+    *,
+    delivery_repository: EmailDeliveryRepository,
+    send_email: Callable[[], Awaitable[None]],
+    report_kind: str,
+    report_id: int | None,
+    analysis_date: date | None,
+    recipient_target: str,
+    recipients: list[str],
+    subject: str,
+    suppress_send_errors: bool = False,
+) -> None:
+    """Send one monitoring email and persist the delivery attempt outcome.
+
+    Successful sends create a `succeeded` row. Failed sends create a `failed`
+    row with the exception text, then re-raise unless the caller is already
+    handling a command-failure notification path.
+    """
+
+    try:
+        await send_email()
+    except Exception as exc:
+        await delivery_repository.create(
+            EmailDeliveryIn(
+                report_kind=report_kind,
+                report_id=report_id,
+                analysis_date=analysis_date,
+                recipient_target=recipient_target,
+                recipients=recipients,
+                subject=subject,
+                status=EmailDelivery.Status.FAILED,
+                error_message=str(exc),
+            )
+        )
+        if suppress_send_errors:
+            return
+        raise
+
+    await delivery_repository.create(
+        EmailDeliveryIn(
+            report_kind=report_kind,
+            report_id=report_id,
+            analysis_date=analysis_date,
+            recipient_target=recipient_target,
+            recipients=recipients,
+            subject=subject,
+            status=EmailDelivery.Status.SUCCEEDED,
+            sent_at=datetime.now(UTC),
+        )
+    )
+
+
+def _email_recipients(email_service: object, attribute_name: str) -> list[str]:
+    config = getattr(email_service, "config", None)
+    recipients = getattr(config, attribute_name, [])
+    return [str(recipient) for recipient in recipients]
+
+
+def _email_subject(email_service: object, method_name: str, context: object) -> str:
+    if not isinstance(email_service, MonitoringEmailService):
+        return ""
+    method = getattr(email_service, method_name, None)
+    if not callable(method):
+        return ""
+    return str(method(context))
 
 
 @app.command("check-mcp")
