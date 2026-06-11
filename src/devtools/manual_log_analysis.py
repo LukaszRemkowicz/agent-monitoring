@@ -10,12 +10,14 @@ import typer
 
 from agents import MonitoringWorkflowAgent
 from conf import settings
+from db.models import EmailDelivery
 from decorators import as_async, db
 from devtools.data_seed import seed_manual_fixture_initial_data
 from devtools.mcp import FakerMCP
 from llm import get_llm_provider
 from logging_config import configure_logging
-from repositories import LLMCallRepository, LogAnalysisRepository
+from main import _email_recipients, _email_subject, _send_and_record_email_delivery
+from repositories import EmailDeliveryRepository, LLMCallRepository, LogAnalysisRepository
 from services.email import MonitoringEmailService
 from services.log_analyse import LogAnalysisService
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
@@ -129,7 +131,16 @@ async def run_manual_fixture(
     )
     if send_email:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_log_analysis(result.analysis)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_log_analysis(result.analysis),
+            report_kind=EmailDelivery.ReportKind.LOG_ANALYSIS,
+            report_id=result.analysis.id,
+            analysis_date=result.analysis.analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.LOG,
+            recipients=_email_recipients(email_service, "log_recipients"),
+            subject=_email_subject(email_service, "_log_analysis_subject", result.analysis),
+        )
         result = result.model_copy(
             update={
                 "analysis": await log_analysis_repository.update(
