@@ -6,6 +6,7 @@ from typing import Any
 from tortoise.queryset import QuerySet
 
 from db.models import (
+    EmailDelivery,
     LogAnalysis,
     LogAnalysisLLMCall,
     RunStatus,
@@ -13,6 +14,8 @@ from db.models import (
 )
 from logging_config import get_logger
 from schemas import (
+    EmailDeliveryIn,
+    EmailDeliveryOut,
     LogAnalysisIn,
     LogAnalysisLLMCallIn,
     LogAnalysisLLMCallOut,
@@ -22,6 +25,30 @@ from schemas import (
 )
 
 logger = get_logger(__name__)
+
+
+class EmailDeliveryRepository:
+    """Database access boundary for monitoring email delivery attempts."""
+
+    model: type[EmailDelivery] = EmailDelivery
+
+    async def create(self, data: EmailDeliveryIn) -> EmailDeliveryOut:
+        delivery = await self.model.objects.create(**data.model_dump())
+        return EmailDeliveryOut.from_model(delivery)
+
+    async def recent(self, *, limit: int = 20) -> list[EmailDeliveryOut]:
+        deliveries: list[EmailDelivery] = (
+            await self.model.objects.all().order_by("-attempted_at", "-id").limit(limit)
+        )
+        return [EmailDeliveryOut.from_model(delivery) for delivery in deliveries]
+
+    async def failed(self, *, limit: int = 20) -> list[EmailDeliveryOut]:
+        deliveries: list[EmailDelivery] = (
+            await self.model.objects.filter(status=EmailDelivery.Status.FAILED)
+            .order_by("-attempted_at", "-id")
+            .limit(limit)
+        )
+        return [EmailDeliveryOut.from_model(delivery) for delivery in deliveries]
 
 
 class LogAnalysisRepository:

@@ -20,6 +20,86 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class EmailDelivery(DatabaseModel):
+    """One monitoring email delivery attempt."""
+
+    class ReportKind(StrEnum):
+        LOG_ANALYSIS = "log_analysis"
+        SITEMAP_ANALYSIS = "sitemap_analysis"
+        MONITORING_FAILURE = "monitoring_failure"
+
+    class RecipientTarget(StrEnum):
+        LOG = "log"
+        SITEMAP = "sitemap"
+        FAILURE = "failure"
+
+    class Status(StrEnum):
+        SUCCEEDED = "succeeded"
+        FAILED = "failed"
+
+    id = fields.IntField(primary_key=True)
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        db_index=True,
+        description="UTC timestamp when this email delivery attempt was recorded.",
+    )
+    report_kind = fields.CharField(
+        max_length=40,
+        db_index=True,
+        description="Report or notification kind this email attempted to deliver.",
+    )
+    report_id = fields.IntField(
+        null=True,
+        db_index=True,
+        description="Stored report id when this delivery belongs to a report row.",
+    )
+    analysis_date = fields.DateField(
+        null=True,
+        db_index=True,
+        description="Analysis date associated with this delivery attempt.",
+    )
+    recipient_target = fields.CharField(
+        max_length=40,
+        db_index=True,
+        description="Recipient group used for this delivery attempt.",
+    )
+    recipients: fields.JSONField[list[str]] = fields.JSONField(
+        default=list,
+        description="Email recipients used for this attempt.",
+    )
+    subject = fields.TextField(
+        default="",
+        description="Rendered email subject used for this attempt.",
+    )
+    status = fields.CharField(
+        max_length=20,
+        db_index=True,
+        description="Delivery attempt status.",
+    )
+    attempted_at = fields.DatetimeField(
+        auto_now_add=True,
+        db_index=True,
+        description="UTC timestamp when this delivery was attempted.",
+    )
+    sent_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when the delivery succeeded.",
+    )
+    provider_message_id = fields.CharField(
+        max_length=255,
+        null=True,
+        description="Provider message id when available.",
+    )
+    error_message = fields.TextField(
+        default="",
+        description="Error captured when the delivery attempt failed.",
+    )
+
+    class Meta:
+        table = "email_deliveries"
+        ordering = ["-attempted_at", "-id"]
+
+
 class LogAnalysisQuerySet(QuerySet["LogAnalysis"]):
     """Query helpers for log analyses."""
 

@@ -64,6 +64,15 @@ class FakeDatabaseLifespan:
         return None
 
 
+class FakeEmailDeliveryRepository:
+    def __init__(self) -> None:
+        self.created: list[Any] = []
+
+    async def create(self, data: Any) -> Any:
+        self.created.append(data)
+        return data
+
+
 def _patch_report_command_lifespan(mocker: MockerFixture) -> None:
     def fake_database_lifespan() -> FakeDatabaseLifespan:
         return FakeDatabaseLifespan()
@@ -104,6 +113,7 @@ def _patch_log_analysis_command_dependencies(
         agent=object(),
         llm_provider=object(),
         repository=FakeLogAnalysisRepository(),
+        email_delivery_repository=FakeEmailDeliveryRepository(),
         llm_call_repository=object(),
         email_service=email_service,
         service_calls=service_calls,
@@ -137,6 +147,11 @@ def _patch_log_analysis_command_dependencies(
         main,
         "LLMCallRepository",
         return_value=dependencies["llm_call_repository"],
+    )
+    dependencies["email_delivery_repository_constructor"] = mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=dependencies["email_delivery_repository"],
     )
     dependencies["email_service_factory"] = mocker.patch.object(
         main.MonitoringEmailService,
@@ -698,6 +713,12 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
     assert "strong_llm_provider" not in dependencies["agent_constructor"].call_args.kwargs
     dependencies["email_service"].send_log_analysis.assert_awaited_once()
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "log_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "log"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 def test_log_analysis_command_sends_failure_email_on_service_error(
@@ -726,6 +747,41 @@ def test_log_analysis_command_sends_failure_email_on_service_error(
     assert failure.error_type == "RuntimeError"
     assert failure.error_message == "MCP workflow unavailable"
     assert "RuntimeError: MCP workflow unavailable" in failure.traceback_text
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
+
+
+def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
+    mocker: MockerFixture,
+) -> None:
+    class FakeLogAnalysisService:
+        async def run_log_analysis(
+            self,
+            *,
+            analysis_date: date,
+            log_window: LogCollectionWindow,
+            force: bool,
+        ) -> LogAnalysisWorkflowResult:
+            return _log_analysis_result(analysis_date)
+
+    fake_service = FakeLogAnalysisService()
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
+    dependencies["email_service"].send_log_analysis.side_effect = RuntimeError("SMTP timeout")
+
+    result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert dependencies["repository"].updated == []
+    delivery = dependencies["email_delivery_repository"].created[0]
+    assert delivery.report_kind == "log_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "log"
+    assert delivery.status == "failed"
+    assert delivery.error_message == "SMTP timeout"
 
 
 def test_log_analysis_command_defaults_analysis_date_to_today(
@@ -859,7 +915,13 @@ def test_sitemap_analysis_command_calls_sitemap_service(
         return_value=llm_provider,
     )
     email_service = AsyncMock()
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
 
     with override_settings(SITE_DOMAIN="example.com"):
@@ -886,6 +948,12 @@ def test_sitemap_analysis_command_calls_sitemap_service(
     }
     email_service.send_sitemap_analysis.assert_awaited_once()
     assert fake_repository.updated[0][1] == {"email_sent": True}
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "sitemap_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "sitemap"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 def test_sitemap_analysis_command_sends_failure_email_on_service_error(
@@ -911,8 +979,14 @@ def test_sitemap_analysis_command_sends_failure_email_on_service_error(
     fake_runner = FakeAnalysisRunner()
     mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
     mocker.patch.object(main, "get_llm_provider", return_value=object())
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(
         main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
     )
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
@@ -928,6 +1002,63 @@ def test_sitemap_analysis_command_sends_failure_email_on_service_error(
     assert failure.error_type == "RuntimeError"
     assert failure.error_message == "sitemap fetch failed"
     assert "RuntimeError: sitemap fetch failed" in failure.traceback_text
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
+
+
+def test_sitemap_analysis_command_records_failed_delivery_when_report_email_fails(
+    mocker: MockerFixture,
+) -> None:
+    class FakeSitemapAnalysisRepository:
+        def __init__(self) -> None:
+            self.updated: list[tuple[SitemapAnalysisOut, dict[str, Any]]] = []
+
+        async def update(
+            self,
+            analysis: SitemapAnalysisOut,
+            **updates: Any,
+        ) -> SitemapAnalysisOut:
+            self.updated.append((analysis, updates))
+            return analysis.model_copy(update=updates)
+
+    class FakeAnalysisRunner:
+        async def run(
+            self,
+            *,
+            analysis_date: date,
+            force: bool,
+        ) -> SitemapAnalysisOut:
+            return _sitemap_analysis_out(analysis_date)
+
+    fake_repository = FakeSitemapAnalysisRepository()
+    email_delivery_repository = FakeEmailDeliveryRepository()
+    mocker.patch.object(main, "AnalysisRunner", return_value=FakeAnalysisRunner())
+    mocker.patch.object(main, "get_llm_provider", return_value=object())
+    mocker.patch.object(main, "SitemapAnalysisRepository", return_value=fake_repository)
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
+    email_service = AsyncMock()
+    email_service.send_sitemap_analysis.side_effect = RuntimeError("SMTP timeout")
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    with override_settings(SITE_DOMAIN="example.com"):
+        result = runner.invoke(main.app, ["sitemap-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code != 0
+    assert fake_repository.updated == []
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "sitemap_analysis"
+    assert delivery.report_id == 1
+    assert delivery.recipient_target == "sitemap"
+    assert delivery.status == "failed"
+    assert delivery.error_message == "SMTP timeout"
 
 
 def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
@@ -959,8 +1090,14 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
     fake_runner = FakeAnalysisRunner()
     mocker.patch.object(main, "AnalysisRunner", return_value=fake_runner)
     mocker.patch.object(main, "get_llm_provider", return_value=object())
+    email_delivery_repository = FakeEmailDeliveryRepository()
     mocker.patch.object(
         main, "SitemapAnalysisRepository", return_value=FakeSitemapAnalysisRepository()
+    )
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
     )
     email_service = AsyncMock()
     mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
@@ -973,6 +1110,12 @@ def test_sitemap_analysis_command_exits_nonzero_for_failed_analysis_row(
     email_service.send_monitoring_failure.assert_awaited_once()
     failure = email_service.send_monitoring_failure.call_args.args[0]
     assert failure.error_message == "sitemap audit failed"
+    delivery = email_delivery_repository.created[0]
+    assert delivery.report_kind == "monitoring_failure"
+    assert delivery.report_id is None
+    assert delivery.recipient_target == "failure"
+    assert delivery.status == "succeeded"
+    assert delivery.analysis_date == date(2026, 5, 19)
 
 
 @pytest.mark.asyncio

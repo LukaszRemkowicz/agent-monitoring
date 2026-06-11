@@ -4,13 +4,16 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from db.models import LogAnalysis, LogAnalysisLLMCall, SitemapAnalysis
+from db.models import EmailDelivery, LogAnalysis, LogAnalysisLLMCall, SitemapAnalysis
 from repositories import (
+    EmailDeliveryRepository,
     LLMCallRepository,
     LogAnalysisRepository,
     SitemapAnalysisRepository,
 )
 from schemas import (
+    EmailDeliveryIn,
+    EmailDeliveryOut,
     LogAnalysisIn,
     LogAnalysisLLMCallIn,
     LogAnalysisOut,
@@ -18,6 +21,49 @@ from schemas import (
     SitemapAnalysisOut,
 )
 from tests.factories import LogAnalysisFactory, SitemapAnalysisFactory
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_repository_records_attempts_and_filters_recent_failures() -> None:
+    repository = EmailDeliveryRepository()
+    sent_at = datetime(2026, 5, 19, 8, 30, tzinfo=UTC)
+
+    succeeded = await repository.create(
+        EmailDeliveryIn(
+            report_kind=EmailDelivery.ReportKind.LOG_ANALYSIS,
+            report_id=42,
+            analysis_date=date(2026, 5, 19),
+            recipient_target=EmailDelivery.RecipientTarget.LOG,
+            recipients=["ops@example.com"],
+            subject="[PROD][INFO] Daily Log Analysis - 2026-05-19",
+            status=EmailDelivery.Status.SUCCEEDED,
+            sent_at=sent_at,
+            provider_message_id="smtp-message-1",
+        )
+    )
+    failed = await repository.create(
+        EmailDeliveryIn(
+            report_kind=EmailDelivery.ReportKind.SITEMAP_ANALYSIS,
+            report_id=7,
+            analysis_date=date(2026, 5, 20),
+            recipient_target=EmailDelivery.RecipientTarget.SITEMAP,
+            recipients=["seo@example.com"],
+            subject="[PROD][CRITICAL] Sitemap Analysis - 2026-05-20",
+            status=EmailDelivery.Status.FAILED,
+            error_message="SMTP timeout",
+        )
+    )
+
+    recent = await repository.recent(limit=5)
+    failures = await repository.failed(limit=5)
+
+    assert isinstance(succeeded, EmailDeliveryOut)
+    assert succeeded.id > 0
+    assert succeeded.sent_at == sent_at
+    assert succeeded.provider_message_id == "smtp-message-1"
+    assert failed.error_message == "SMTP timeout"
+    assert [delivery.id for delivery in recent] == [failed.id, succeeded.id]
+    assert [delivery.id for delivery in failures] == [failed.id]
 
 
 @pytest.mark.asyncio

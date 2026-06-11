@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import traceback
-from datetime import date
+from collections.abc import Awaitable, Callable
+from datetime import UTC, date, datetime
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -10,17 +11,19 @@ import typer
 
 from agents import MonitoringWorkflowAgent
 from conf import settings
+from db.models import EmailDelivery
 from decorators import as_async, db
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
 from reports_cli import cleanup_app, reports_app
 from repositories import (
+    EmailDeliveryRepository,
     LLMCallRepository,
     LogAnalysisRepository,
     SitemapAnalysisRepository,
 )
-from schemas import SitemapAnalysisOut
+from schemas import EmailDeliveryIn, SitemapAnalysisOut
 from services.email import MonitoringEmailService, MonitoringFailureEmail
 from services.log_analyse import LogAnalysisService
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
@@ -109,7 +112,16 @@ async def log_analysis(
         raise
     if send_email:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_log_analysis(result.analysis)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_log_analysis(result.analysis),
+            report_kind=EmailDelivery.ReportKind.LOG_ANALYSIS,
+            report_id=result.analysis.id,
+            analysis_date=result.analysis.analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.LOG,
+            recipients=_email_recipients(email_service, "log_recipients"),
+            subject=_email_subject(email_service, "_log_analysis_subject", result.analysis),
+        )
         result = result.model_copy(
             update={
                 "analysis": await log_analysis_repository.update(
@@ -244,7 +256,16 @@ async def sitemap_analysis(
         )
     if send_email:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_sitemap_analysis(analysis)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_sitemap_analysis(analysis),
+            report_kind=EmailDelivery.ReportKind.SITEMAP_ANALYSIS,
+            report_id=analysis.id,
+            analysis_date=analysis.analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.SITEMAP,
+            recipients=_email_recipients(email_service, "sitemap_recipients"),
+            subject=_email_subject(email_service, "_sitemap_analysis_subject", analysis),
+        )
         analysis = await sitemap_repository.update(analysis, email_sent=True)
     typer.echo(
         "Completed sitemap analysis "
@@ -279,7 +300,17 @@ async def _send_command_failure_email(
     )
     try:
         email_service = MonitoringEmailService.create_default()
-        await email_service.send_monitoring_failure(failure)
+        await _send_and_record_email_delivery(
+            delivery_repository=EmailDeliveryRepository(),
+            send_email=lambda: email_service.send_monitoring_failure(failure),
+            report_kind=EmailDelivery.ReportKind.MONITORING_FAILURE,
+            report_id=None,
+            analysis_date=analysis_date,
+            recipient_target=EmailDelivery.RecipientTarget.FAILURE,
+            recipients=_email_recipients(email_service, "log_recipients"),
+            subject=_email_subject(email_service, "_failure_subject", failure),
+            suppress_send_errors=True,
+        )
     except Exception as email_exc:
         logger.error(
             "failed to send monitoring failure email",
@@ -290,6 +321,73 @@ async def _send_command_failure_email(
                 "error": str(email_exc),
             },
         )
+
+
+async def _send_and_record_email_delivery(
+    *,
+    delivery_repository: EmailDeliveryRepository,
+    send_email: Callable[[], Awaitable[None]],
+    report_kind: str,
+    report_id: int | None,
+    analysis_date: date | None,
+    recipient_target: str,
+    recipients: list[str],
+    subject: str,
+    suppress_send_errors: bool = False,
+) -> None:
+    """Send one monitoring email and persist the delivery attempt outcome.
+
+    Successful sends create a `succeeded` row. Failed sends create a `failed`
+    row with the exception text, then re-raise unless the caller is already
+    handling a command-failure notification path.
+    """
+
+    try:
+        await send_email()
+    except Exception as exc:
+        await delivery_repository.create(
+            EmailDeliveryIn(
+                report_kind=report_kind,
+                report_id=report_id,
+                analysis_date=analysis_date,
+                recipient_target=recipient_target,
+                recipients=recipients,
+                subject=subject,
+                status=EmailDelivery.Status.FAILED,
+                error_message=str(exc),
+            )
+        )
+        if suppress_send_errors:
+            return
+        raise
+
+    await delivery_repository.create(
+        EmailDeliveryIn(
+            report_kind=report_kind,
+            report_id=report_id,
+            analysis_date=analysis_date,
+            recipient_target=recipient_target,
+            recipients=recipients,
+            subject=subject,
+            status=EmailDelivery.Status.SUCCEEDED,
+            sent_at=datetime.now(UTC),
+        )
+    )
+
+
+def _email_recipients(email_service: object, attribute_name: str) -> list[str]:
+    config = getattr(email_service, "config", None)
+    recipients = getattr(config, attribute_name, [])
+    return [str(recipient) for recipient in recipients]
+
+
+def _email_subject(email_service: object, method_name: str, context: object) -> str:
+    if not isinstance(email_service, MonitoringEmailService):
+        return ""
+    method = getattr(email_service, method_name, None)
+    if not callable(method):
+        return ""
+    return str(method(context))
 
 
 @app.command("check-mcp")
