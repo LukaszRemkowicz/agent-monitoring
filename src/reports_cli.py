@@ -195,14 +195,35 @@ async def reports_attention(
 @as_async()
 @db
 async def cleanup_reports(
-    retention_days: int = typer.Option(
-        settings.RETENTION_DAYS,
+    retention_days: int | None = typer.Option(
+        None,
         "--retention-days",
         min=1,
         help=(
-            "Delete report rows older than this many days, except protected "
-            "recent successful log-analysis history."
+            "Shared fallback retention in days for log and sitemap reports. "
+            "Defaults to RETENTION_DAYS when category-specific options are omitted."
         ),
+    ),
+    log_retention_days: int | None = typer.Option(
+        None,
+        "--log-retention-days",
+        min=1,
+        help=(
+            "Delete log-analysis report rows older than this many days, except "
+            "protected recent successful log-analysis history."
+        ),
+    ),
+    sitemap_retention_days: int | None = typer.Option(
+        None,
+        "--sitemap-retention-days",
+        min=1,
+        help="Delete sitemap-analysis report rows older than this many days.",
+    ),
+    protected_log_history_count: int = typer.Option(
+        settings.LOG_ANALYSIS_PROTECTED_HISTORY_COUNT,
+        "--protected-log-history-count",
+        min=0,
+        help="Number of recent successful log-analysis reports to preserve for history.",
     ),
     confirm: bool = typer.Option(
         False,
@@ -217,8 +238,26 @@ async def cleanup_reports(
 ) -> None:
     """Dry-run or delete old report rows while keeping recent successful log history."""
 
+    shared_retention_days = retention_days or settings.RETENTION_DAYS
+    effective_log_retention_days = (
+        log_retention_days
+        if log_retention_days is not None
+        else getattr(settings, "LOG_ANALYSIS_RETENTION_DAYS", shared_retention_days)
+    )
+    effective_sitemap_retention_days = (
+        sitemap_retention_days
+        if sitemap_retention_days is not None
+        else getattr(settings, "SITEMAP_ANALYSIS_RETENTION_DAYS", shared_retention_days)
+    )
+    if retention_days is not None:
+        if log_retention_days is None:
+            effective_log_retention_days = retention_days
+        if sitemap_retention_days is None:
+            effective_sitemap_retention_days = retention_days
     result = await MonitoringCleanupService().cleanup_reports(
-        retention_days=retention_days,
+        log_retention_days=effective_log_retention_days,
+        sitemap_retention_days=effective_sitemap_retention_days,
+        protected_log_history_count=protected_log_history_count,
         dry_run=not confirm,
     )
     if json_output:
@@ -226,8 +265,12 @@ async def cleanup_reports(
         return
     label = "Cleanup reports dry run" if result["dry_run"] else "Deleted cleanup candidates"
     counts = result["counts"]
+    result_retention_days = result["retention_days"]
     typer.echo(
-        f"{label}: retention_days={result['retention_days']} "
+        f"{label}: "
+        f"log_retention_days={result_retention_days['log_analyses']} "
+        f"sitemap_retention_days={result_retention_days['sitemap_analyses']} "
+        f"protected_log_history={result['protected_log_history_count']} "
         f"log_analyses={counts['log_analyses']} "
         f"sitemap_analyses={counts['sitemap_analyses']} "
         f"total={result['total']}"

@@ -202,10 +202,17 @@ doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
 ```
 
 The cleanup command is a dry run unless `--confirm` is provided. It uses
-`RETENTION_DAYS` by default, deletes old log reports and sitemap reports, and
-preserves recent successful log-analysis history needed for trend comparison.
-It does not delete log-analysis LLM/tool-call audit rows. Add `--json` for
-machine-readable output.
+`RETENTION_DAYS` as the shared fallback, with
+`LOG_ANALYSIS_RETENTION_DAYS` and `SITEMAP_ANALYSIS_RETENTION_DAYS` available
+when the report categories need different windows. It deletes old log reports
+and sitemap reports, but preserves the most recent successful log-analysis
+history rows needed for trend comparison. That protected count defaults to
+`LOG_ANALYSIS_PROTECTED_HISTORY_COUNT=5`.
+
+The report cleanup command does not delete log-analysis LLM/tool-call audit
+rows. `CRITICAL`, failed, and unsent rows currently use the same category
+cutoff as other report rows unless they are part of protected successful log
+history. Add `--json` for machine-readable output.
 
 ### 7. Install Cron
 
@@ -261,6 +268,8 @@ Dry-run and confirm local retention cleanup:
 
 ```bash
 docker compose run --rm monitoring-app monitoring cleanup reports
+docker compose run --rm monitoring-app monitoring cleanup reports \
+  --log-retention-days 90 --sitemap-retention-days 30
 docker compose run --rm monitoring-app monitoring cleanup reports --confirm
 ```
 
@@ -271,6 +280,11 @@ Useful flags:
 - `--no-email`: run and persist the report without sending email.
 - `--confirm`: delete retention cleanup candidates; cleanup commands dry-run
   without it.
+- `--retention-days`: shared fallback retention window for report cleanup.
+- `--log-retention-days`: log-analysis report cleanup window.
+- `--sitemap-retention-days`: sitemap-analysis report cleanup window.
+- `--protected-log-history-count`: recent successful log-analysis rows to keep
+  for trend history.
 - `--compare-history`: compare current grouped errors with the latest saved
   successful log-analysis run before the LLM call.
 - `--no-compare-history`: disable the Python history comparison shortcut.
