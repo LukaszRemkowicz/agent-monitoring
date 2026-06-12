@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-}
+      POSTGRES_USER: ${DATABASE_USER:-}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/var/lib/agent-monitoring/postgresql}:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: prod-agent-monitoring:${TAG:?TAG is required}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TZ: Europe/Warsaw
+      ENVIRONMENT: prod
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-}
+      DATABASE_USER: ${DATABASE_USER:-}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-}
+      LOGS_DIR: ${LOGS_DIR:-/var/log/agent-monitoring}
+      PROJECT_CONTEXT_PROMPT_PATH: ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}
+      MCP_URL: ${MCP_URL:-}
+      MCP_WORKFLOW_JWT: ${MCP_WORKFLOW_JWT:-}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-gpt-4.1-mini}
+      LLM_FAST_MODEL: ${LLM_FAST_MODEL:-gpt-4.1-mini}
+      LLM_STRONG_MODEL: ${LLM_STRONG_MODEL:-gpt-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-smtp}
+      EMAIL_HOST: ${EMAIL_HOST:-smtp.gmail.com}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
+      EMAIL_USERNAME: ${EMAIL_USERNAME:-}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TO: ${EMAIL_TO:-}
+      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
+    volumes:
+      - ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:ro
+      - ${LOGS_DIR:-/var/log/agent-monitoring}:${LOGS_DIR:-/var/log/agent-monitoring}
+    command: ["log_analysis"]

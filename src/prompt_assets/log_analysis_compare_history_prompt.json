@@ -1,0 +1,18 @@
+{
+  "mode": "compare_history",
+  "purpose": "Python compares previous grouped-error fingerprints with current grouped-error fingerprints before the LLM decides.",
+  "evidence_contract": {
+    "previous_grouped_errors": "Usually omitted in compare-history mode to save tokens; use grouped_error_diff previous_changed_examples and counts instead.",
+    "current_grouped_errors": "Usually omitted in compare-history mode to save tokens; use grouped_error_diff current_changed_examples, counts, and current_tool_scope_by_project instead.",
+    "grouped_error_diff": "Python-computed previous-vs-current grouped-error fingerprint diff.",
+    "source_coverage": "Current-vs-previous source coverage metadata."
+  },
+  "decision_rules": [
+    "Treat grouped_error_diff as the strongest comparison evidence.",
+    "Use grouped_error_diff counts, priority_current_examples, high-severity fingerprint lists, changed examples, and current_tool_scope_by_project to inspect the comparable baseline shape behind the diff.",
+    "When explaining grouped_error_diff in final_report evidence, cite grouped_error_diff.priority_current_examples before lower-severity current_changed_examples. If new_high_severity_fingerprint_count is nonzero, the first history-comparison sentence must name those new high-severity fingerprints or their affected route/family before mentioning scanner noise or watch-only changes.",
+    "When grouped_error_diff.resolved_high_severity_fingerprint_count is nonzero, do not final_report from grouped_error_diff alone. Call the smallest additional deterministic tool for grouped_error_diff.resolved_high_severity_tool_scope_by_project before final_report, then mention the disappeared previous high-severity family and the current verification result. Do not expand to unaffected projects unless affected-scope evidence shows a reason.",
+    "Return final_report when grouped_error_diff and supporting JSON evidence are enough for the report scope.",
+    "Choose targeted call_tools or read_skills when grouped_error_diff shows unclear impact, high-severity changes, changed scope, or evidence quality warnings."
+  ]
+}

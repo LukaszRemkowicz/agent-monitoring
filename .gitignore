@@ -1,0 +1,55 @@
+doc/analysis/
+docs/analysis/
+infra/docs/analysis/
+
+# Local agent workspace
+.agent/
+.agents/
+
+# Private monitoring context
+private/
+
+# OS/editor files
+.DS_Store
+.idea/
+*.swp
+*.swo
+*~
+
+# Python bytecode and caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.safety-project.ini
+.tox/
+.venv/
+.venv*/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python build and package artifacts
+.eggs/
+*.egg-info/
+build/
+dist/
+htmlcov/
+site/
+
+# Test, coverage, and type-check reports
+.coverage
+.coverage.*
+coverage.xml
+junit.xml
+test-results/
+
+# Runtime and local environment files
+.env
+.env.*
+*.log
+logs/
+tmp/
+temp/

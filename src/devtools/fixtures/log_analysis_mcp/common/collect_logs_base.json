@@ -1,0 +1,168 @@
+{
+  "action": "collect_logs",
+  "workspace": "workflow",
+  "session_id": "fixture-session-id",
+  "requested_project_names": ["demo-shop", "host-security"],
+  "next_step_tips": [
+    "Use group_errors for the collected project/source scope before final_report.",
+    "Use grep_log_snapshot or inspect_proxy_activity when grouped errors show new high-severity evidence."
+  ],
+  "projects": [
+    {
+      "requested_project_name": "demo-shop",
+      "project_name": "demo-shop",
+      "workspace": "workflow",
+      "snapshot_dir": "workflow/demo-shop/2026-05-19",
+      "requested_source_keys": ["all"],
+      "requested_since": "2026-05-19T00:00:00Z",
+      "requested_until": "2026-05-20T00:00:00Z",
+      "warnings": [],
+      "retry_tips": [],
+      "unknown_requested_source_keys": [],
+      "resolved_source_keys": [
+        "nginx",
+        "traefik",
+        "backend",
+        "frontend",
+        "worker",
+        "scheduler"
+      ],
+      "collected_at": "2026-05-20T00:01:00Z",
+      "sources": [
+        {
+          "source_key": "nginx",
+          "source_type": "file",
+          "target": "/var/log/nginx/access.log",
+          "description": "Demo shop nginx access log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 920,
+          "byte_count": 65536,
+          "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "traefik",
+          "source_type": "file",
+          "target": "/var/log/traefik/access.log",
+          "description": "Demo shop Traefik access log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 760,
+          "byte_count": 49152,
+          "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "backend",
+          "source_type": "docker",
+          "target": "demo-shop-api",
+          "description": "Demo shop backend API logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 180,
+          "byte_count": 12288,
+          "output_file": "workflow/demo-shop/2026-05-19/backend.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "frontend",
+          "source_type": "docker",
+          "target": "demo-shop-web",
+          "description": "Demo shop frontend SSR logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 90,
+          "byte_count": 8192,
+          "output_file": "workflow/demo-shop/2026-05-19/frontend.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "worker",
+          "source_type": "docker",
+          "target": "demo-shop-worker",
+          "description": "Demo shop Celery worker logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 75,
+          "byte_count": 6144,
+          "output_file": "workflow/demo-shop/2026-05-19/worker.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "scheduler",
+          "source_type": "docker",
+          "target": "demo-shop-scheduler",
+          "description": "Demo shop Celery beat logs",
+          "stream": "stdout",
+          "status": "collected",
+          "line_count": 22,
+          "byte_count": 2048,
+          "output_file": "workflow/demo-shop/2026-05-19/scheduler.log",
+          "error": null,
+          "retry_tips": []
+        }
+      ]
+    },
+    {
+      "requested_project_name": "host-security",
+      "project_name": "host-security",
+      "workspace": "workflow",
+      "snapshot_dir": "workflow/host-security/2026-05-19",
+      "requested_source_keys": ["all"],
+      "requested_since": "2026-05-19T00:00:00Z",
+      "requested_until": "2026-05-20T00:00:00Z",
+      "warnings": [],
+      "retry_tips": [],
+      "unknown_requested_source_keys": [],
+      "resolved_source_keys": ["fail2ban", "edge_access", "proxy_access"],
+      "collected_at": "2026-05-20T00:01:00Z",
+      "sources": [
+        {
+          "source_key": "fail2ban",
+          "source_type": "file",
+          "target": "/var/log/fail2ban.log",
+          "description": "Fail2ban host security log",
+          "stream": null,
+          "status": "collected",
+          "line_count": 64,
+          "byte_count": 4096,
+          "output_file": "workflow/host-security/2026-05-19/fail2ban.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "edge_access",
+          "source_type": "file",
+          "target": "/var/log/nginx/access.log",
+          "description": "Host nginx access log for security probes",
+          "stream": null,
+          "status": "collected",
+          "line_count": 920,
+          "byte_count": 65536,
+          "output_file": "workflow/host-security/2026-05-19/edge_access.log",
+          "error": null,
+          "retry_tips": []
+        },
+        {
+          "source_key": "proxy_access",
+          "source_type": "file",
+          "target": "/var/log/traefik/access.log",
+          "description": "Host Traefik access log for edge probes",
+          "stream": null,
+          "status": "collected",
+          "line_count": 760,
+          "byte_count": 49152,
+          "output_file": "workflow/host-security/2026-05-19/proxy_access.log",
+          "error": null,
+          "retry_tips": []
+        }
+      ]
+    }
+  ]
+}
