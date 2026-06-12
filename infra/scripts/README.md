@@ -65,7 +65,7 @@ Build behavior:
 - refuses to build with uncommitted changes unless `EMERGENCY=true`
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
-- prunes older local images while keeping recent history
+- prunes older local images, keeping only the built tag
 
 ## Deploy
 

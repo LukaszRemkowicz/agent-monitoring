@@ -234,6 +234,21 @@ def _group_errors_result(
     }
 
 
+def test_group_errors_arguments_skip_unavailable_snapshot_sources() -> None:
+    current_logs = CollectLogsArtifact.model_validate(
+        build_collect_logs_artifact_payload(
+            resolved_source_keys=["backend", "nginx"],
+            include_unavailable_nginx=True,
+        )
+    )
+
+    arguments = MonitoringWorkflowAgent._build_group_errors_arguments_from_current_logs(
+        current_logs
+    )
+
+    assert arguments == [{"project_name": "demo-shop", "source_keys": ["backend"]}]
+
+
 class FakeMcpWorkflowClientWithoutProjects(FakeMcpWorkflowClient):
     async def list_projects(self) -> list[ProjectManifestSummary]:
         self.calls.append(McpToolName.LIST_PROJECTS)
@@ -310,7 +325,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend', 'nginx']}"
+            "'source_keys': ['backend']}"
         ),
         "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
@@ -627,9 +642,7 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
     assert user_prompt["evidence"]["prompt_compacted"].get("current_grouped_errors") is None
     grouped_error_diff = user_prompt["evidence"]["prompt_compacted"]["grouped_error_diff"]
     assert grouped_error_diff["available"] is True
-    assert grouped_error_diff["current_tool_scope_by_project"] == {
-        "demo-shop": ["backend", "nginx"]
-    }
+    assert grouped_error_diff["current_tool_scope_by_project"] == {"demo-shop": ["backend"]}
     assert grouped_error_diff["previous_group_count"] == 1
     assert grouped_error_diff["current_group_count"] == 0
     assert grouped_error_diff["resolved_fingerprint_count"] == 1
@@ -795,7 +808,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     assert user_prompt["evidence"]["current_grouped_errors"]["label"] == "current"
     assert user_prompt["evidence"]["current_grouped_errors"]["run_count"] == 1
     assert user_prompt["evidence"]["current_grouped_errors"]["tool_scope_by_project"] == {
-        "demo-shop": ["backend", "nginx"],
+        "demo-shop": ["backend"],
     }
     decision_prompt = user_prompt["evidence"]["decision_prompt"]
     assert decision_prompt["mode"] == "no_compare_history"
@@ -1104,7 +1117,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend', 'nginx']}"
+            "'source_keys': ['backend']}"
         ),
     ]
     user_prompt = json.loads(context.prompt.user_prompt)
@@ -1113,9 +1126,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
     assert user_prompt["evidence_mode"] == "current_grouped_errors_available"
     grouped_error_diff = user_prompt["evidence"]["prompt_compacted"]["grouped_error_diff"]
     assert grouped_error_diff["available"] is True
-    assert grouped_error_diff["current_tool_scope_by_project"] == {
-        "demo-shop": ["backend", "nginx"]
-    }
+    assert grouped_error_diff["current_tool_scope_by_project"] == {"demo-shop": ["backend"]}
     assert grouped_error_diff["previous_group_count"] == 1
     assert grouped_error_diff["current_group_count"] == 1
     assert grouped_error_diff["persisting_fingerprint_count"] == 1
@@ -1924,7 +1935,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend', 'nginx']}"
+            "'source_keys': ['backend']}"
         ),
         "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
