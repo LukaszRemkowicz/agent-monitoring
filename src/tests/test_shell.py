@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
+from cli import shell
+
 
 def test_developer_shell_bootstraps_monitoring_namespace(
     mocker: MockerFixture,
@@ -23,10 +25,8 @@ def test_developer_shell_bootstraps_monitoring_namespace(
     async def fake_close_database() -> None:
         calls.append("close")
 
-    from scripts import shell
-
-    mocker.patch("scripts.shell.initialize_database", fake_initialize_database)
-    mocker.patch("scripts.shell.close_database", fake_close_database)
+    mocker.patch("cli.shell.initialize_database", fake_initialize_database)
+    mocker.patch("cli.shell.close_database", fake_close_database)
 
     result = shell.run_shell(start_repl=False)
 
@@ -53,7 +53,7 @@ def test_developer_shell_defaults_to_compose_host_database_port() -> None:
         [
             sys.executable,
             "-c",
-            ("from scripts import shell; print(shell.TORTOISE_ORM['connections']['default'])"),
+            ("from cli import shell; print(shell.TORTOISE_ORM['connections']['default'])"),
         ],
         capture_output=True,
         check=True,
@@ -67,12 +67,10 @@ def test_developer_shell_defaults_to_compose_host_database_port() -> None:
 def test_developer_shell_suppresses_ipython_cross_loop_close_error(
     mocker: MockerFixture,
 ) -> None:
-    from scripts import shell
-
     close_database = mocker.AsyncMock(
         side_effect=RuntimeError("got Future <Future pending> attached to a different loop")
     )
-    mocker.patch("scripts.shell.close_database", close_database)
+    mocker.patch("cli.shell.close_database", close_database)
 
     shell.close_shell_database()
 

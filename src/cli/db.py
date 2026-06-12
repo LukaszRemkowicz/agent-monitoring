@@ -7,6 +7,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from cli.utils import run_prod_compose_command, should_bridge_to_prod_compose
+
 MIGRATIONS_DIR = Path("migrations/models")
 
 INIT_MIGRATIONS_REQUIRED_MESSAGES = (
@@ -14,6 +16,13 @@ INIT_MIGRATIONS_REQUIRED_MESSAGES = (
     "You may need to run `aerich init-db` first",
 )
 OLD_MIGRATION_FORMAT_MESSAGE = "Old format of migration file detected"
+LOCAL_DB_CONNECTION_REFUSED_MARKERS = (
+    "ConnectionRefusedError",
+    "Connect call failed ('127.0.0.1'",
+    'Connect call failed ("127.0.0.1"',
+    "Connect call failed ('localhost'",
+    'Connect call failed ("localhost"',
+)
 
 
 def _run_aerich(
@@ -28,6 +37,14 @@ def _run_aerich(
         check=check,
         text=True,
     )
+
+
+def _should_run_migrate_in_compose() -> bool:
+    return should_bridge_to_prod_compose()
+
+
+def _run_migrate_in_compose(args: Sequence[str]) -> int:
+    return run_prod_compose_command(["migrate", *args])
 
 
 def _replay_output(result: subprocess.CompletedProcess[str]) -> None:
@@ -70,6 +87,9 @@ def _number_generated_migration(
 
 
 def _run_makemigrations(args: Sequence[str]) -> int:
+    if should_bridge_to_prod_compose():
+        return run_prod_compose_command(["makemigrations", *args])
+
     migration_args = list(args)
     if len(migration_args) != 1 or migration_args[0].startswith("-"):
         sys.stderr.write("Usage: makemigrations <migration_name>\n")
@@ -118,16 +138,31 @@ def _write_migration_failure_message(output: str) -> None:
             "For renames, use a rename-style migration so existing data is preserved.\n"
         )
         return
-    sys.stderr.write("\nRun `uv run migrate` directly to inspect the full Aerich error.\n")
+    if any(marker in output for marker in LOCAL_DB_CONNECTION_REFUSED_MARKERS):
+        sys.stderr.write(
+            "\n"
+            "The migration could not connect to the configured database host.\n"
+            "On the VPS, host-side `uv run migrate` uses local DATABASE_HOST/"
+            "DATABASE_PORT values and may try 127.0.0.1:5438, while production "
+            "Postgres is reached from the Compose app container as db:5432.\n"
+            "Run `doppler run -- uv run migrate` to execute "
+            "migrations in the production Compose runtime.\n"
+        )
+        return
+    sys.stderr.write("\nAerich output above contains the migration failure details.\n")
 
 
 def _run_migrate(args: Sequence[str]) -> int:
+    if _should_run_migrate_in_compose():
+        return _run_migrate_in_compose(args)
+
     result = _run_aerich(["upgrade", *args], capture_output=True)
     if result.returncode == 0:
         _replay_output(result)
         return result.returncode
 
     output = f"{result.stdout or ''}{result.stderr or ''}"
+    _replay_output(result)
     _write_migration_failure_message(output)
     return result.returncode
 
@@ -138,7 +173,3 @@ def makemigrations() -> None:
 
 def migrate() -> None:
     raise SystemExit(_run_migrate(sys.argv[1:]))
-
-
-def test() -> None:
-    raise SystemExit(subprocess.run(["pytest", *sys.argv[1:]]).returncode)

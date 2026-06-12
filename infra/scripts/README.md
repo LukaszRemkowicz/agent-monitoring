@@ -120,7 +120,7 @@ Deploy behavior:
 - starts the database service
 - applies committed migrations with the container `migrate` command unless
   `SKIP_MIGRATE=true`
-- runs the one-shot monitoring command, defaulting to `log_analysis`
+- runs the one-shot monitoring command, defaulting to `typer log-analysis`
 - records the deployed tag under the script state directory after the command
   succeeds
 
@@ -157,5 +157,5 @@ TAG=v1.2.3 DRY_RUN=true infra/scripts/release/deploy.sh
 Run another one-shot command during deploy:
 
 ```bash
-MONITORING_COMMAND=sitemap-analysis TAG=v1.2.3 infra/scripts/release/deploy.sh
+MONITORING_COMMAND="typer sitemap-analysis" TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```

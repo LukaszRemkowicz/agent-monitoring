@@ -46,7 +46,8 @@ LOCK_DIR="$STATE_DIR/deploy.lock"
 SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-MONITORING_COMMAND="${MONITORING_COMMAND:-log_analysis}"
+MONITORING_COMMAND="${MONITORING_COMMAND:-typer log-analysis}"
+read -r -a MONITORING_COMMAND_ARGS <<< "$MONITORING_COMMAND"
 
 DATABASE_NAME="${DATABASE_NAME:?DATABASE_NAME is required}"
 DATABASE_USER="${DATABASE_USER:?DATABASE_USER is required}"
@@ -223,7 +224,7 @@ fi
 
 # Step 8: run the selected one-shot monitoring command and record success.
 deploy_step "🚀" 8 8 "Run monitoring command"
-docker compose "${COMPOSE_ARGS[@]}" run --rm app "$MONITORING_COMMAND"
+docker compose "${COMPOSE_ARGS[@]}" run --rm app "${MONITORING_COMMAND_ARGS[@]}"
 printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"
 printf "✅ Monitoring command completed\n"
 printf "🎉 Deploy complete: %s\n" "$IMAGE_NAME"

@@ -18,7 +18,7 @@ RUN apt-get update \
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY migrations ./migrations
-COPY infra/docker/monitoring-entrypoint.sh /app/monitoring-entrypoint.sh
+COPY monitoring-entrypoint.sh /app/monitoring-entrypoint.sh
 RUN chmod +x /app/monitoring-entrypoint.sh
 
 FROM base AS development
@@ -26,7 +26,7 @@ FROM base AS development
 RUN uv sync --frozen --no-cache
 
 ENTRYPOINT ["/app/monitoring-entrypoint.sh"]
-CMD ["log_analysis", "--help"]
+CMD ["typer", "--help"]
 
 FROM base AS production
 
@@ -37,4 +37,4 @@ ENV UV_NO_SYNC=1
 RUN uv sync --frozen --no-dev --no-cache
 
 ENTRYPOINT ["/app/monitoring-entrypoint.sh"]
-CMD ["log_analysis", "--help"]
+CMD ["typer", "--help"]
