@@ -97,6 +97,8 @@ get_compose_project_name() {
     environment="$(normalize_environment "${1:-local}")"
 
     if [[ "$environment" == "local" ]]; then
+        printf "agent-monitoring-local"
+    elif [[ "$environment" == "prod" ]]; then
         printf "agent-monitoring"
     else
         printf "agent-monitoring-%s" "$environment"

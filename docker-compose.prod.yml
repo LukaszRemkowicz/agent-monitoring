@@ -1,3 +1,5 @@
+name: agent-monitoring
+
 services:
   db:
     image: postgres:18
@@ -37,6 +39,8 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:-}
       DATABASE_USER: ${DATABASE_USER:-}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_COLOR: ${LOG_COLOR:-auto}
       LOGS_DIR: ${LOGS_DIR:-/var/log/agent-monitoring}
       PROJECT_CONTEXT_PROMPT_PATH: ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}
       MCP_URL: ${MCP_URL:-}

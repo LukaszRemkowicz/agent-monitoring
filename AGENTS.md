@@ -109,17 +109,21 @@ unless there is a clear reason to copy them.
 
 ## Runtime Commands
 
-Use Docker Compose as the normal local runtime for DB-backed monitoring jobs:
+Use the Typer `monitoring-run` script as the normal runtime for DB-backed
+monitoring jobs. It runs the job through Docker Compose, uses the local compose
+service on developer machines, and reads the deployed tag automatically on the
+VPS:
 
 ```bash
-docker compose run --rm monitoring-app log_analysis
-docker compose run --rm monitoring-app sitemap-analysis
-docker compose run --rm monitoring-app check-mcp
+uv run monitoring-run log-analysis
+uv run monitoring-run sitemap-analysis
+uv run monitoring-run check-mcp
 ```
 
-Host-side `uv run` commands are developer shortcuts. They require the same
+Direct host-side app commands are developer shortcuts. They require the same
 runtime variables from `.env`, Doppler, or the shell, especially database
-settings and `MCP_WORKFLOW_JWT`.
+settings and `MCP_WORKFLOW_JWT`. Prefer `uv run monitoring-run ...` when the job
+should execute in the Compose app container.
 
 Useful host-side commands:
 
