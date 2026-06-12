@@ -97,7 +97,7 @@ repos:
 
       - id: pytest-pre-commit
         name: pytest (pre-commit)
-        entry: env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache uv run test
+        entry: env UV_CACHE_DIR=/tmp/agent-monitoring-uv-cache uv run pytest .
         language: system
         pass_filenames: false
         files: ^(src/|pyproject\.toml|uv\.lock)$

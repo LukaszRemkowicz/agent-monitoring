@@ -56,9 +56,19 @@ Top-level and important paths:
 - `src/main.py`
   Typer commands. Keep these thin: parse options, open lifecycle when needed,
   call services, and format CLI output.
-- `src/scripts.py`
-  Console-script entrypoints. Keep command registration here, not business
-  behavior.
+- `src/cli/`
+  Console-script entrypoints. Keep command registration and host-to-Compose
+  bridge behavior here, not business behavior.
+- `src/cli/utils.py`
+  CLI support utilities: host-side `uv run` to production Docker Compose bridge
+  plus deploy state path resolution.
+- `src/cli/typer.py`
+  Grouped Typer command entrypoint for `log-analysis`, `sitemap-analysis`, and
+  `check-mcp`.
+- `src/cli/db.py`
+  Migration command wrappers.
+- `src/cli/shell.py`
+  Database-backed developer shell entrypoint.
 - `src/services.py`
   Business orchestration for monitoring workflows.
 - `src/agents.py`
@@ -77,8 +87,6 @@ Top-level and important paths:
   Database URL and Tortoise config.
 - `src/db/lifecycle.py`
   Database initialization/shutdown and lifespan context.
-- `src/db/cli.py`
-  Migration and test command wrappers.
 - `src/settings.py` and `src/conf.py`
   Django-style environment-backed settings.
 - `src/tests/`
@@ -109,21 +117,20 @@ unless there is a clear reason to copy them.
 
 ## Runtime Commands
 
-Use the Typer `monitoring-run` script as the normal runtime for DB-backed
-monitoring jobs. It runs the job through Docker Compose, uses the local compose
-service on developer machines, and reads the deployed tag automatically on the
-VPS:
+Use the `typer` script for Typer-backed monitoring jobs. On the VPS, if `TAG` is
+set or the deployed tag is saved, the script bridges the command into the
+production Docker Compose app service. Locally, it runs the Typer command in the
+current environment:
 
 ```bash
-uv run monitoring-run log-analysis
-uv run monitoring-run sitemap-analysis
-uv run monitoring-run check-mcp
+uv run typer log-analysis
+uv run typer sitemap-analysis
+uv run typer check-mcp
 ```
 
 Direct host-side app commands are developer shortcuts. They require the same
 runtime variables from `.env`, Doppler, or the shell, especially database
-settings and `MCP_WORKFLOW_JWT`. Prefer `uv run monitoring-run ...` when the job
-should execute in the Compose app container.
+settings and `MCP_WORKFLOW_JWT`.
 
 Useful host-side commands:
 

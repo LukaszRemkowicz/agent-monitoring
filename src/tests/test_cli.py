@@ -18,8 +18,8 @@ from typer.testing import CliRunner
 
 import main
 import reports_cli
-from db import cli as db_cli
-from db.cli import makemigrations, migrate
+from cli import db as db_cli
+from cli.db import makemigrations, migrate
 from decorators import as_async, db
 from exceptions import LogAnalysisAgentError, McpClientError, PrivateMonitoringContextError
 from schemas import (
@@ -1210,12 +1210,23 @@ def test_release_script_runs_build_then_deploy() -> None:
     assert '"$SCRIPT_DIR/deploy.sh"' in release_text
 
 
-def test_release_scripts_use_expected_compose_project_names() -> None:
+def test_deploy_script_defaults_to_typer_log_analysis_command() -> None:
+    deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
+
+    assert 'MONITORING_COMMAND="${MONITORING_COMMAND:-typer log-analysis}"' in deploy_text
+    assert 'read -r -a MONITORING_COMMAND_ARGS <<< "$MONITORING_COMMAND"' in deploy_text
+    assert (
+        'docker compose "${COMPOSE_ARGS[@]}" run --rm app "${MONITORING_COMMAND_ARGS[@]}"'
+        in deploy_text
+    )
+
+
+def test_release_scripts_use_shared_python_state_dir_resolver() -> None:
     utils_text = Path("infra/scripts/utils.sh").read_text()
 
-    assert 'printf "agent-monitoring-local"' in utils_text
-    assert 'printf "agent-monitoring"' in utils_text
-    assert 'printf "agent-monitoring-%s" "$environment"' in utils_text
+    assert "from cli.utils import get_state_dir" in utils_text
+    assert "get_state_dir(sys.argv[1], project_dir=Path(sys.argv[2]))" in utils_text
+    assert 'local preferred="/var/lib/agent-monitoring/$environment"' not in utils_text
 
 
 def test_as_async_runs_coroutine_function() -> None:
@@ -1726,8 +1737,8 @@ def test_makemigrations_runs_aerich_migrate_and_numbers_file(
         generated.write_text("migration")
         return subprocess.CompletedProcess(args, 0, stdout="generated\n", stderr="")
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = db_cli._run_makemigrations(["add_models"])
 
@@ -1761,8 +1772,8 @@ def test_makemigrations_uses_next_number_for_existing_migrations(
         generated.write_text("migration")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = db_cli._run_makemigrations(["add_email"])
 
@@ -1809,8 +1820,8 @@ def test_makemigrations_initializes_migration_folder_when_required(
             generated.write_text("migration")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = db_cli._run_makemigrations(["initial_schema"])
 
@@ -1825,8 +1836,8 @@ def test_makemigrations_initializes_migration_folder_when_required(
 def test_makemigrations_script_exits_with_makemigrations_result(
     mocker: MockerFixture,
 ) -> None:
-    run_migrations = mocker.patch("db.cli._run_makemigrations", return_value=7)
-    mocker.patch("db.cli.sys.argv", ["makemigrations", "add_models"])
+    run_migrations = mocker.patch("cli.db._run_makemigrations", return_value=7)
+    mocker.patch("cli.db.sys.argv", ["makemigrations", "add_models"])
 
     try:
         makemigrations()
@@ -1838,7 +1849,10 @@ def test_makemigrations_script_exits_with_makemigrations_result(
     run_migrations.assert_called_once_with(["add_models"])
 
 
-def test_migrate_script_runs_aerich_upgrade(mocker: MockerFixture) -> None:
+def test_migrate_script_runs_aerich_upgrade(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
     calls: list[tuple[list[str], bool, bool]] = []
 
     def fake_run(
@@ -1851,24 +1865,110 @@ def test_migrate_script_runs_aerich_upgrade(mocker: MockerFixture) -> None:
         calls.append((args, capture_output, check))
         return subprocess.CompletedProcess(args, 0)
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.sys.argv", ["migrate", "--fake"])
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.sys.argv", ["migrate", "--fake"])
 
-    try:
-        migrate()
-    except SystemExit as error:
-        assert error.code == 0
-    else:
-        raise AssertionError("migrate should exit")
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(tmp_path / "missing-prod")})
+    with override_settings(ENVIRONMENT="dev"):
+        try:
+            migrate()
+        except SystemExit as error:
+            assert error.code == 0
+        else:
+            raise AssertionError("migrate should exit")
 
     assert calls[0][0] == ["aerich", "upgrade", "--fake"]
     assert calls[0][1] is True
     assert calls[0][2] is False
 
 
+def test_migrate_script_runs_in_compose_for_deployed_prod(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "prod"
+    state_dir.mkdir()
+    (state_dir / "current_tag").write_text("v0.1.1\n", encoding="utf-8")
+    run = mocker.patch(
+        "cli.utils.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0),
+    )
+
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(state_dir)})
+    with override_settings(ENVIRONMENT="dev"):
+        result = db_cli._run_migrate(["--fake"])
+
+    assert result == 0
+    assert run.call_args.args[0] == [
+        "env",
+        "TAG=v0.1.1",
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.prod.yml",
+        "run",
+        "--rm",
+        "app",
+        "migrate",
+        "--fake",
+    ]
+
+
+def test_makemigrations_script_bridges_to_prod_compose_with_extra_args(
+    mocker: MockerFixture,
+) -> None:
+    run = mocker.patch(
+        "cli.utils.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0),
+    )
+
+    mocker.patch.dict("os.environ", {"TAG": "v0.1.1"})
+    result = db_cli._run_makemigrations(["add_email_deliveries"])
+
+    assert result == 0
+    assert run.call_args.args[0] == [
+        "env",
+        "TAG=v0.1.1",
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.prod.yml",
+        "run",
+        "--rm",
+        "app",
+        "makemigrations",
+        "add_email_deliveries",
+    ]
+
+
+def test_migrate_script_runs_aerich_inside_container(mocker: MockerFixture) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    mocker.patch("cli.utils.is_running_in_container", return_value=True)
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+
+    mocker.patch.dict("os.environ", {"TAG": "v0.1.1"})
+    with override_settings(ENVIRONMENT="prod"):
+        result = db_cli._run_migrate([])
+
+    assert result == 0
+    assert calls == [["aerich", "upgrade"]]
+
+
 def test_migrate_script_prints_old_format_guidance(
     capsys: pytest.CaptureFixture[str],
     mocker: MockerFixture,
+    tmp_path: Path,
 ) -> None:
     def fake_run(
         args: list[str],
@@ -1884,11 +1984,13 @@ def test_migrate_script_prints_old_format_guidance(
             stderr="RuntimeError: Old format of migration file detected\n",
         )
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.sys.argv", ["migrate"])
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.sys.argv", ["migrate"])
 
-    with pytest.raises(SystemExit) as error:
-        migrate()
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(tmp_path / "missing-prod")})
+    with override_settings(ENVIRONMENT="dev"):
+        with pytest.raises(SystemExit) as error:
+            migrate()
 
     assert error.value.code == 1
     output = capsys.readouterr()
@@ -1901,6 +2003,7 @@ def test_migrate_script_prints_old_format_guidance(
 def test_migrate_script_prints_not_null_guidance(
     capsys: pytest.CaptureFixture[str],
     mocker: MockerFixture,
+    tmp_path: Path,
 ) -> None:
     def fake_run(
         args: list[str],
@@ -1919,11 +2022,13 @@ def test_migrate_script_prints_not_null_guidance(
             ),
         )
 
-    mocker.patch("db.cli.subprocess.run", new=fake_run)
-    mocker.patch("db.cli.sys.argv", ["migrate"])
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.sys.argv", ["migrate"])
 
-    with pytest.raises(SystemExit) as error:
-        migrate()
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(tmp_path / "missing-prod")})
+    with override_settings(ENVIRONMENT="dev"):
+        with pytest.raises(SystemExit) as error:
+            migrate()
 
     assert error.value.code == 1
     output = capsys.readouterr()
@@ -1931,3 +2036,73 @@ def test_migrate_script_prints_not_null_guidance(
     assert "tried to add a NOT NULL column" in output.err
     assert "rename-style migration" in output.err
     assert "Traceback" not in output.err
+
+
+def test_migrate_script_replays_generic_aerich_failure(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args,
+            1,
+            stdout="",
+            stderr='asyncpg.exceptions.DuplicateTableError: relation "email_deliveries" exists\n',
+        )
+
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.sys.argv", ["migrate"])
+
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(tmp_path / "missing-prod")})
+    with override_settings(ENVIRONMENT="dev"):
+        with pytest.raises(SystemExit) as error:
+            migrate()
+
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert "Database migration failed." in output.err
+    assert 'relation "email_deliveries" exists' in output.err
+    assert "Aerich output above contains the migration failure details." in output.err
+    assert "Run `uv run migrate` directly" not in output.err
+
+
+def test_migrate_script_explains_host_side_connection_refused(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args,
+            1,
+            stdout="",
+            stderr="ConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 5438)\n",
+        )
+
+    mocker.patch("cli.db.subprocess.run", new=fake_run)
+    mocker.patch("cli.db.sys.argv", ["migrate"])
+
+    mocker.patch.dict("os.environ", {"TAG": "", "STATE_DIR": str(tmp_path / "missing-prod")})
+    with override_settings(ENVIRONMENT="dev"):
+        with pytest.raises(SystemExit) as error:
+            migrate()
+
+    assert error.value.code == 1
+    output = capsys.readouterr()
+    assert "Database migration failed." in output.err
+    assert "could not connect to the configured database host" in output.err
+    assert "127.0.0.1:5438" in output.err
+    assert "doppler run -- uv run migrate" in output.err

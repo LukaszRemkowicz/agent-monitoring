@@ -34,15 +34,10 @@ dev = [
 ]
 
 [project.scripts]
-monitoring = "scripts:monitoring_entry"
-monitoring-run = "scripts.run:main"
-log_analysis = "scripts:log_analysis_entry"
-sitemap-analysis = "scripts:sitemap_analysis_entry"
-check-mcp = "scripts:check_mcp_entry"
-shell = "scripts.shell:main"
-makemigrations = "db.cli:makemigrations"
-migrate = "db.cli:migrate"
-test = "db.cli:test"
+typer = "cli.typer:main"
+shell = "cli.shell:main"
+makemigrations = "cli.db:makemigrations"
+migrate = "cli.db:migrate"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]
@@ -61,7 +56,7 @@ only-include = [
     "src/mcp.py",
     "src/repositories.py",
     "src/schemas.py",
-    "src/scripts",
+    "src/cli",
     "src/services",
     "src/settings.py",
     "src/templates",
