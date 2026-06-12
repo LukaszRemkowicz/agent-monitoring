@@ -158,7 +158,6 @@ confirm_continue() {
 prune_local_images() {
     local repository="$1"
     local keep_tag="$2"
-    local keep_count="${KEEP_IMAGE_COUNT:-5}"
 
     local image_ids=()
     local image_id
@@ -171,7 +170,6 @@ prune_local_images() {
             | sort -rk 3 \
             | awk '{print $2}' \
             | awk '!seen[$0]++' \
-            | tail -n +"$((keep_count + 1))" \
             || true
     )
 
