@@ -1210,15 +1210,13 @@ def test_release_script_runs_build_then_deploy() -> None:
     assert '"$SCRIPT_DIR/deploy.sh"' in release_text
 
 
-def test_deploy_script_defaults_to_typer_log_analysis_command() -> None:
+def test_deploy_script_records_current_tag_without_running_monitoring_command() -> None:
     deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
 
-    assert 'MONITORING_COMMAND="${MONITORING_COMMAND:-typer log-analysis}"' in deploy_text
-    assert 'read -r -a MONITORING_COMMAND_ARGS <<< "$MONITORING_COMMAND"' in deploy_text
-    assert (
-        'docker compose "${COMPOSE_ARGS[@]}" run --rm app "${MONITORING_COMMAND_ARGS[@]}"'
-        in deploy_text
-    )
+    assert "MONITORING_COMMAND" not in deploy_text
+    assert 'deploy_step "🏷️" 8 8 "Record deployed tag"' in deploy_text
+    assert 'printf "%s\\n" "$TAG" > "$STATE_DIR/current_tag"' in deploy_text
+    assert 'docker compose "${COMPOSE_ARGS[@]}" run --rm app migrate' in deploy_text
 
 
 def test_release_scripts_use_shared_python_state_dir_resolver() -> None:

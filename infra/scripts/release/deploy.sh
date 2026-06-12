@@ -15,13 +15,12 @@
 #   - verifies the tagged image exists locally
 #   - runs a pre-deploy database backup unless SKIP_BACKUP=true
 #   - applies migrations unless SKIP_MIGRATE=true
-#   - runs the selected one-shot monitoring command
-#   - records current_tag after the command completes
+#   - records current_tag after deploy preparation completes
 #
 # What this script does not do:
 #   - does not build images
 #   - does not create or rotate secrets
-#   - does not automatically rollback after a failed monitoring command
+#   - does not run monitoring analysis jobs
 ###############################################################################
 
 set -euo pipefail
@@ -46,8 +45,6 @@ LOCK_DIR="$STATE_DIR/deploy.lock"
 SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-MONITORING_COMMAND="${MONITORING_COMMAND:-typer log-analysis}"
-read -r -a MONITORING_COMMAND_ARGS <<< "$MONITORING_COMMAND"
 
 DATABASE_NAME="${DATABASE_NAME:?DATABASE_NAME is required}"
 DATABASE_USER="${DATABASE_USER:?DATABASE_USER is required}"
@@ -146,7 +143,6 @@ printf "⚙️  Environment: %s\n" "$ENVIRONMENT"
 printf "🏷️  Release tag: %s\n" "$TAG"
 printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
-printf "🧪 Monitoring command: %s\n" "$MONITORING_COMMAND"
 printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
 printf "🔐 Project context prompt file: %s\n" "$PROJECT_CONTEXT_PROMPT_PATH"
 printf "🪵 App log directory: %s\n" "$LOGS_DIR"
@@ -222,9 +218,8 @@ else
     confirm_continue "Type yes to continue without applying migrations."
 fi
 
-# Step 8: run the selected one-shot monitoring command and record success.
-deploy_step "🚀" 8 8 "Run monitoring command"
-docker compose "${COMPOSE_ARGS[@]}" run --rm app "${MONITORING_COMMAND_ARGS[@]}"
+# Step 8: record the deployed image tag for future one-shot commands.
+deploy_step "🏷️" 8 8 "Record deployed tag"
 printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"
-printf "✅ Monitoring command completed\n"
+printf "✅ Deployed tag recorded: %s/current_tag\n" "$STATE_DIR"
 printf "🎉 Deploy complete: %s\n" "$IMAGE_NAME"
