@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from typing import Any
 
 os.environ.setdefault("DATABASE_HOST", "127.0.0.1")
 os.environ.setdefault("DATABASE_PORT", os.environ.get("DATABASE_PORT_HOST", "5438"))
 
+from cli.utils import run_prod_compose_command, should_bridge_to_prod_compose
 from conf import settings
 from db.config import TORTOISE_ORM
 from db.lifecycle import close_database, initialize_database
@@ -109,5 +111,7 @@ def run_shell(*, start_repl: bool = True) -> int:
 def main() -> None:
     """Run the developer shell command."""
 
+    if should_bridge_to_prod_compose():
+        raise SystemExit(run_prod_compose_command(["shell", *sys.argv[1:]]))
     start_repl = os.getenv(SHELL_EXIT_AFTER_BOOT_ENV) != "1"
     raise SystemExit(run_shell(start_repl=start_repl))

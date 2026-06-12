@@ -63,4 +63,4 @@ services:
     volumes:
       - ${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:${PROJECT_CONTEXT_PROMPT_PATH:-./private/vps_monitoring_context.md}:ro
       - ${LOGS_DIR:-/var/log/agent-monitoring}:${LOGS_DIR:-/var/log/agent-monitoring}
-    command: ["log_analysis"]
+    command: ["typer", "log-analysis"]

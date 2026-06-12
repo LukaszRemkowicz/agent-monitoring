@@ -124,13 +124,13 @@ The deploy script:
 - starts the database service
 - creates the app log directory
 - runs committed migrations unless `SKIP_MIGRATE=true`
-- runs the selected monitoring command, defaulting to `log_analysis`
+- runs the selected monitoring command, defaulting to `typer log-analysis`
 - writes the deployed tag to `/var/lib/agent-monitoring/prod/current_tag`
 
 Run sitemap analysis during deploy instead of log analysis:
 
 ```bash
-MONITORING_COMMAND=sitemap-analysis TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
+MONITORING_COMMAND="typer sitemap-analysis" TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
 ```
 
 ### 6. Production Ad Hoc Commands
@@ -141,28 +141,33 @@ image tag recorded by the last successful deploy.
 Check MCP:
 
 ```bash
-doppler run -- uv run monitoring-run check-mcp
+doppler run -- uv run typer check-mcp
+```
+
+Run migrations:
+
+```bash
+doppler run -- uv run migrate
 ```
 
 Run log analysis:
 
 ```bash
-doppler run -- uv run monitoring-run log-analysis --force --email
+doppler run -- uv run typer log-analysis --force --email
 ```
 
 Run sitemap analysis:
 
 ```bash
-doppler run -- uv run monitoring-run sitemap-analysis --force --email
+doppler run -- uv run typer sitemap-analysis --force --email
 ```
 
 Use `--force` only when replacing the existing report for the same date is
 intentional. Use `--no-email` for a persisted dry run without email. On the VPS,
-`monitoring-run ...` reads `/var/lib/agent-monitoring/prod/current_tag` and runs
-the deployed image through `docker-compose.prod.yml`. On local machines it uses
-`docker-compose.yaml` and the `monitoring-app` service. Interactive
-`monitoring-run` commands print pretty, colored logs by default; use
-`MONITORING_RUN_LOG_FORMAT=json` when raw JSON logs are required.
+`uv run migrate`, `uv run shell`, and `uv run typer ...` read
+`/var/lib/agent-monitoring/prod/current_tag` and run the deployed image through
+`docker-compose.prod.yml`. On local machines, `uv run migrate` runs Aerich
+directly and `uv run typer ...` runs the Typer command locally.
 The prod Compose file declares `name: agent-monitoring`, so ad hoc jobs and
 deploy use the same database container namespace.
 
@@ -254,16 +259,17 @@ App logger files are written to:
 Use Docker Compose for local DB-backed jobs:
 
 ```bash
-uv run monitoring-run check-mcp
-uv run monitoring-run log-analysis
-uv run monitoring-run sitemap-analysis
+uv run typer check-mcp
+uv run migrate
+uv run typer log-analysis
+uv run typer sitemap-analysis
 ```
 
 Run local jobs with explicit rerun and email behavior:
 
 ```bash
-doppler run -- uv run monitoring-run log-analysis --force --email
-doppler run -- uv run monitoring-run sitemap-analysis --force --email
+doppler run -- uv run typer log-analysis --force --email
+doppler run -- uv run typer sitemap-analysis --force --email
 ```
 
 Inspect local stored reports:

@@ -109,17 +109,12 @@ get_state_dir() {
     local environment
     environment="$(normalize_environment "${1:-local}")"
 
-    if [[ -n "${STATE_DIR:-}" ]]; then
-        printf "%s" "$STATE_DIR"
-        return
-    fi
-
-    local preferred="/var/lib/agent-monitoring/$environment"
-    if [[ -d "$(dirname "$preferred")" && -w "$(dirname "$preferred")" ]] || [[ "$(id -u)" == "0" ]]; then
-        printf "%s" "$preferred"
-    else
-        printf "%s/.agent/state/%s" "$(get_project_dir)" "$environment"
-    fi
+    local project_dir
+    project_dir="$(get_project_dir)"
+    (
+        cd "$project_dir"
+        uv run python -c 'import sys; from pathlib import Path; from cli.utils import get_state_dir; print(get_state_dir(sys.argv[1], project_dir=Path(sys.argv[2])))' "$environment" "$project_dir"
+    )
 }
 
 get_backup_dir() {
