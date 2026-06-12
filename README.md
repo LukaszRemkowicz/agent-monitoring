@@ -88,12 +88,13 @@ LOGS_DIR=/var/log/agent-monitoring
 POSTGRES_DATA_DIR=/var/lib/agent-monitoring/postgresql
 ```
 
-### 4. Build The Release Image
+### 4. Release
 
-Use the Git tag created by the release workflow or the tag you are deploying:
+Build and deploy the Git tag created by the release workflow or the tag you are
+deploying:
 
 ```bash
-TAG=v1.2.3 doppler run -- infra/scripts/release/build.sh
+TAG=v1.2.3 doppler run -- infra/scripts/release/release.sh
 ```
 
 The image name is:
@@ -102,16 +103,17 @@ The image name is:
 prod-agent-monitoring:<TAG>
 ```
 
-### 5. Deploy
-
-```bash
-TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
-```
-
 For non-interactive automation:
 
 ```bash
-AUTO_APPROVE=true TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
+AUTO_APPROVE=true TAG=v1.2.3 doppler run -- infra/scripts/release/release.sh
+```
+
+To build and deploy as separate manual steps:
+
+```bash
+TAG=v1.2.3 doppler run -- infra/scripts/release/build.sh
+TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
 ```
 
 The deploy script:
@@ -139,27 +141,30 @@ image tag recorded by the last successful deploy.
 Check MCP:
 
 ```bash
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app check-mcp
+doppler run -- uv run monitoring-run check-mcp
 ```
 
 Run log analysis:
 
 ```bash
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app log_analysis --force --email
+doppler run -- uv run monitoring-run log-analysis --force --email
 ```
 
 Run sitemap analysis:
 
 ```bash
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  sitemap-analysis --force --email
+doppler run -- uv run monitoring-run sitemap-analysis --force --email
 ```
 
 Use `--force` only when replacing the existing report for the same date is
-intentional. Use `--no-email` for a persisted dry run without email.
+intentional. Use `--no-email` for a persisted dry run without email. On the VPS,
+`monitoring-run ...` reads `/var/lib/agent-monitoring/prod/current_tag` and runs
+the deployed image through `docker-compose.prod.yml`. On local machines it uses
+`docker-compose.yaml` and the `monitoring-app` service. Interactive
+`monitoring-run` commands print pretty, colored logs by default; use
+`MONITORING_RUN_LOG_FORMAT=json` when raw JSON logs are required.
+The prod Compose file declares `name: agent-monitoring`, so ad hoc jobs and
+deploy use the same database container namespace.
 
 Inspect stored reports without rerunning analysis:
 
@@ -249,16 +254,16 @@ App logger files are written to:
 Use Docker Compose for local DB-backed jobs:
 
 ```bash
-docker compose run --rm monitoring-app check-mcp
-docker compose run --rm monitoring-app log_analysis
-docker compose run --rm monitoring-app sitemap-analysis
+uv run monitoring-run check-mcp
+uv run monitoring-run log-analysis
+uv run monitoring-run sitemap-analysis
 ```
 
 Run local jobs with explicit rerun and email behavior:
 
 ```bash
-doppler run -- docker compose run --rm monitoring-app log_analysis --force --email
-doppler run -- docker compose run --rm monitoring-app sitemap-analysis --force --email
+doppler run -- uv run monitoring-run log-analysis --force --email
+doppler run -- uv run monitoring-run sitemap-analysis --force --email
 ```
 
 Inspect local stored reports:
@@ -342,8 +347,7 @@ GitHub Actions workflows live in `.github/workflows`:
 Operational scripts live under `infra/scripts`:
 
 ```bash
-TAG=v1.2.3 infra/scripts/release/build.sh
-TAG=v1.2.3 infra/scripts/release/deploy.sh
+TAG=v1.2.3 infra/scripts/release/release.sh
 ```
 
 Production Postgres data is stored at

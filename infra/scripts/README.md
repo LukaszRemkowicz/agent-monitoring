@@ -67,6 +67,27 @@ Build behavior:
 - records the last built tag under the script state directory
 - prunes older local images, keeping only the built tag
 
+## Release
+
+Build and deploy the tagged prod app image in one command:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+For non-interactive automation, pass approval through to deploy:
+
+```bash
+AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+Release behavior:
+
+- runs `infra/scripts/release/build.sh`
+- runs `infra/scripts/release/deploy.sh`
+- preserves the deploy script's backup, migration, confirmation, and
+  `current_tag` behavior
+
 ## Deploy
 
 Deploy an already-built prod image:
