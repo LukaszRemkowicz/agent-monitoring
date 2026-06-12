@@ -124,14 +124,10 @@ The deploy script:
 - starts the database service
 - creates the app log directory
 - runs committed migrations unless `SKIP_MIGRATE=true`
-- runs the selected monitoring command, defaulting to `typer log-analysis`
 - writes the deployed tag to `/var/lib/agent-monitoring/prod/current_tag`
 
-Run sitemap analysis during deploy instead of log analysis:
-
-```bash
-MONITORING_COMMAND="typer sitemap-analysis" TAG=v1.2.3 doppler run -- infra/scripts/release/deploy.sh
-```
+Deploy does not run log or sitemap analysis automatically. Run monitoring jobs
+on demand after deploy with the commands below.
 
 ### 6. Production Ad Hoc Commands
 
