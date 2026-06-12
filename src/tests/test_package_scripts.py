@@ -2,10 +2,13 @@ import subprocess
 from pathlib import Path
 
 from pytest_mock import MockerFixture
+from typer.testing import CliRunner
 
 from cli import shell
 from cli import typer as typer_cli
 from cli.utils import build_prod_compose_command, get_state_dir
+
+runner = CliRunner()
 
 
 def test_state_dir_resolver_uses_configured_state_dir(tmp_path: Path) -> None:
@@ -85,6 +88,14 @@ def test_typer_script_bridges_to_prod_compose_with_extra_args(
         "log-analysis",
         "--no-email",
     ]
+
+
+def test_typer_script_exposes_report_and_cleanup_commands() -> None:
+    result = runner.invoke(typer_cli.app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "reports" in result.output
+    assert "cleanup" in result.output
 
 
 def test_shell_script_bridges_to_saved_prod_tag(
