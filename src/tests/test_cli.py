@@ -1203,6 +1203,21 @@ def test_deploy_script_exports_sitemap_public_host_setting() -> None:
     assert "SITEMAP_URL" not in deploy_text
 
 
+def test_release_script_runs_build_then_deploy() -> None:
+    release_text = Path("infra/scripts/release/release.sh").read_text()
+
+    assert '"$SCRIPT_DIR/build.sh"' in release_text
+    assert '"$SCRIPT_DIR/deploy.sh"' in release_text
+
+
+def test_release_scripts_use_expected_compose_project_names() -> None:
+    utils_text = Path("infra/scripts/utils.sh").read_text()
+
+    assert 'printf "agent-monitoring-local"' in utils_text
+    assert 'printf "agent-monitoring"' in utils_text
+    assert 'printf "agent-monitoring-%s" "$environment"' in utils_text
+
+
 def test_as_async_runs_coroutine_function() -> None:
     calls: list[str] = []
 

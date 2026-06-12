@@ -1,3 +1,5 @@
+name: agent-monitoring-local
+
 services:
   db:
     image: postgres:18
@@ -62,7 +64,8 @@ services:
       DATABASE_USER: monitoring
       DATABASE_PASSWORD: monitoring
       DEBUG: "true"
-      LOG_COLOR: always
+      LOG_FORMAT: ${LOG_FORMAT:-pretty}
+      LOG_COLOR: ${LOG_COLOR:-always}
       LOGS_DIR: /app/logs
       MONITORING_AUTO_MIGRATE: "true"
       MCP_URL: ${MCP_URL:-http://127.0.0.1:8001/mcp}
