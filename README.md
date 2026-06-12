@@ -170,48 +170,34 @@ deploy use the same database container namespace.
 Inspect stored reports without rerunning analysis:
 
 ```bash
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring reports log list --limit 5
+doppler run -- uv run typer reports log list --limit 5
 
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring reports log show --date YYYY-MM-DD
+doppler run -- uv run typer reports log show --date YYYY-MM-DD
 
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring reports sitemap list --limit 5
+doppler run -- uv run typer reports sitemap list --limit 5
 
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring reports sitemap show --date YYYY-MM-DD
+doppler run -- uv run typer reports sitemap show --date YYYY-MM-DD
 
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring reports attention --limit 10
+doppler run -- uv run typer reports attention --limit 10
 ```
 
-Add `--json` to any `monitoring reports ...` command when Codex or another
-tool should consume the output. Use `monitoring reports --help` and subcommand
+Add `--json` to any `uv run typer reports ...` command when Codex or another
+tool should consume the output. Use `uv run typer reports --help` and subcommand
 `--help` for the full option list.
 
 Stored log reports keep summaries, findings, evidence fingerprints, and MCP
 artifact references. Raw logs stay in MCP-owned artifacts and are not copied
 into this app. If MCP artifact retention expires an old raw-log artifact, the
 stored report remains useful for review and trend history, but raw follow-up
-from the MCP reference may no longer resolve. `monitoring reports log show`
+from the MCP reference may no longer resolve. `uv run typer reports log show`
 prints this MCP artifact retention notice alongside the follow-up hints.
 
 Clean up stored monitoring DB rows after the configured retention window:
 
 ```bash
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring cleanup reports
+doppler run -- uv run typer cleanup reports
 
-TAG="$(cat /var/lib/agent-monitoring/prod/current_tag)" \
-doppler run -- docker compose -f docker-compose.prod.yml run --rm app \
-  monitoring cleanup reports --confirm
+doppler run -- uv run typer cleanup reports --confirm
 ```
 
 The cleanup command is a dry run unless `--confirm` is provided. It uses
@@ -271,20 +257,20 @@ doppler run -- uv run typer sitemap-analysis --force --email
 Inspect local stored reports:
 
 ```bash
-docker compose run --rm monitoring-app monitoring reports log list --limit 5
-docker compose run --rm monitoring-app monitoring reports log show --date YYYY-MM-DD
-docker compose run --rm monitoring-app monitoring reports sitemap list --limit 5
-docker compose run --rm monitoring-app monitoring reports sitemap show --date YYYY-MM-DD
-docker compose run --rm monitoring-app monitoring reports attention --limit 10 --json
+docker compose run --rm monitoring-app uv run typer reports log list --limit 5
+docker compose run --rm monitoring-app uv run typer reports log show --date YYYY-MM-DD
+docker compose run --rm monitoring-app uv run typer reports sitemap list --limit 5
+docker compose run --rm monitoring-app uv run typer reports sitemap show --date YYYY-MM-DD
+docker compose run --rm monitoring-app uv run typer reports attention --limit 10 --json
 ```
 
 Dry-run and confirm local retention cleanup:
 
 ```bash
-docker compose run --rm monitoring-app monitoring cleanup reports
-docker compose run --rm monitoring-app monitoring cleanup reports \
+docker compose run --rm monitoring-app uv run typer cleanup reports
+docker compose run --rm monitoring-app uv run typer cleanup reports \
   --log-retention-days 90 --sitemap-retention-days 30
-docker compose run --rm monitoring-app monitoring cleanup reports --confirm
+docker compose run --rm monitoring-app uv run typer cleanup reports --confirm
 ```
 
 Useful flags:
