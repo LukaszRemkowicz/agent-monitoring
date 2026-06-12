@@ -120,9 +120,8 @@ Deploy behavior:
 - starts the database service
 - applies committed migrations with the container `migrate` command unless
   `SKIP_MIGRATE=true`
-- runs the one-shot monitoring command, defaulting to `typer log-analysis`
-- records the deployed tag under the script state directory after the command
-  succeeds
+- records the deployed tag under the script state directory
+- does not run log or sitemap analysis automatically
 
 Production Postgres data is a host bind mount, not a Compose-managed Docker
 volume. Normal Docker volume prune commands will not delete it. Deploy and prod
@@ -154,8 +153,9 @@ Dry run:
 TAG=v1.2.3 DRY_RUN=true infra/scripts/release/deploy.sh
 ```
 
-Run another one-shot command during deploy:
+Run one-shot monitoring commands on demand after deploy:
 
 ```bash
-MONITORING_COMMAND="typer sitemap-analysis" TAG=v1.2.3 infra/scripts/release/deploy.sh
+doppler run -- uv run typer log-analysis --force --email
+doppler run -- uv run typer sitemap-analysis --force --email
 ```
