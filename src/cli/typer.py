@@ -4,22 +4,10 @@ from __future__ import annotations
 
 import sys
 
-import typer as typer_lib
-
 from cli.utils import run_prod_compose_command, should_bridge_to_prod_compose
 from conf import settings
 from logging_config import configure_logging
-from main import check_mcp, log_analysis, sitemap_analysis
-
-app = typer_lib.Typer(
-    name="typer",
-    help="Run monitoring Typer commands.",
-    no_args_is_help=True,
-    pretty_exceptions_show_locals=False,
-)
-app.command("log-analysis")(log_analysis)
-app.command("sitemap-analysis")(sitemap_analysis)
-app.command("check-mcp")(check_mcp)
+from main import app
 
 
 def main() -> None:
