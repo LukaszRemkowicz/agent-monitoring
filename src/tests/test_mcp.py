@@ -65,6 +65,52 @@ async def test_mcp_workflow_client_calls_tool_and_returns_structured_content_mod
 
 
 @pytest.mark.asyncio
+async def test_mcp_workflow_client_fetches_keycloak_token_for_tool_calls() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/protocol/openid-connect/token"):
+            form_body = request.content.decode()
+            assert "grant_type=client_credentials" in form_body
+            assert "client_id=workflow-agent" in form_body
+            assert "client_secret=workflow-secret" in form_body
+            return httpx.Response(
+                200,
+                json={"access_token": "keycloak-workflow-token", "expires_in": 3600},
+            )
+
+        assert request.headers["authorization"] == "Bearer keycloak-workflow-token"
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "structuredContent": {
+                        "name": "workflow-mcp",
+                        "status": "ok",
+                    }
+                }
+            },
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        keycloak_url="https://auth.example.com/realms/mcp",
+        keycloak_client_id="workflow-agent",
+        keycloak_client_secret="workflow-secret",
+        transport=httpx.MockTransport(handler),
+    )
+
+    status = await client.get_service_status()
+
+    assert status.status == "ok"
+    assert [request.url.path for request in requests] == [
+        "/realms/mcp/protocol/openid-connect/token",
+        "/mcp",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_get_workflow_bundle_uses_bootstrap_tool() -> None:
     tool_names: list[str] = []
 
@@ -490,7 +536,20 @@ async def test_mcp_workflow_client_requires_workflow_jwt() -> None:
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
     )
 
-    with pytest.raises(RuntimeError, match="MCP_WORKFLOW_JWT is required"):
+    with pytest.raises(RuntimeError, match="MCP_WORKFLOW_JWT or complete MCP Keycloak"):
+        await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)
+
+
+@pytest.mark.asyncio
+async def test_mcp_workflow_client_rejects_partial_keycloak_config() -> None:
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        keycloak_url="https://auth.example.com/realms/mcp",
+        keycloak_client_id="workflow-agent",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json={})),
+    )
+
+    with pytest.raises(RuntimeError, match="MCP Keycloak auth is partially configured"):
         await client.call_tool(McpToolName.ANALYZE_DAILY_LOG_BUNDLE)
 
 

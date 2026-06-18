@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -34,14 +35,24 @@ class McpWorkflowClient:
         self,
         *,
         base_url: str,
-        workflow_jwt: str,
+        workflow_jwt: str = "",
+        keycloak_url: str = "",
+        keycloak_client_id: str = "",
+        keycloak_client_secret: str = "",
+        token_refresh_margin_seconds: int = 60,
         timeout_seconds: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url
         self.workflow_jwt = workflow_jwt
+        self.keycloak_url = keycloak_url.rstrip("/")
+        self.keycloak_client_id = keycloak_client_id
+        self.keycloak_client_secret = keycloak_client_secret
+        self.token_refresh_margin_seconds = token_refresh_margin_seconds
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        self._cached_workflow_jwt = ""
+        self._cached_workflow_jwt_expires_at = 0.0
 
     async def call_tool(
         self,
@@ -50,12 +61,7 @@ class McpWorkflowClient:
     ) -> StructuredContent:
         """Call one MCP tool and return validated `result.structuredContent`."""
 
-        if not self.workflow_jwt:
-            raise McpClientError(
-                "MCP_WORKFLOW_JWT is required to call the MCP workflow endpoint.",
-                mcp_url=self.base_url,
-                tool_name=name,
-            )
+        self._raise_if_auth_missing(name)
 
         response: dict[str, Any] = await self._make_call(name, arguments)
         self._raise_tool_result_error_if_present(response, name)
@@ -331,10 +337,11 @@ class McpWorkflowClient:
                 timeout=self.timeout_seconds,
                 transport=self.transport,
             ) as client:
+                workflow_jwt = await self._get_workflow_jwt(client, name)
                 response = await client.post(
                     self.base_url,
                     json=request_payload,
-                    headers=self._build_headers(),
+                    headers=self._build_headers(workflow_jwt),
                 )
                 response.raise_for_status()
                 response_payload: Any = response.json()
@@ -472,9 +479,109 @@ class McpWorkflowClient:
             },
         }
 
-    def _build_headers(self) -> dict[str, str]:
+    def _has_keycloak_auth(self) -> bool:
+        return bool(self.keycloak_url and self.keycloak_client_id and self.keycloak_client_secret)
+
+    def _has_partial_keycloak_auth(self) -> bool:
+        return bool(self.keycloak_url or self.keycloak_client_id or self.keycloak_client_secret)
+
+    def _raise_if_auth_missing(self, tool_name: str) -> None:
+        if self.workflow_jwt or self._has_keycloak_auth():
+            return
+        if self._has_partial_keycloak_auth():
+            missing = self._missing_keycloak_settings()
+            raise McpClientError(
+                "MCP Keycloak auth is partially configured. Missing: " + ", ".join(missing),
+                mcp_url=self.base_url,
+                tool_name=tool_name,
+            )
+        raise McpClientError(
+            "MCP_WORKFLOW_JWT or complete MCP Keycloak client credentials are required "
+            "to call the MCP workflow endpoint.",
+            mcp_url=self.base_url,
+            tool_name=tool_name,
+        )
+
+    async def _get_workflow_jwt(self, client: httpx.AsyncClient, tool_name: str) -> str:
+        if self._has_keycloak_auth():
+            return await self._get_keycloak_workflow_jwt(client, tool_name)
+        if self.workflow_jwt:
+            return self.workflow_jwt
+        self._raise_if_auth_missing(tool_name)
+        raise McpClientError(
+            "MCP auth configuration did not produce a workflow JWT.",
+            mcp_url=self.base_url,
+            tool_name=tool_name,
+        )
+
+    async def _get_keycloak_workflow_jwt(
+        self,
+        client: httpx.AsyncClient,
+        tool_name: str,
+    ) -> str:
+        now = time.monotonic()
+        if self._cached_workflow_jwt and now < self._cached_workflow_jwt_expires_at:
+            return self._cached_workflow_jwt
+
+        try:
+            response = await client.post(
+                self._keycloak_token_url(),
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self.keycloak_client_id,
+                    "client_secret": self.keycloak_client_secret,
+                },
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            payload: Any = response.json()
+        except httpx.HTTPError as exc:
+            raise McpClientError(
+                f"MCP Keycloak token request failed: {exc}",
+                mcp_url=self.base_url,
+                tool_name=tool_name,
+                hint=(
+                    "Check MCP_KEYCLOAK_URL, MCP_KEYCLOAK_CLIENT_ID, "
+                    "and MCP_KEYCLOAK_CLIENT_SECRET."
+                ),
+            ) from exc
+        except ValueError as exc:
+            raise McpClientError(
+                "MCP Keycloak token response was not valid JSON.",
+                mcp_url=self.base_url,
+                tool_name=tool_name,
+            ) from exc
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("access_token"), str):
+            raise McpClientError(
+                "MCP Keycloak token response did not include an access_token.",
+                mcp_url=self.base_url,
+                tool_name=tool_name,
+            )
+
+        expires_in = payload.get("expires_in")
+        ttl_seconds = expires_in if isinstance(expires_in, int) and expires_in > 0 else 300
+        self._cached_workflow_jwt = payload["access_token"]
+        self._cached_workflow_jwt_expires_at = now + max(
+            0, ttl_seconds - self.token_refresh_margin_seconds
+        )
+        return self._cached_workflow_jwt
+
+    def _missing_keycloak_settings(self) -> list[str]:
+        values = {
+            "MCP_KEYCLOAK_URL": self.keycloak_url,
+            "MCP_KEYCLOAK_CLIENT_ID": self.keycloak_client_id,
+            "MCP_KEYCLOAK_CLIENT_SECRET": self.keycloak_client_secret,
+        }
+        return [name for name, value in values.items() if not value]
+
+    def _keycloak_token_url(self) -> str:
+        return f"{self.keycloak_url}/protocol/openid-connect/token"
+
+    @staticmethod
+    def _build_headers(workflow_jwt: str) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.workflow_jwt}",
+            "Authorization": f"Bearer {workflow_jwt}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
