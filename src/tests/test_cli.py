@@ -870,6 +870,9 @@ def test_check_mcp_command_calls_mcp_service_status(
     assert build_client.call_args.kwargs == {
         "base_url": main.settings.MCP_URL,
         "workflow_jwt": main.settings.MCP_WORKFLOW_JWT,
+        "keycloak_url": main.settings.MCP_KEYCLOAK_URL,
+        "keycloak_client_id": main.settings.MCP_KEYCLOAK_CLIENT_ID,
+        "keycloak_client_secret": main.settings.MCP_KEYCLOAK_CLIENT_SECRET,
     }
     assert "MCP service is reachable" in result.output
     assert "name=workflow-mcp" in result.output

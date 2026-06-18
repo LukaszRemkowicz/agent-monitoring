@@ -80,6 +80,9 @@ async def log_analysis(
     mcp_client = McpWorkflowClient(
         base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
+        keycloak_url=settings.MCP_KEYCLOAK_URL,
+        keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
+        keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
     )
     log_analysis_repository = LogAnalysisRepository()
     history_comparison_service = LogAnalysisHistoryComparisonService()
@@ -215,6 +218,9 @@ async def sitemap_analysis(
     mcp_client = McpWorkflowClient(
         base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
+        keycloak_url=settings.MCP_KEYCLOAK_URL,
+        keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
+        keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
     )
     crawler: Crawler = Crawler(
         client=HTTPXSitemapFetcher(),
@@ -399,6 +405,9 @@ async def check_mcp() -> None:
     mcp_client = McpWorkflowClient(
         base_url=settings.MCP_URL,
         workflow_jwt=settings.MCP_WORKFLOW_JWT,
+        keycloak_url=settings.MCP_KEYCLOAK_URL,
+        keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
+        keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
     )
     logger.info(
         "checking MCP service status",
