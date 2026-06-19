@@ -1,10 +1,62 @@
 from __future__ import annotations
 
+import base64
+import gzip
+import json
 from collections.abc import Mapping
 from typing import Any
 
+COMPRESSED_JSON_STORAGE = "gzip+base64-json"
+COMPRESSED_JSON_VERSION = 1
+
+
+def compress_json_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a compressed JSON wrapper for a mapping stored in JSONField."""
+
+    if is_compressed_json_mapping(payload):
+        return dict(payload)
+
+    raw_json = json.dumps(
+        payload,
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    compressed = gzip.compress(raw_json, mtime=0)
+    return {
+        "storage": COMPRESSED_JSON_STORAGE,
+        "version": COMPRESSED_JSON_VERSION,
+        "encoding": "gzip+base64",
+        "original_json_bytes": len(raw_json),
+        "compressed_bytes": len(compressed),
+        "payload": base64.b64encode(compressed).decode("ascii"),
+    }
+
+
+def decompress_json_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the original mapping when a JSONField payload is compressed."""
+
+    if not is_compressed_json_mapping(payload):
+        return dict(payload)
+
+    compressed_payload = payload.get("payload")
+    if not isinstance(compressed_payload, str):
+        return {}
+
+    decompressed = gzip.decompress(base64.b64decode(compressed_payload))
+    decoded = json.loads(decompressed.decode("utf-8"))
+    if isinstance(decoded, dict):
+        return decoded
+    return {}
+
+
+def is_compressed_json_mapping(payload: Mapping[str, Any]) -> bool:
+    return payload.get("storage") == COMPRESSED_JSON_STORAGE
+
 
 def collect_log_artifact_byte_count(artifact: Mapping[str, Any]) -> int:
+    artifact = decompress_json_mapping(artifact)
     collect_logs = artifact.get("collect_logs")
     if isinstance(collect_logs, Mapping):
         artifact = collect_logs

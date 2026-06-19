@@ -13,6 +13,7 @@ from agents import MonitoringWorkflowAgent
 from conf import settings
 from db.models import EmailDelivery
 from decorators import as_async, db
+from exceptions import format_exception_chain
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
@@ -303,7 +304,7 @@ async def _send_command_failure_email(
         command_name=command_name,
         analysis_date=analysis_date,
         error_type=type(exc).__name__,
-        error_message=str(exc),
+        error_message=format_exception_chain(exc),
         traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     )
     try:

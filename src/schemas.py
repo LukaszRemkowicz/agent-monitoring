@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from utils.byte_size import format_byte_size
-from utils.log_artifacts import collect_log_artifact_byte_count
+from utils.log_artifacts import collect_log_artifact_byte_count, decompress_json_mapping
 
 
 class LogAnalysisSeverity(StrEnum):
@@ -1274,7 +1274,7 @@ class LogAnalysisOut(LogAnalysisIn):
                 "id": analysis.id,
                 "created_at": analysis.created_at,
                 "analysis_date": analysis.analysis_date,
-                "mcp_artifact": analysis.mcp_artifact,
+                "mcp_artifact": decompress_json_mapping(analysis.mcp_artifact),
                 "status": analysis.status,
                 "started_at": analysis.started_at,
                 "finished_at": analysis.finished_at,
@@ -1287,10 +1287,10 @@ class LogAnalysisOut(LogAnalysisIn):
                 "key_findings": analysis.key_findings,
                 "recommendations": analysis.recommendations,
                 "trend_summary": analysis.trend_summary,
-                "fingerprints": analysis.fingerprints,
+                "fingerprints": decompress_json_mapping(analysis.fingerprints),
                 "evidence_fingerprints": analysis.evidence_fingerprints,
                 "known_patterns": analysis.known_patterns,
-                "coverage_snapshot": analysis.coverage_snapshot,
+                "coverage_snapshot": decompress_json_mapping(analysis.coverage_snapshot),
                 "fingerprint_version": analysis.fingerprint_version,
                 "execution_time_seconds": analysis.execution_time_seconds,
                 "gpt_tokens_used": analysis.gpt_tokens_used,

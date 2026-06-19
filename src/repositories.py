@@ -23,6 +23,7 @@ from schemas import (
     SitemapAnalysisIn,
     SitemapAnalysisOut,
 )
+from utils.log_artifacts import compress_json_mapping
 
 logger = get_logger(__name__)
 
@@ -77,7 +78,7 @@ class LogAnalysisRepository:
                 "analysis_date": str(data.analysis_date),
             },
         )
-        analysis = await self.model.objects.create(**data.model_dump())
+        analysis = await self.model.objects.create(**self._prepare_write_data(data))
         return LogAnalysisOut.from_model(analysis)
 
     async def update(self, analysis: LogAnalysisOut, **updates: Any) -> LogAnalysisOut:
@@ -85,11 +86,19 @@ class LogAnalysisRepository:
         data.update(updates)
         update_contract = LogAnalysisIn.model_validate(data)
         analysis_model = await self.model.get(id=analysis.id)
-        update_data = update_contract.model_dump()
+        update_data = self._prepare_write_data(update_contract)
         for field_name, value in update_data.items():
             setattr(analysis_model, field_name, value)
         await analysis_model.save(update_fields=list(update_data))
         return LogAnalysisOut.from_model(analysis_model)
+
+    @staticmethod
+    def _prepare_write_data(data: LogAnalysisIn) -> dict[str, Any]:
+        write_data = data.model_dump(mode="json")
+        write_data["mcp_artifact"] = compress_json_mapping(write_data["mcp_artifact"])
+        write_data["fingerprints"] = compress_json_mapping(write_data["fingerprints"])
+        write_data["coverage_snapshot"] = compress_json_mapping(write_data["coverage_snapshot"])
+        return write_data
 
     async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:
         logger.debug(
