@@ -14,6 +14,7 @@ from repositories import (
 from schemas import (
     EmailDeliveryIn,
     EmailDeliveryOut,
+    LogAnalysisFingerprints,
     LogAnalysisIn,
     LogAnalysisLLMCallIn,
     LogAnalysisOut,
@@ -21,6 +22,7 @@ from schemas import (
     SitemapAnalysisOut,
 )
 from tests.factories import LogAnalysisFactory, SitemapAnalysisFactory
+from utils.log_artifacts import is_compressed_json_mapping
 
 
 @pytest.mark.asyncio
@@ -121,6 +123,85 @@ async def test_log_analysis_repository_updates_contract_with_kwargs() -> None:
     assert updated.id == analysis.id
     assert updated.status == "succeeded"
     assert updated.summary == "Workflow bundle loaded."
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_repository_compresses_large_json_fields_at_rest() -> None:
+    repository = LogAnalysisRepository()
+    mcp_artifact = {
+        "collect_logs": {
+            "projects": [
+                {
+                    "project_name": "landingpage",
+                    "sources": [
+                        {
+                            "source_key": "backend",
+                            "byte_count": 4096,
+                            "payload": "same-line\n" * 200,
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+    fingerprints = LogAnalysisFingerprints.model_validate(
+        {
+            "version": "log-analysis-fingerprint-v1",
+            "coverage_totals": {"backend": 1},
+            "tool_results": [
+                {
+                    "tool_name": "group_errors",
+                    "arguments_hash": "args-hash",
+                    "result_hash": "abc",
+                }
+            ],
+        }
+    )
+    coverage_snapshot = {
+        "projects": [{"project_name": "landingpage", "sources": [{"source_key": "backend"}]}],
+        "totals": {"sources": 1},
+    }
+
+    analysis = await repository.create(
+        LogAnalysisIn(
+            analysis_date=date(2026, 5, 19),
+            status="succeeded",
+            summary="Workflow completed.",
+            mcp_artifact=mcp_artifact,
+            fingerprints=fingerprints,
+            coverage_snapshot=coverage_snapshot,
+        )
+    )
+    raw_analysis = await LogAnalysis.get(id=analysis.id)
+
+    assert is_compressed_json_mapping(raw_analysis.mcp_artifact)
+    assert is_compressed_json_mapping(raw_analysis.fingerprints)
+    assert is_compressed_json_mapping(raw_analysis.coverage_snapshot)
+    assert analysis.mcp_artifact == mcp_artifact
+    assert analysis.fingerprints.coverage_totals == {"backend": 1}
+    assert analysis.coverage_snapshot == coverage_snapshot
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_repository_keeps_compressed_json_after_update() -> None:
+    repository = LogAnalysisRepository()
+    analysis = await repository.create(
+        LogAnalysisIn(
+            analysis_date=date(2026, 5, 19),
+            status="running",
+            summary="Workflow preparation started.",
+            mcp_artifact={"collect_logs": {"projects": []}},
+            coverage_snapshot={"totals": {"sources": 0}},
+        )
+    )
+
+    updated = await repository.update(analysis, email_sent=True)
+    raw_analysis = await LogAnalysis.get(id=analysis.id)
+
+    assert updated.email_sent is True
+    assert is_compressed_json_mapping(raw_analysis.mcp_artifact)
+    assert is_compressed_json_mapping(raw_analysis.fingerprints)
+    assert is_compressed_json_mapping(raw_analysis.coverage_snapshot)
 
 
 @pytest.mark.asyncio

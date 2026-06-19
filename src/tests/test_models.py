@@ -14,6 +14,7 @@ from db.models import (
 )
 from tests.conftest import build_collect_logs_artifact_payload
 from tests.factories import LogAnalysisFactory, SitemapAnalysisFactory
+from utils.log_artifacts import compress_json_mapping
 
 
 @pytest.mark.asyncio
@@ -91,6 +92,17 @@ def test_log_analysis_log_size_uses_mb_for_large_artifacts() -> None:
     analysis = LogAnalysis(mcp_artifact=artifact)
 
     assert analysis.log_size == "5.0 MB"
+
+
+def test_log_analysis_log_size_uses_compressed_mcp_artifact() -> None:
+    artifact = {
+        "collect_logs": build_collect_logs_artifact_payload(
+            include_unavailable_nginx=True,
+        )
+    }
+    analysis = LogAnalysis(mcp_artifact=compress_json_mapping(artifact))
+
+    assert analysis.log_size == "4.0 KB"
 
 
 @pytest.mark.asyncio

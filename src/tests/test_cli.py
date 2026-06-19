@@ -764,6 +764,56 @@ def test_log_analysis_command_sends_failure_email_on_service_error(
     assert delivery.analysis_date == date(2026, 5, 19)
 
 
+@pytest.mark.asyncio
+async def test_command_failure_email_includes_provider_status_and_message(
+    mocker: MockerFixture,
+) -> None:
+    class FakeRateLimitError(RuntimeError):
+        status_code = 429
+        body = {
+            "error": {
+                "message": (
+                    "You exceeded your current quota, please check your plan and billing details."
+                ),
+                "type": "insufficient_quota",
+                "code": "insufficient_quota",
+            }
+        }
+
+    email_delivery_repository = FakeEmailDeliveryRepository()
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    try:
+        try:
+            try:
+                raise FakeRateLimitError("Error code: 429 - provider payload")
+            except FakeRateLimitError as exc:
+                raise ProviderExecutionError("OpenAI provider request failed") from exc
+        except ProviderExecutionError as exc:
+            raise LogAnalysisAgentError("OpenAI provider request failed") from exc
+    except LogAnalysisAgentError as exc:
+        await main._send_command_failure_email(
+            command_name="log_analysis",
+            analysis_date=date(2026, 6, 19),
+            exc=exc,
+            send_email=True,
+        )
+
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert "Status 429" in failure.error_message
+    assert (
+        "You exceeded your current quota, please check your plan and billing details."
+        in failure.error_message
+    )
+
+
 def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
     mocker: MockerFixture,
 ) -> None:

@@ -8,7 +8,7 @@ from tortoise import fields
 from tortoise.queryset import QuerySet
 
 from utils.byte_size import format_byte_size
-from utils.log_artifacts import collect_log_artifact_byte_count
+from utils.log_artifacts import collect_log_artifact_byte_count, decompress_json_mapping
 
 from .managers import DatabaseModel, QuerySetManager
 
@@ -376,7 +376,9 @@ class LogAnalysis(DatabaseModel):
     def log_size(self) -> str:
         """Return collected MCP log artifact size for display."""
 
-        return format_byte_size(collect_log_artifact_byte_count(self.mcp_artifact))
+        return format_byte_size(
+            collect_log_artifact_byte_count(decompress_json_mapping(self.mcp_artifact))
+        )
 
     async def mark_email_sent(self) -> None:
         """Mark this log analysis email as sent."""
