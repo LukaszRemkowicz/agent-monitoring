@@ -204,6 +204,28 @@ async def test_log_analysis_repository_keeps_compressed_json_after_update() -> N
     assert is_compressed_json_mapping(raw_analysis.coverage_snapshot)
 
 
+def test_log_analysis_repository_prepare_write_data_preserves_datetime_values() -> None:
+    started_at = datetime(2026, 5, 19, 12, tzinfo=UTC)
+    finished_at = datetime(2026, 5, 19, 12, 0, 1, tzinfo=UTC)
+
+    write_data = LogAnalysisRepository._prepare_write_data(
+        LogAnalysisIn(
+            analysis_date=date(2026, 5, 19),
+            status="failed",
+            started_at=started_at,
+            finished_at=finished_at,
+            summary="Workflow failed.",
+            mcp_artifact={"collect_logs": {"projects": []}},
+        )
+    )
+
+    assert write_data["started_at"] == started_at
+    assert write_data["finished_at"] == finished_at
+    assert isinstance(write_data["started_at"], datetime)
+    assert isinstance(write_data["finished_at"], datetime)
+    assert is_compressed_json_mapping(write_data["mcp_artifact"])
+
+
 @pytest.mark.asyncio
 async def test_log_analysis_repository_get_latest_before_date_returns_previous_success() -> None:
     repository = LogAnalysisRepository()
