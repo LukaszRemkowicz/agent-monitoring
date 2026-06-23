@@ -9,6 +9,7 @@
 # Typical usage:
 #   TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh
 #   NO_CACHE=true TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh
+#   TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh --emergency
 #
 # What this script does:
 #   - validates the release environment and SemVer-like tag
@@ -33,13 +34,31 @@ PROJECT_DIR="$(get_project_dir)"
 ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-prod}")"
 validate_release_environment "$ENVIRONMENT"
 
+NO_CACHE="${NO_CACHE:-false}"
+EMERGENCY="${EMERGENCY:-false}"
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --emergency)
+            EMERGENCY="true"
+            ;;
+        --no-cache)
+            NO_CACHE="true"
+            ;;
+        *)
+            log_error "Unknown build option: $1"
+            log_info "Usage: TAG=v1.2.3 infra/scripts/release/build.sh [--emergency] [--no-cache]"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null || true)}"
 validate_tag "$TAG"
 
 IMAGE_NAME="${ENVIRONMENT}-agent-monitoring:${TAG}"
 STATE_DIR="$(get_state_dir "$ENVIRONMENT")"
-NO_CACHE="${NO_CACHE:-false}"
-EMERGENCY="${EMERGENCY:-false}"
 
 mkdir -p "$STATE_DIR"
 
@@ -50,6 +69,9 @@ log_info "Project root: $PROJECT_DIR"
 log_info "State directory: $STATE_DIR"
 if [[ "$NO_CACHE" == "true" ]]; then
     log_info "No-cache mode enabled (fresh build)"
+fi
+if [[ "$EMERGENCY" == "true" ]]; then
+    log_warn "Emergency mode enabled; dirty working tree builds are allowed."
 fi
 
 # Step 1: require a clean working tree unless the operator explicitly opts out.

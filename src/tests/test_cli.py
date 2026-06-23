@@ -814,6 +814,48 @@ async def test_command_failure_email_includes_provider_status_and_message(
     )
 
 
+@pytest.mark.asyncio
+async def test_command_failure_email_summarizes_raw_mcp_schema_failure(
+    mocker: MockerFixture,
+) -> None:
+    email_delivery_repository = FakeEmailDeliveryRepository()
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+
+    mcp_error = McpClientError(
+        "MCP collect_logs response did not match expected shape. Invalid fields: "
+        "result.structuredContent.projects.0.provenance_diagnostics: "
+        "Extra inputs are not permitted."
+    )
+    try:
+        try:
+            raise mcp_error
+        except McpClientError:
+            raise TypeError("expected a datetime.date or datetime.datetime instance, got 'str'")
+    except TypeError as exc:
+        await main._send_command_failure_email(
+            command_name="log_analysis",
+            analysis_date=date(2026, 6, 20),
+            exc=exc,
+            send_email=True,
+        )
+
+    email_service.send_monitoring_failure.assert_awaited_once()
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.error_message == (
+        "MCP collect_logs returned a response field this monitoring worker did not "
+        "recognize: provenance_diagnostics. Update the local MCP schema contract, then "
+        "rerun the job."
+    )
+    assert "result.structuredContent" not in failure.error_message
+    assert "$4" not in failure.error_message
+
+
 def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
     mocker: MockerFixture,
 ) -> None:
@@ -843,13 +885,13 @@ def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
     assert delivery.error_message == "SMTP timeout"
 
 
-def test_log_analysis_command_defaults_analysis_date_to_today(
+def test_log_analysis_command_defaults_analysis_date_to_previous_local_day(
     mocker: MockerFixture,
 ) -> None:
-    class FakeDate(date):
+    class FakeDateTime(datetime):
         @classmethod
-        def today(cls) -> "FakeDate":
-            return cls(2026, 5, 20)
+        def now(cls, tz: Any = None) -> "FakeDateTime":
+            return cls(2026, 5, 20, 0, 1, tzinfo=tz)
 
     class FakeLogAnalysisService:
         def __init__(self) -> None:
@@ -872,20 +914,20 @@ def test_log_analysis_command_defaults_analysis_date_to_today(
             return _log_analysis_result(analysis_date)
 
     fake_service = FakeLogAnalysisService()
-    mocker.patch.object(main, "date", FakeDate)
+    mocker.patch.object(main, "datetime", FakeDateTime)
     dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
 
     result = runner.invoke(main.app, ["log-analysis"])
 
     assert result.exit_code == 0
-    assert fake_service.calls[0]["analysis_date"] == date(2026, 5, 20)
+    assert fake_service.calls[0]["analysis_date"] == date(2026, 5, 19)
     assert fake_service.calls[0]["log_window"] == {
-        "since": "2026-05-19T22:00:00Z",
-        "until": "2026-05-20T22:00:00Z",
-        "since_datetime": datetime(2026, 5, 19, 22, tzinfo=UTC),
-        "until_datetime": datetime(2026, 5, 20, 22, tzinfo=UTC),
+        "since": "2026-05-18T22:00:00Z",
+        "until": "2026-05-19T22:00:00Z",
+        "since_datetime": datetime(2026, 5, 18, 22, tzinfo=UTC),
+        "until_datetime": datetime(2026, 5, 19, 22, tzinfo=UTC),
     }
-    assert "analysis_date=2026-05-20" in result.output
+    assert "analysis_date=2026-05-19" in result.output
     assert dependencies["llm_call_repository_constructor"].call_args.kwargs["trace_id"]
     dependencies["email_service"].send_log_analysis.assert_awaited_once()
 
@@ -1261,6 +1303,17 @@ def test_release_script_runs_build_then_deploy() -> None:
 
     assert '"$SCRIPT_DIR/build.sh"' in release_text
     assert '"$SCRIPT_DIR/deploy.sh"' in release_text
+
+
+def test_release_script_accepts_emergency_flag_for_dirty_tree_builds() -> None:
+    release_text = Path("infra/scripts/release/release.sh").read_text()
+    build_text = Path("infra/scripts/release/build.sh").read_text()
+
+    assert "--emergency)" in release_text
+    assert 'EMERGENCY="true"' in release_text
+    assert "export ENVIRONMENT TAG EMERGENCY" in release_text
+    assert "--emergency)" in build_text
+    assert 'EMERGENCY="true"' in build_text
 
 
 def test_deploy_script_records_current_tag_without_running_monitoring_command() -> None:

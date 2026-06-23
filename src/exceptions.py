@@ -19,6 +19,43 @@ def format_exception_chain(exc: BaseException) -> str:
     return "\nCaused by: ".join(messages)
 
 
+def format_operator_exception_message(exc: BaseException) -> str:
+    """Return a short, actionable failure summary for operator emails."""
+
+    chain: list[BaseException] = list(_iter_exception_chain(exc))
+    for chain_exc in chain:
+        provider_message: str | None = _format_provider_status_message(chain_exc)
+        if provider_message is not None:
+            return provider_message
+
+    full_message: str = "\nCaused by: ".join(str(chain_exc) for chain_exc in chain)
+    mcp_schema_field: str | None = _extract_mcp_schema_field(full_message)
+    if mcp_schema_field is not None:
+        return (
+            "MCP collect_logs returned a response field this monitoring worker did not "
+            f"recognize: {mcp_schema_field}. Update the local MCP schema contract, then "
+            "rerun the job."
+        )
+
+    if _looks_like_datetime_serialization_error(full_message):
+        return (
+            "The monitoring worker tried to save a timestamp as text. Update the local "
+            "database write path, then rerun the job."
+        )
+
+    first_message: str = _format_exception_message(exc, include_type=False)
+    return _single_line(first_message, max_length=280)
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None:
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    return chain
+
+
 def _format_exception_message(exc: BaseException, *, include_type: bool) -> str:
     current_type: str = exc.__class__.__name__
     provider_message: str | None = _format_provider_status_message(exc)
@@ -66,6 +103,26 @@ def _parse_provider_error_string(value: str) -> tuple[str | None, str | None]:
     except (SyntaxError, ValueError):
         return match.group(1), None
     return match.group(1), _extract_provider_error_message(payload)
+
+
+def _extract_mcp_schema_field(message: str) -> str | None:
+    if "MCP collect_logs response did not match expected shape" not in message:
+        return None
+    match: re.Match[str] | None = re.search(r"\.([A-Za-z_][A-Za-z0-9_]*): Extra inputs", message)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _looks_like_datetime_serialization_error(message: str) -> bool:
+    return "datetime.date or datetime.datetime instance" in message and "got 'str'" in message
+
+
+def _single_line(value: str, *, max_length: int) -> str:
+    collapsed: str = re.sub(r"\s+", " ", value).strip()
+    if len(collapsed) <= max_length:
+        return collapsed
+    return f"{collapsed[: max_length - 1].rstrip()}..."
 
 
 class McpClientError(RuntimeError):

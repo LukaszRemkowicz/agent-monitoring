@@ -327,6 +327,7 @@ class ProjectCollectLogsArtifact(BaseModel):
     retry_tips: list[str] = Field(default_factory=list)
     unknown_requested_source_keys: list[str] = Field(default_factory=list)
     resolved_source_keys: list[str] = Field(default_factory=list)
+    provenance_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
     collected_at: str
     sources: list[CollectedLogSource] = Field(default_factory=list)
 

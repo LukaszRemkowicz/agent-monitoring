@@ -268,6 +268,34 @@ async def test_mcp_workflow_client_collect_logs_omits_project_names_for_jwt_scop
 
 
 @pytest.mark.asyncio
+async def test_mcp_workflow_client_collect_logs_accepts_provenance_diagnostics() -> None:
+    payload = build_collect_logs_artifact_payload()
+    payload["projects"][0]["provenance_diagnostics"] = []
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "result": {
+                        "structuredContent": payload,
+                    }
+                },
+            )
+        ),
+    )
+
+    artifact: CollectLogsArtifact = await client.collect_logs(
+        since="2026-05-19T00:00:00Z",
+        until="2026-05-20T00:00:00Z",
+    )
+
+    assert artifact.projects[0].provenance_diagnostics == []
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_collect_logs_raises_tool_error_message() -> None:
     client = McpWorkflowClient(
         base_url="http://mcp.local/mcp",
