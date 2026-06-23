@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import traceback
 from collections.abc import Awaitable, Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import click
 import typer
@@ -13,7 +14,7 @@ from agents import MonitoringWorkflowAgent
 from conf import settings
 from db.models import EmailDelivery
 from decorators import as_async, db
-from exceptions import format_exception_chain
+from exceptions import format_operator_exception_message
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
@@ -56,7 +57,7 @@ async def log_analysis(
     analysis_date: str | None = typer.Option(
         None,
         "--analysis-date",
-        help="Analysis date to process. Defaults to today.",
+        help="Analysis date to process. Defaults to the previous completed local day.",
     ),
     force: bool = typer.Option(
         False,
@@ -75,7 +76,9 @@ async def log_analysis(
     ),
 ) -> None:
     """Prepare the MCP workflow bundle for the scheduled log analysis job."""
-    parsed_analysis_date = date.fromisoformat(analysis_date) if analysis_date else date.today()
+    parsed_analysis_date = (
+        date.fromisoformat(analysis_date) if analysis_date else _default_log_analysis_date()
+    )
     log_window = LogAnalysisService.create_log_collection_window(parsed_analysis_date)
     trace_id = uuid4().hex
     mcp_client = McpWorkflowClient(
@@ -158,6 +161,13 @@ async def log_analysis(
     typer.echo(f"LLM cost USD: {result.agent_context.llm_cost_usd:.6f}")
     typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")
     typer.echo(f"Execution time: {result.analysis.execution_time_seconds:.2f}s")
+
+
+def _default_log_analysis_date() -> date:
+    """Return the completed local day that the scheduled job should analyze."""
+
+    local_today = datetime.now(ZoneInfo(settings.LOG_TIMEZONE)).date()
+    return local_today - timedelta(days=1)
 
 
 def _echo_list(label: str, values: list[str]) -> None:
@@ -304,7 +314,7 @@ async def _send_command_failure_email(
         command_name=command_name,
         analysis_date=analysis_date,
         error_type=type(exc).__name__,
-        error_message=format_exception_chain(exc),
+        error_message=format_operator_exception_message(exc),
         traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
     )
     try:

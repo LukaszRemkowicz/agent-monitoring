@@ -94,10 +94,14 @@ class LogAnalysisRepository:
 
     @staticmethod
     def _prepare_write_data(data: LogAnalysisIn) -> dict[str, Any]:
-        write_data = data.model_dump(mode="json")
-        write_data["mcp_artifact"] = compress_json_mapping(write_data["mcp_artifact"])
-        write_data["fingerprints"] = compress_json_mapping(write_data["fingerprints"])
-        write_data["coverage_snapshot"] = compress_json_mapping(write_data["coverage_snapshot"])
+        write_data = data.model_dump()
+        json_fields = data.model_dump(
+            mode="json",
+            include={"mcp_artifact", "fingerprints", "coverage_snapshot"},
+        )
+        write_data["mcp_artifact"] = compress_json_mapping(json_fields["mcp_artifact"])
+        write_data["fingerprints"] = compress_json_mapping(json_fields["fingerprints"])
+        write_data["coverage_snapshot"] = compress_json_mapping(json_fields["coverage_snapshot"])
         return write_data
 
     async def get_by_date(self, analysis_date: date) -> LogAnalysisOut | None:

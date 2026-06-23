@@ -62,7 +62,8 @@ working tree.
 Build behavior:
 
 - builds only prod-style tagged images: `prod-agent-monitoring:<TAG>`
-- refuses to build with uncommitted changes unless `EMERGENCY=true`
+- refuses to build with uncommitted changes unless `EMERGENCY=true` or
+  `--emergency` is passed
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
 - prunes older local images, keeping only the built tag
@@ -79,6 +80,12 @@ For non-interactive automation, pass approval through to deploy:
 
 ```bash
 AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+For an emergency release from a dirty working tree:
+
+```bash
+doppler run --project monitoring --config prd -- ./infra/scripts/release/release.sh --emergency
 ```
 
 Release behavior:
