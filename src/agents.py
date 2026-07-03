@@ -1333,6 +1333,43 @@ class MonitoringWorkflowAgent:
                     "current_grouped_error_scope_by_project": (
                         current_grouped_error_scope_by_project
                     ),
+                    "rejected_claim_repair_rules": [
+                        "Do not claim overall service health or stable operation.",
+                        "Do not claim no service impact.",
+                        (
+                            "Do not claim no upstream failures, no 5xx errors, or no "
+                            "issues outside the grouped-error evidence scope."
+                        ),
+                        (
+                            "Scope every current-run health statement to "
+                            "current_grouped_error_scope_by_project or to inspected "
+                            "grouped-error evidence."
+                        ),
+                        (
+                            "Use inspected tool results as evidence only when the "
+                            "specific tool result supports the specific claim."
+                        ),
+                    ],
+                    "allowed_replacement_claim_examples": [
+                        (
+                            "No supported evidence of service-impacting grouped-error "
+                            "changes was present inside the inspected grouped-error "
+                            "scope."
+                        ),
+                        (
+                            "Current grouped-error comparison covered only the listed "
+                            "project/source keys; other sources were not reanalysed by "
+                            "grouped-error evidence."
+                        ),
+                    ],
+                    "forbidden_claim_examples": [
+                        "real routes served normally",
+                        "no service impact",
+                        "no upstream errors",
+                        "no 5xx errors",
+                        "stable operation",
+                        "TLS is healthy",
+                    ],
                     "evidence": prompt.context.evidence,
                     "instruction": (
                         "Return a corrected final_report. Keep current-run claims scoped "

@@ -1513,8 +1513,43 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
     )
     assert len(llm_provider.requests) == 2
     correction_prompt = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
+    correction_payload = json.loads(correction_prompt)
     assert "unsupported_history_comparison_claims" in correction_prompt
     assert "current_grouped_error_scope_by_project" in correction_prompt
+    assert correction_payload["rejected_claim_repair_rules"] == [
+        "Do not claim overall service health or stable operation.",
+        "Do not claim no service impact.",
+        (
+            "Do not claim no upstream failures, no 5xx errors, or no issues outside "
+            "the grouped-error evidence scope."
+        ),
+        (
+            "Scope every current-run health statement to current_grouped_error_scope_by_project "
+            "or to inspected grouped-error evidence."
+        ),
+        (
+            "Use inspected tool results as evidence only when the specific tool result "
+            "supports the specific claim."
+        ),
+    ]
+    assert correction_payload["allowed_replacement_claim_examples"] == [
+        (
+            "No supported evidence of service-impacting grouped-error changes was present "
+            "inside the inspected grouped-error scope."
+        ),
+        (
+            "Current grouped-error comparison covered only the listed project/source keys; "
+            "other sources were not reanalysed by grouped-error evidence."
+        ),
+    ]
+    assert correction_payload["forbidden_claim_examples"] == [
+        "real routes served normally",
+        "no service impact",
+        "no upstream errors",
+        "no 5xx errors",
+        "stable operation",
+        "TLS is healthy",
+    ]
     assert "host-security" in correction_prompt
 
 

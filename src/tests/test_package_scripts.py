@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from cli import typer as typer_cli
 from cli.utils import build_prod_compose_command, get_state_dir
 
 runner = CliRunner()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_state_dir_resolver_uses_configured_state_dir(tmp_path: Path) -> None:
@@ -134,3 +136,33 @@ def test_shell_script_bridges_to_saved_prod_tag(
         "shell",
         "--help",
     ]
+
+
+def test_backup_script_requires_explicit_environment(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "echo 'docker should not be reached when ENVIRONMENT is missing' >&2\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    env = os.environ.copy()
+    env.pop("ENVIRONMENT", None)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+
+    result = subprocess.run(
+        ["bash", "infra/scripts/db_backup/backup_db.sh"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "ENVIRONMENT is required" in result.stderr
+    assert "docker should not be reached" not in result.stderr
