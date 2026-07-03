@@ -7,7 +7,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../utils.sh"
 
 PROJECT_DIR="$(get_project_dir)"
-ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-local}")"
+if [[ -z "${ENVIRONMENT:-}" ]]; then
+    log_error "ENVIRONMENT is required. Usage: ENVIRONMENT=local|prod $0"
+    exit 1
+fi
+ENVIRONMENT="$(normalize_environment "$ENVIRONMENT")"
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
 BACKUP_DIR="$(get_backup_dir "$PROJECT_DIR" "$ENVIRONMENT")"

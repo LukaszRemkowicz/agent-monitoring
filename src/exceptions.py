@@ -43,8 +43,7 @@ def format_operator_exception_message(exc: BaseException) -> str:
             "database write path, then rerun the job."
         )
 
-    first_message: str = _format_exception_message(exc, include_type=False)
-    return _single_line(first_message, max_length=280)
+    return _single_line(_operator_fallback_message(chain), max_length=280)
 
 
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
@@ -63,6 +62,30 @@ def _format_exception_message(exc: BaseException, *, include_type: bool) -> str:
     if include_type and message != current_type:
         return f"{current_type}: {message}"
     return message
+
+
+def _operator_fallback_message(chain: list[BaseException]) -> str:
+    first_message: str = _format_exception_message(chain[0], include_type=False)
+    if not _looks_like_empty_wrapper_message(first_message):
+        return first_message
+
+    cause_messages: list[str] = [
+        _format_exception_message(chain_exc, include_type=False)
+        for chain_exc in chain[1:]
+        if _format_exception_message(chain_exc, include_type=False).strip()
+    ]
+    if not cause_messages:
+        return first_message
+
+    return f"{first_message} {' caused by '.join(cause_messages)}"
+
+
+def _looks_like_empty_wrapper_message(message: str) -> bool:
+    normalized: str = message.strip()
+    return normalized in {
+        "MCP workflow call failed:",
+        "MCP call failed:",
+    }
 
 
 def _format_provider_status_message(exc: BaseException) -> str | None:

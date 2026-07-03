@@ -7,7 +7,7 @@ from uuid import uuid4
 import httpx
 from pydantic import ValidationError
 
-from exceptions import McpClientError
+from exceptions import McpClientError, format_exception_chain
 from logging_config import get_logger
 from schemas import (
     CollectLogsArtifact,
@@ -356,7 +356,7 @@ class McpWorkflowClient:
                 },
             )
             raise McpClientError(
-                f"MCP workflow call failed: {exc}",
+                f"MCP workflow call failed: {format_exception_chain(exc)}",
                 mcp_url=self.base_url,
                 tool_name=name,
                 hint=(
