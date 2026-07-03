@@ -98,6 +98,7 @@ def test_monitoring_failure_email_renders_error_context() -> None:
     )
 
     assert "Portfolio - Monitoring Failure" in html
+    assert "Failure Summary" in html
     assert "log_analysis" in html
     assert "MCP workflow unavailable" in html
     assert "RuntimeError" in html
