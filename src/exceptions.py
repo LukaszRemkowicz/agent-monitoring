@@ -29,6 +29,13 @@ def format_operator_exception_message(exc: BaseException) -> str:
             return provider_message
 
     full_message: str = "\nCaused by: ".join(str(chain_exc) for chain_exc in chain)
+    if _looks_like_mcp_collect_logs_timeout(chain):
+        return (
+            "MCP collect_logs timed out while waiting for the MCP server to finish "
+            "collecting logs. MCP was reachable; increase MCP_TIMEOUT_SECONDS or "
+            "reduce the collection window/source scope, then rerun the job."
+        )
+
     mcp_schema_field: str | None = _extract_mcp_schema_field(full_message)
     if mcp_schema_field is not None:
         return (
@@ -86,6 +93,17 @@ def _looks_like_empty_wrapper_message(message: str) -> bool:
         "MCP workflow call failed:",
         "MCP call failed:",
     }
+
+
+def _looks_like_mcp_collect_logs_timeout(chain: list[BaseException]) -> bool:
+    if not chain:
+        return False
+    first = chain[0]
+    tool_name = getattr(first, "tool_name", None)
+    if tool_name != "collect_logs":
+        return False
+    full_message = "\n".join(_format_exception_message(exc, include_type=True) for exc in chain)
+    return "ReadTimeout" in full_message or "deadline exceeded" in full_message
 
 
 def _format_provider_status_message(exc: BaseException) -> str | None:

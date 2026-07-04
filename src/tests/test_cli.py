@@ -764,6 +764,30 @@ def test_log_analysis_command_sends_failure_email_on_service_error(
     assert delivery.analysis_date == date(2026, 5, 19)
 
 
+def test_log_analysis_command_uses_configured_mcp_timeout(
+    mocker: MockerFixture,
+) -> None:
+    class FakeLogAnalysisService:
+        async def run_log_analysis(
+            self,
+            *,
+            analysis_date: date,
+            log_window: LogCollectionWindow,
+            force: bool,
+        ) -> LogAnalysisWorkflowResult:
+            return _log_analysis_result(analysis_date)
+
+    fake_service = FakeLogAnalysisService()
+    dependencies = _patch_log_analysis_command_dependencies(mocker, fake_service)
+
+    result = runner.invoke(main.app, ["log-analysis", "--analysis-date", "2026-05-19"])
+
+    assert result.exit_code == 0
+    assert dependencies["mcp_client_constructor"].call_args.kwargs["timeout_seconds"] == (
+        main.settings.MCP_TIMEOUT_SECONDS
+    )
+
+
 @pytest.mark.asyncio
 async def test_command_failure_email_includes_provider_status_and_message(
     mocker: MockerFixture,
@@ -965,6 +989,7 @@ def test_check_mcp_command_calls_mcp_service_status(
         "keycloak_url": main.settings.MCP_KEYCLOAK_URL,
         "keycloak_client_id": main.settings.MCP_KEYCLOAK_CLIENT_ID,
         "keycloak_client_secret": main.settings.MCP_KEYCLOAK_CLIENT_SECRET,
+        "timeout_seconds": main.settings.MCP_TIMEOUT_SECONDS,
     }
     assert "MCP service is reachable" in result.output
     assert "name=workflow-mcp" in result.output

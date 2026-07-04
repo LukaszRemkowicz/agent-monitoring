@@ -87,6 +87,7 @@ async def log_analysis(
         keycloak_url=settings.MCP_KEYCLOAK_URL,
         keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
         keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
+        timeout_seconds=settings.MCP_TIMEOUT_SECONDS,
     )
     log_analysis_repository = LogAnalysisRepository()
     history_comparison_service = LogAnalysisHistoryComparisonService()
@@ -232,6 +233,7 @@ async def sitemap_analysis(
         keycloak_url=settings.MCP_KEYCLOAK_URL,
         keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
         keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
+        timeout_seconds=settings.MCP_TIMEOUT_SECONDS,
     )
     crawler: Crawler = Crawler(
         client=HTTPXSitemapFetcher(),
@@ -419,6 +421,7 @@ async def check_mcp() -> None:
         keycloak_url=settings.MCP_KEYCLOAK_URL,
         keycloak_client_id=settings.MCP_KEYCLOAK_CLIENT_ID,
         keycloak_client_secret=settings.MCP_KEYCLOAK_CLIENT_SECRET,
+        timeout_seconds=settings.MCP_TIMEOUT_SECONDS,
     )
     logger.info(
         "checking MCP service status",
