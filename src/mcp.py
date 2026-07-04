@@ -40,7 +40,7 @@ class McpWorkflowClient:
         keycloak_client_id: str = "",
         keycloak_client_secret: str = "",
         token_refresh_margin_seconds: int = 60,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 90.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url

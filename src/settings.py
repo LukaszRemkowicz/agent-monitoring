@@ -34,6 +34,7 @@ DATABASE_USER = env.str("DATABASE_USER", default="monitoring")
 DATABASE_PASSWORD = env.str("DATABASE_PASSWORD", default="monitoring")
 
 MCP_URL = env.str("MCP_URL", default="http://127.0.0.1:8001/mcp")
+MCP_TIMEOUT_SECONDS = env.float("MCP_TIMEOUT_SECONDS", default=90.0)
 MCP_WORKFLOW_JWT = env.str("MCP_WORKFLOW_JWT", default="")
 MCP_KEYCLOAK_URL = env.str("MCP_KEYCLOAK_URL", default="")
 MCP_KEYCLOAK_CLIENT_ID = env.str("MCP_KEYCLOAK_CLIENT_ID", default="")
