@@ -15,6 +15,12 @@ from schemas import (
 from tests.conftest import build_collect_logs_artifact_payload
 
 
+def test_mcp_workflow_client_defaults_to_longer_timeout() -> None:
+    client = McpWorkflowClient(base_url="http://mcp.local/mcp", workflow_jwt="workflow-token")
+
+    assert client.timeout_seconds == 90.0
+
+
 @pytest.mark.asyncio
 async def test_mcp_workflow_client_calls_tool_and_returns_structured_content_model() -> None:
     requests: list[httpx.Request] = []
