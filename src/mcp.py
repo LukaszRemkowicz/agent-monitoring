@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 from uuid import uuid4
@@ -11,7 +12,8 @@ from exceptions import McpClientError, format_exception_chain
 from logging_config import get_logger
 from schemas import (
     CollectLogsArtifact,
-    McpCollectLogsResponse,
+    LogCollectionTaskStatus,
+    LogCollectionTaskStatusPayload,
     McpGenericToolResponse,
     McpProjectManifestListResponse,
     McpReadResourceResponse,
@@ -21,6 +23,7 @@ from schemas import (
     McpToolResponse,
     McpToolResultError,
     ProjectManifestSummary,
+    StartLogCollectionPayload,
     StructuredContent,
     WorkflowBootstrap,
 )
@@ -41,6 +44,8 @@ class McpWorkflowClient:
         keycloak_client_secret: str = "",
         token_refresh_margin_seconds: int = 60,
         timeout_seconds: float = 90.0,
+        collect_logs_poll_interval_seconds: float = 30.0,
+        collect_logs_poll_timeout_seconds: float = 300.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url
@@ -50,6 +55,8 @@ class McpWorkflowClient:
         self.keycloak_client_secret = keycloak_client_secret
         self.token_refresh_margin_seconds = token_refresh_margin_seconds
         self.timeout_seconds = timeout_seconds
+        self.collect_logs_poll_interval_seconds = collect_logs_poll_interval_seconds
+        self.collect_logs_poll_timeout_seconds = collect_logs_poll_timeout_seconds
         self.transport = transport
         self._cached_workflow_jwt = ""
         self._cached_workflow_jwt_expires_at = 0.0
@@ -122,37 +129,141 @@ class McpWorkflowClient:
     ) -> CollectLogsArtifact:
         """Collect the 24h workflow log artifact for all JWT-authorized projects."""
 
-        response: dict[str, Any] = await self._make_call(
-            McpToolName.COLLECT_LOGS,
-            {"since": since, "until": until},
+        started_collection: StartLogCollectionPayload = await self._start_log_collection(
+            since=since,
+            until=until,
         )
-        self._raise_tool_result_error_if_present(response, McpToolName.COLLECT_LOGS)
+        artifact_payload: dict[str, Any] = await self._wait_for_log_collection(
+            started_collection.session_id
+        )
         try:
-            collect_logs_response: McpCollectLogsResponse = McpCollectLogsResponse.model_validate(
-                response
-            )
+            return CollectLogsArtifact.model_validate(artifact_payload)
         except ValidationError as exc:
             raise McpClientError(
                 self._format_validation_error(
-                    "MCP collect_logs response did not match expected shape.",
+                    "MCP get_log_collection_status result did not match expected "
+                    "collect_logs shape.",
                     exc,
                 ),
                 mcp_url=self.base_url,
-                tool_name=McpToolName.COLLECT_LOGS,
+                tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
             ) from exc
-        if collect_logs_response.error is not None:
+
+    async def _start_log_collection(
+        self,
+        *,
+        since: str,
+        until: str,
+    ) -> StartLogCollectionPayload:
+        """Start MCP background log collection and return its polling handle."""
+
+        payload: dict[str, Any] = await self.call_deterministic_tool(
+            McpToolName.START_LOG_COLLECTION,
+            {"since": since, "until": until},
+        )
+        try:
+            return StartLogCollectionPayload.model_validate(payload)
+        except ValidationError as exc:
             raise McpClientError(
-                f"MCP collect_logs error: {collect_logs_response.error.message}",
+                self._format_validation_error(
+                    "MCP start_log_collection result did not match expected shape.",
+                    exc,
+                ),
                 mcp_url=self.base_url,
-                tool_name=McpToolName.COLLECT_LOGS,
+                tool_name=McpToolName.START_LOG_COLLECTION,
+            ) from exc
+
+    async def _wait_for_log_collection(self, session_id: str) -> dict[str, Any]:
+        """Poll MCP log-collection status until all tasks finish or timeout."""
+
+        deadline: float = time.monotonic() + self.collect_logs_poll_timeout_seconds
+        while True:
+            status_payload: LogCollectionTaskStatusPayload = await self._get_log_collection_status(
+                session_id
             )
-        if collect_logs_response.result is None:
+            failed_tasks = [
+                task
+                for task in status_payload.tasks
+                if task.status == LogCollectionTaskStatus.FAILED
+            ]
+            if failed_tasks:
+                messages = [
+                    f"{task.project_name or 'unknown project'}: "
+                    f"{task.error_message or task.error_code or 'task failed'}"
+                    for task in failed_tasks
+                ]
+                raise McpClientError(
+                    "MCP log collection task failed: " + "; ".join(messages),
+                    mcp_url=self.base_url,
+                    tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+                )
+            if status_payload.tasks and all(
+                task.status == LogCollectionTaskStatus.COMPLETED for task in status_payload.tasks
+            ):
+                return self._collect_logs_payload_from_status(status_payload)
+
+            if time.monotonic() >= deadline:
+                raise McpClientError(
+                    "MCP log collection timed out after "
+                    f"{self.collect_logs_poll_timeout_seconds:g} seconds "
+                    f"for session_id={session_id}.",
+                    mcp_url=self.base_url,
+                    tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+                )
+            await asyncio.sleep(self.collect_logs_poll_interval_seconds)
+
+    async def _get_log_collection_status(
+        self,
+        session_id: str,
+    ) -> LogCollectionTaskStatusPayload:
+        """Return the current MCP background log-collection status."""
+
+        payload: dict[str, Any] = await self.call_deterministic_tool(
+            McpToolName.GET_LOG_COLLECTION_STATUS,
+            {"session_id": session_id},
+        )
+        try:
+            return LogCollectionTaskStatusPayload.model_validate(payload)
+        except ValidationError as exc:
             raise McpClientError(
-                "MCP collect_logs response did not include a result object.",
+                self._format_validation_error(
+                    "MCP get_log_collection_status result did not match expected shape.",
+                    exc,
+                ),
                 mcp_url=self.base_url,
-                tool_name=McpToolName.COLLECT_LOGS,
-            )
-        return collect_logs_response.result.structured_content
+                tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+            ) from exc
+
+    def _collect_logs_payload_from_status(
+        self,
+        status_payload: LogCollectionTaskStatusPayload,
+    ) -> dict[str, Any]:
+        """Build a collect_logs artifact payload from completed task results."""
+
+        project_payloads: list[dict[str, Any]] = []
+        for task in status_payload.tasks:
+            if task.result is None:
+                raise McpClientError(
+                    "MCP get_log_collection_status completed without a task result.",
+                    mcp_url=self.base_url,
+                    tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+                )
+            project_payloads.append(task.result)
+
+        if len(project_payloads) == 1 and "projects" in project_payloads[0]:
+            return project_payloads[0]
+        return {
+            "action": McpToolName.COLLECT_LOGS,
+            "workspace": status_payload.workspace,
+            "session_id": status_payload.session_id,
+            "requested_project_names": [
+                project_name
+                for project_name in (task.project_name for task in status_payload.tasks)
+                if project_name is not None
+            ],
+            "next_step_tips": [],
+            "projects": project_payloads,
+        }
 
     async def list_projects(self) -> list[ProjectManifestSummary]:
         """Return projects available to the authenticated MCP caller."""
