@@ -101,6 +101,8 @@ class McpToolName(StrEnum):
     ANALYZE_DAILY_LOG_BUNDLE = "analyze_daily_log_bundle"
     ANALYZE_SITEMAP_BUNDLE = "analyze_sitemap_bundle"
     COLLECT_LOGS = "collect_logs"
+    START_LOG_COLLECTION = "start_log_collection"
+    GET_LOG_COLLECTION_STATUS = "get_log_collection_status"
     LIST_PROJECTS = "list_projects"
     READ_RESOURCE = "resources/read"
     GROUP_ERRORS = "group_errors"
@@ -365,6 +367,58 @@ class McpCollectLogsResponse(BaseModel):
 
     result: McpCollectLogsResult | None = None
     error: McpToolError | None = None
+
+
+class StartLogCollectionPayload(BaseModel):
+    """Structured payload returned by MCP `start_log_collection`."""
+
+    action: Literal["start_log_collection"]
+    status: Literal["started"]
+    workspace: LogWorkspace
+    session_id: str
+    next_step_tips: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogCollectionTaskStatus(StrEnum):
+    """Known MCP background log-collection task status values."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class LogCollectionProjectTaskStatus(BaseModel):
+    """One project task returned by MCP `get_log_collection_status`."""
+
+    project_name: str | None = None
+    status: LogCollectionTaskStatus
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class LogCollectionTaskStatusPayload(BaseModel):
+    """Structured payload returned by MCP `get_log_collection_status`."""
+
+    action: Literal["get_log_collection_status"]
+    task_type: Literal["log_collection"]
+    workspace: LogWorkspace
+    session_id: str
+    task_count: int
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    tasks: list[LogCollectionProjectTaskStatus]
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class McpGenericToolPayload(BaseModel):
