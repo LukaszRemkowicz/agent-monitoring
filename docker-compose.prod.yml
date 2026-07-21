@@ -3,6 +3,7 @@ name: agent-monitoring
 services:
   db:
     image: postgres:18
+    container_name: agent-monitoring-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DATABASE_NAME:-}
@@ -60,7 +61,7 @@ services:
       EMAIL_PASSWORD: ${EMAIL_PASSWORD:-}
       EMAIL_FROM: ${EMAIL_FROM:-}
       EMAIL_TO: ${EMAIL_TO:-}
-      SITE_DOMAIN: ${SITE_DOMAIN:-}
+      SITEMAP_PUBLIC_HOST: ${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}
       SITEMAP_EMAIL_TO: ${SITEMAP_EMAIL_TO:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-90}
     volumes:

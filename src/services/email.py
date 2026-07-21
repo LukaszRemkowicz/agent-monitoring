@@ -29,6 +29,13 @@ class MonitoringFailureEmail:
     error_type: str
     error_message: str
     traceback_text: str
+    stage: str = ""
+    tool_name: str = ""
+    session_id: str = ""
+    timeout_seconds: float | None = None
+    root_cause: str = ""
+    retry_guidance: str = ""
+    raw_diagnostics: str = ""
 
 
 class MonitoringEmailSender(Protocol):

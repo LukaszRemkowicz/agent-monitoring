@@ -1,5 +1,6 @@
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 from pytest_mock import MockerFixture
@@ -11,6 +12,15 @@ from cli.utils import build_prod_compose_command, get_state_dir
 
 runner = CliRunner()
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_retry_policy_module_is_included_in_production_wheel() -> None:
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert (
+        "src/retry_policy.py"
+        in pyproject["tool"]["hatch"]["build"]["targets"]["wheel"]["only-include"]
+    )
 
 
 def test_state_dir_resolver_uses_configured_state_dir(tmp_path: Path) -> None:
@@ -43,6 +53,7 @@ def test_build_prod_compose_command_passes_tag_and_args() -> None:
     ) == [
         "env",
         "TAG=v0.1.1",
+        "COMPOSE_PROJECT_NAME=agent-monitoring",
         "docker",
         "compose",
         "-f",
@@ -79,6 +90,7 @@ def test_typer_script_bridges_to_prod_compose_with_extra_args(
     assert run.call_args.args[0] == [
         "env",
         "TAG=v0.1.1",
+        "COMPOSE_PROJECT_NAME=agent-monitoring",
         "docker",
         "compose",
         "-f",
@@ -126,6 +138,7 @@ def test_shell_script_bridges_to_saved_prod_tag(
     assert run.call_args.args[0] == [
         "env",
         "TAG=v0.1.2",
+        "COMPOSE_PROJECT_NAME=agent-monitoring",
         "docker",
         "compose",
         "-f",

@@ -89,6 +89,13 @@ def test_monitoring_failure_email_renders_error_context() -> None:
         error_type="RuntimeError",
         error_message="MCP workflow unavailable",
         traceback_text="Traceback (most recent call last):\nRuntimeError: MCP workflow unavailable",
+        stage="status_poll",
+        tool_name="get_log_collection_status",
+        session_id="workflow-session",
+        timeout_seconds=90.0,
+        root_cause="ReadTimeout: status response timed out",
+        retry_guidance="Retry status polling with the same session ID.",
+        raw_diagnostics="McpClientError: wrapper\nCaused by: ReadTimeout",
     )
     service = _email_service(_email_config())
 
@@ -102,7 +109,37 @@ def test_monitoring_failure_email_renders_error_context() -> None:
     assert "log_analysis" in html
     assert "MCP workflow unavailable" in html
     assert "RuntimeError" in html
+    assert "status_poll" in html
+    assert "get_log_collection_status" in html
+    assert "workflow-session" in html
+    assert "90 seconds" in html
+    assert "ReadTimeout: status response timed out" in html
+    assert "Retry status polling with the same session ID." in html
+    assert "McpClientError: wrapper" in html
     assert "Traceback (most recent call last):" in html
+
+
+def test_monitoring_failure_email_renders_missing_timeout_safely() -> None:
+    failure = MonitoringFailureEmail(
+        command_name="log_analysis",
+        analysis_date=date(2026, 5, 19),
+        error_type="McpClientError",
+        error_message="MCP status failed",
+        traceback_text="McpClientError: MCP status failed",
+        stage="status_poll",
+        tool_name="get_log_collection_status",
+        session_id="workflow-session",
+        timeout_seconds=None,
+    )
+    service = _email_service(_email_config())
+
+    html = service.renderer.render(
+        "monitoring/failure.html",
+        service._failure_context(failure),
+    )
+
+    assert "not available" in html
+    assert "None seconds" not in html
 
 
 def test_log_analysis_email_renders_copied_template() -> None:
