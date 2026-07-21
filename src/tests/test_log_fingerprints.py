@@ -101,6 +101,7 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
         "collected_sources": 1,
         "unavailable_sources": 1,
         "zero_line_sources": 1,
+        "truncated_sources": 0,
     }
     assert packet.coverage_snapshot["projects"][0]["sources"][1] == {
         "source_key": "nginx",
@@ -111,6 +112,8 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
         "zero_lines": True,
         "has_output_file": False,
         "error": "file missing",
+        "truncated": False,
+        "continuation_available": False,
     }
     assert packet.fingerprints.report.severity == "INFO"
     assert packet.fingerprints.report.key_finding_count == 1
@@ -172,6 +175,26 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
             "pattern": "Routine bot traffic.",
         }
     ]
+
+
+def test_coverage_snapshot_preserves_transfer_completeness() -> None:
+    payload = build_collect_logs_artifact_payload()
+    payload["projects"][0]["sources"][0]["transfer"] = {
+        "encoding": "base64",
+        "operation": "container_logs_page",
+        "truncated": True,
+        "byte_limit": 1_000_000,
+        "page_count": 1,
+        "next_offset": 1_000_000,
+        "returned_bytes": 1_000_000,
+    }
+    artifact = CollectLogsArtifact.model_validate(payload)
+
+    snapshot = LogAnalysisFingerprintBuilder.build_coverage_snapshot(artifact)
+
+    assert snapshot["projects"][0]["sources"][0]["truncated"] is True
+    assert snapshot["projects"][0]["sources"][0]["continuation_available"] is True
+    assert snapshot["totals"]["truncated_sources"] == 1
 
 
 def test_log_analysis_rejects_unknown_fingerprint_shape() -> None:

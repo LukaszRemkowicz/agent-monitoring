@@ -286,6 +286,25 @@ class McpServiceStatusResponse(BaseModel):
     error: McpToolError | None = None
 
 
+class CollectedLogSourceTransfer(BaseModel):
+    """MCP transfer metadata retained with one collected source.
+
+    Truncation and continuation availability affect monitoring coverage. The
+    remaining optional fields are transport diagnostics preserved with the MCP
+    artifact without becoming LLM evidence by themselves.
+    """
+
+    encoding: str | None = None
+    operation: str | None = None
+    truncated: bool = False
+    byte_limit: int | None = None
+    page_count: int | None = None
+    next_offset: int | None = None
+    returned_bytes: int | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class CollectedLogSource(BaseModel):
     """One source entry returned by MCP `collect_logs`.
 
@@ -306,6 +325,7 @@ class CollectedLogSource(BaseModel):
     output_file: str | None = None
     error: str | None = None
     retry_tips: list[str] = Field(default_factory=list)
+    transfer: CollectedLogSourceTransfer | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -997,6 +1017,8 @@ class LogAnalysisCurrentCoverage(BaseModel):
 
     zero_line_sources: list[str] = Field(default_factory=list)
     unavailable_sources: list[str] = Field(default_factory=list)
+    truncated_sources: list[str] = Field(default_factory=list)
+    continuation_available_sources: list[str] = Field(default_factory=list)
 
 
 class LogAnalysisPromptCollectedSource(BaseModel):
@@ -1006,6 +1028,8 @@ class LogAnalysisPromptCollectedSource(BaseModel):
     status: LogSourceCollectionStatus
     line_count: int
     zero_lines: bool
+    truncated: bool = False
+    continuation_available: bool = False
 
 
 class LogAnalysisPromptCollectedProject(BaseModel):

@@ -106,6 +106,7 @@ class LogAnalysisFingerprintBuilder:
         collected_source_count = 0
         unavailable_source_count = 0
         zero_line_source_count = 0
+        truncated_source_count = 0
 
         for project in collect_logs.projects:
             sources: list[dict[str, Any]] = []
@@ -117,6 +118,12 @@ class LogAnalysisFingerprintBuilder:
                     unavailable_source_count += 1
                 if source.line_count == 0:
                     zero_line_source_count += 1
+                truncated = source.transfer is not None and source.transfer.truncated
+                continuation_available = (
+                    source.transfer is not None and source.transfer.next_offset is not None
+                )
+                if truncated:
+                    truncated_source_count += 1
                 sources.append(
                     {
                         "source_key": source.source_key,
@@ -127,6 +134,8 @@ class LogAnalysisFingerprintBuilder:
                         "zero_lines": source.line_count == 0,
                         "has_output_file": bool(source.output_file),
                         "error": source.error,
+                        "truncated": truncated,
+                        "continuation_available": continuation_available,
                     }
                 )
             projects.append(
@@ -146,6 +155,7 @@ class LogAnalysisFingerprintBuilder:
                 "collected_sources": collected_source_count,
                 "unavailable_sources": unavailable_source_count,
                 "zero_line_sources": zero_line_source_count,
+                "truncated_sources": truncated_source_count,
             },
         }
 
