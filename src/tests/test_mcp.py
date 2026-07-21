@@ -1,4 +1,6 @@
+import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -8,6 +10,7 @@ from exceptions import McpClientError
 from mcp import McpWorkflowClient
 from schemas import (
     CollectLogsArtifact,
+    LogCollectionTaskStatusPayload,
     LogWorkspace,
     McpToolName,
     ProjectManifestSummary,
@@ -377,7 +380,7 @@ async def test_mcp_workflow_client_collect_logs_polls_async_collection_until_com
             return monotonic_values.pop(0)
         return 60.0
 
-    monkeypatch.setattr("mcp.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("mcp.time", SimpleNamespace(monotonic=fake_monotonic))
 
     def handler(request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(request.content)
@@ -429,6 +432,114 @@ async def test_mcp_workflow_client_collect_logs_polls_async_collection_until_com
 
 
 @pytest.mark.asyncio
+async def test_collect_logs_retries_transient_status_timeout_with_same_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict[str, Any]] = []
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("mcp.asyncio.sleep", fake_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(request.content)
+        requests.append(request_payload)
+        tool_name = request_payload["params"]["name"]
+        if tool_name == McpToolName.START_LOG_COLLECTION:
+            return build_start_log_collection_response(session_id="stable-session")
+        status_calls = [
+            item
+            for item in requests
+            if item["params"]["name"] == McpToolName.GET_LOG_COLLECTION_STATUS
+        ]
+        if len(status_calls) == 1:
+            raise httpx.ReadTimeout("status response timed out", request=request)
+        return build_log_collection_status_response(
+            session_id="stable-session",
+            result=build_collect_logs_artifact_payload(session_id="stable-session"),
+        )
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+        collect_logs_poll_interval_seconds=0.0,
+    )
+
+    artifact = await client.collect_logs(
+        since="2026-05-19T00:00:00Z",
+        until="2026-05-20T00:00:00Z",
+    )
+
+    assert artifact.session_id == "stable-session"
+    status_requests = [
+        item for item in requests if item["params"]["name"] == McpToolName.GET_LOG_COLLECTION_STATUS
+    ]
+    assert [item["params"]["arguments"] for item in status_requests] == [
+        {"session_id": "stable-session"},
+        {"session_id": "stable-session"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_collect_logs_does_not_retry_status_connect_timeout() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(request.content)
+        requests.append(request_payload)
+        if request_payload["params"]["name"] == McpToolName.START_LOG_COLLECTION:
+            return build_start_log_collection_response(session_id="stable-session")
+        raise httpx.ConnectTimeout("status connection timed out", request=request)
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+        collect_logs_poll_interval_seconds=0.0,
+    )
+
+    with pytest.raises(McpClientError):
+        await client.collect_logs(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+        )
+
+    status_requests = [
+        item for item in requests if item["params"]["name"] == McpToolName.GET_LOG_COLLECTION_STATUS
+    ]
+    assert len(status_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_logs_start_timeout_has_operator_context() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("start response timed out", request=request)
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+        timeout_seconds=45.0,
+    )
+
+    with pytest.raises(McpClientError) as error_info:
+        await client.collect_logs(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+        )
+
+    error = error_info.value
+    assert error.stage == "collection_start"
+    assert error.tool_name == McpToolName.START_LOG_COLLECTION
+    assert error.session_id == ""
+    assert error.timeout_seconds == 45.0
+    assert "start response timed out" in error.root_cause
+    assert "Do not automatically restart collection" in error.retry_guidance
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_collect_logs_times_out_when_async_collection_stays_running(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -438,14 +549,14 @@ async def test_mcp_workflow_client_collect_logs_times_out_when_async_collection_
         sleep_calls.append(delay)
 
     monkeypatch.setattr("mcp.asyncio.sleep", fake_sleep)
-    monotonic_values = [0.0, 0.0, 30.0, 60.0]
+    monotonic_values = [0.0, 0.0, 0.0, 30.0, 30.0, 60.0]
 
     def fake_monotonic() -> float:
         if monotonic_values:
             return monotonic_values.pop(0)
         return 60.0
 
-    monkeypatch.setattr("mcp.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("mcp.time", SimpleNamespace(monotonic=fake_monotonic))
 
     def handler(request: httpx.Request) -> httpx.Response:
         request_payload = json.loads(request.content)
@@ -471,7 +582,94 @@ async def test_mcp_workflow_client_collect_logs_times_out_when_async_collection_
         )
 
     assert "timed out after 60 seconds" in str(error_info.value)
+    assert error_info.value.stage == "collection_wait"
+    assert error_info.value.tool_name == McpToolName.GET_LOG_COLLECTION_STATUS
+    assert error_info.value.session_id == "workflow-session"
+    assert error_info.value.timeout_seconds == 60.0
+    assert "Poll this session ID again" in error_info.value.retry_guidance
     assert sleep_calls == [30.0, 30.0]
+
+
+@pytest.mark.asyncio
+async def test_collect_logs_caps_status_calls_and_sleeps_to_remaining_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleep_calls: list[float] = []
+    status_timeouts: list[float] = []
+    monotonic_values = [0.0, 0.0, 20.0, 50.0, 55.0, 60.0]
+
+    async def fake_sleep(delay: float) -> None:
+        sleep_calls.append(delay)
+
+    def fake_monotonic() -> float:
+        if monotonic_values:
+            return monotonic_values.pop(0)
+        return 60.0
+
+    status_payload = LogCollectionTaskStatusPayload.model_validate(
+        build_log_collection_status_response(status="running").json()["result"]["structuredContent"]
+    )
+
+    async def fake_status(
+        _session_id: str,
+        *,
+        timeout_seconds: float,
+    ) -> LogCollectionTaskStatusPayload:
+        status_timeouts.append(timeout_seconds)
+        return status_payload
+
+    monkeypatch.setattr("mcp.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("mcp.time", SimpleNamespace(monotonic=fake_monotonic))
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        timeout_seconds=90.0,
+        collect_logs_poll_timeout_seconds=60.0,
+        collect_logs_poll_interval_seconds=30.0,
+    )
+    monkeypatch.setattr(client, "_get_log_collection_status", fake_status)
+
+    with pytest.raises(McpClientError) as error_info:
+        await client._wait_for_log_collection("workflow-session")
+
+    assert error_info.value.stage == "collection_wait"
+    assert status_timeouts == [60.0, 10.0]
+    assert sleep_calls == [30.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_collect_logs_cancels_status_coroutine_at_collection_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_call_count = 0
+
+    async def blocking_status(
+        _session_id: str,
+        *,
+        timeout_seconds: float,
+    ) -> LogCollectionTaskStatusPayload:
+        nonlocal status_call_count
+        status_call_count += 1
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        collect_logs_poll_timeout_seconds=0.01,
+    )
+    monkeypatch.setattr(client, "_get_log_collection_status", blocking_status)
+
+    with pytest.raises(McpClientError) as error_info:
+        await asyncio.wait_for(
+            client._wait_for_log_collection("workflow-session"),
+            timeout=0.1,
+        )
+
+    assert error_info.value.stage == "collection_wait"
+    assert isinstance(error_info.value.__cause__, TimeoutError)
+    assert status_call_count == 1
 
 
 @pytest.mark.asyncio

@@ -19,11 +19,18 @@ from exceptions import (
     format_exception_chain,
 )
 from logging_config import get_logger
+from retry_policy import CommandExitCode, match_database_retry_rule
 
 P = ParamSpec("P")
 T = TypeVar("T")
 AsyncCallable = Callable[P, Coroutine[Any, Any, T]]
 logger = get_logger(__name__)
+
+
+class RetryWithForceClickException(click.ClickException):
+    """Signal that the scheduler may rerun this command with ``--force``."""
+
+    exit_code = int(CommandExitCode.RETRY_WITH_FORCE)
 
 
 def as_async() -> Callable[[AsyncCallable[P, T]], Callable[P, T]]:
@@ -55,6 +62,8 @@ def db[**P, T](
                 async with database_lifespan():
                     return await wrapped(*args, **kwargs)
             except IntegrityError as exc:
+                retry_rule = match_database_retry_rule(exc)
+                retry_with_force = retry_rule is not None
                 logger.error(
                     "database integrity error",
                     extra={
@@ -63,9 +72,14 @@ def db[**P, T](
                         "database_port": settings.DATABASE_PORT,
                         "database_name": settings.DATABASE_NAME,
                         "error": str(exc),
+                        "retry_with_force": retry_with_force,
+                        "retry_rule": retry_rule.name if retry_rule is not None else "",
                     },
                 )
-                raise click.ClickException(
+                error_type = (
+                    RetryWithForceClickException if retry_with_force else click.ClickException
+                )
+                raise error_type(
                     f"Database integrity error: {exc}. "
                     f"Database={settings.DATABASE_HOST}:{settings.DATABASE_PORT}/"
                     f"{settings.DATABASE_NAME}."

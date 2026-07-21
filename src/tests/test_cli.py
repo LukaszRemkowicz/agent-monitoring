@@ -8,8 +8,10 @@ from types import TracebackType
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 import typer
+from asyncpg import PostgresError  # type: ignore[import-untyped]
 from click import unstyle
 from llm_core.exceptions import ProviderConfigurationError, ProviderExecutionError
 from pytest_mock import MockerFixture
@@ -880,6 +882,47 @@ async def test_command_failure_email_summarizes_raw_mcp_schema_failure(
     assert "$4" not in failure.error_message
 
 
+@pytest.mark.asyncio
+async def test_command_failure_email_preserves_mcp_timeout_diagnostics(
+    mocker: MockerFixture,
+) -> None:
+    email_delivery_repository = FakeEmailDeliveryRepository()
+    mocker.patch.object(
+        main,
+        "EmailDeliveryRepository",
+        return_value=email_delivery_repository,
+    )
+    email_service = AsyncMock()
+    mocker.patch.object(main.MonitoringEmailService, "create_default", return_value=email_service)
+    timeout = httpx.ReadTimeout("status response timed out")
+    mcp_error = McpClientError(
+        "MCP workflow call failed: status response timed out",
+        tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+        stage="status_poll",
+        session_id="workflow-session",
+        timeout_seconds=90.0,
+        root_cause="ReadTimeout: status response timed out",
+        retry_guidance="Retry status polling with the same session ID.",
+    )
+    mcp_error.__cause__ = timeout
+
+    await main._send_command_failure_email(
+        command_name="log_analysis",
+        analysis_date=date(2026, 7, 19),
+        exc=mcp_error,
+        send_email=True,
+    )
+
+    failure = email_service.send_monitoring_failure.call_args.args[0]
+    assert failure.stage == "status_poll"
+    assert failure.tool_name == McpToolName.GET_LOG_COLLECTION_STATUS
+    assert failure.session_id == "workflow-session"
+    assert failure.timeout_seconds == 90.0
+    assert failure.root_cause == "ReadTimeout: status response timed out"
+    assert "same session ID" in failure.retry_guidance
+    assert "status response timed out" in failure.raw_diagnostics
+
+
 def test_log_analysis_command_records_failed_delivery_when_report_email_fails(
     mocker: MockerFixture,
 ) -> None:
@@ -1323,6 +1366,44 @@ def test_deploy_script_exports_sitemap_public_host_setting() -> None:
     assert "SITEMAP_URL" not in deploy_text
 
 
+def test_prod_compose_uses_canonical_project_database_and_sitemap_host() -> None:
+    compose_text = Path("docker-compose.prod.yml").read_text()
+
+    assert compose_text.startswith("name: agent-monitoring\n")
+    assert "    container_name: agent-monitoring-db\n" in compose_text
+    assert (
+        "      SITEMAP_PUBLIC_HOST: " "${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}\n"
+    ) in compose_text
+    assert "agent-monitoring-prod" not in compose_text
+
+
+def test_prod_scripts_override_legacy_compose_project_name() -> None:
+    for script_path in (
+        "infra/scripts/release/deploy.sh",
+        "infra/scripts/db_backup/backup_db.sh",
+        "infra/scripts/db_backup/restore_db.sh",
+    ):
+        script_text = Path(script_path).read_text()
+        assert 'COMPOSE_PROJECT_NAME="$(get_compose_project_name "$ENVIRONMENT")"' in script_text
+
+
+def test_prod_deploy_does_not_run_legacy_transition() -> None:
+    deploy_text = Path("infra/scripts/release/deploy.sh").read_text()
+
+    assert "transition_legacy_prod_stack" not in deploy_text
+    assert not Path("infra/scripts/release/transition_legacy_prod_stack.sh").exists()
+
+
+def test_release_script_requires_and_exports_sitemap_public_host() -> None:
+    release_text = Path("infra/scripts/release/release.sh").read_text()
+
+    assert (
+        'SITEMAP_PUBLIC_HOST="${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}"'
+        in release_text
+    )
+    assert "export ENVIRONMENT TAG EMERGENCY SITEMAP_PUBLIC_HOST" in release_text
+
+
 def test_release_script_runs_build_then_deploy() -> None:
     release_text = Path("infra/scripts/release/release.sh").read_text()
 
@@ -1498,7 +1579,14 @@ def test_db_decorator_does_not_label_integrity_errors_as_connection_errors(
     @as_async()
     @db
     async def command() -> None:
-        raise IntegrityError("duplicate key value violates unique constraint")
+        postgres_error = PostgresError.new(
+            {
+                "C": "23505",
+                "M": "duplicate key value violates unique constraint",
+                "n": "email_deliveries_pkey",
+            }
+        )
+        raise IntegrityError(postgres_error) from postgres_error
 
     result = runner.invoke(app)
     output = unstyle(result.output)
@@ -1510,6 +1598,103 @@ def test_db_decorator_does_not_label_integrity_errors_as_connection_errors(
     assert isinstance(result.exception, SystemExit)
     assert result.exception.code == 1
     assert "Traceback" not in output
+
+
+def test_db_decorator_maps_log_analysis_primary_key_conflict_to_force_retry_exit(
+    mocker: MockerFixture,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        postgres_error = PostgresError.new(
+            {
+                "C": "23505",
+                "M": "duplicate key value violates unique constraint",
+                "n": "log_analyses_pkey",
+            }
+        )
+        raise IntegrityError(postgres_error) from postgres_error
+
+    result = runner.invoke(app)
+    output = unstyle(result.output)
+
+    assert result.exit_code == 75
+    assert "Database integrity error" in output
+    assert "duplicate key value violates unique constraint" in output
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 75
+    assert "Traceback" not in output
+
+
+@pytest.mark.parametrize("error_kind", ["impostor", "wrong_sqlstate"])
+def test_db_decorator_rejects_non_matching_force_retry_causes(
+    mocker: MockerFixture,
+    error_kind: str,
+) -> None:
+    class FakeDatabaseLifespan:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    class ImpostorUniqueViolation(RuntimeError):
+        sqlstate = "23505"
+        constraint_name = "log_analyses_pkey"
+
+    def fake_database_lifespan() -> FakeDatabaseLifespan:
+        return FakeDatabaseLifespan()
+
+    mocker.patch("decorators.database_lifespan", new=fake_database_lifespan)
+
+    app = typer.Typer()
+
+    @app.command()
+    @as_async()
+    @db
+    async def command() -> None:
+        if error_kind == "impostor":
+            cause: BaseException = ImpostorUniqueViolation("not a PostgreSQL error")
+        else:
+            cause = PostgresError.new(
+                {
+                    "C": "23503",
+                    "M": "foreign key constraint violation",
+                    "n": "log_analyses_pkey",
+                }
+            )
+        raise IntegrityError(cause) from cause
+
+    result = runner.invoke(app)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exception.code == 1
 
 
 def test_db_decorator_formats_mcp_client_errors(
@@ -2031,6 +2216,7 @@ def test_migrate_script_runs_in_compose_for_deployed_prod(
     assert run.call_args.args[0] == [
         "env",
         "TAG=v0.1.1",
+        "COMPOSE_PROJECT_NAME=agent-monitoring",
         "docker",
         "compose",
         "-f",
@@ -2058,6 +2244,7 @@ def test_makemigrations_script_bridges_to_prod_compose_with_extra_args(
     assert run.call_args.args[0] == [
         "env",
         "TAG=v0.1.1",
+        "COMPOSE_PROJECT_NAME=agent-monitoring",
         "docker",
         "compose",
         "-f",

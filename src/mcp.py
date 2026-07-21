@@ -46,6 +46,7 @@ class McpWorkflowClient:
         timeout_seconds: float = 90.0,
         collect_logs_poll_interval_seconds: float = 30.0,
         collect_logs_poll_timeout_seconds: float = 300.0,
+        collect_logs_status_poll_retry_attempts: int = 1,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url
@@ -57,6 +58,7 @@ class McpWorkflowClient:
         self.timeout_seconds = timeout_seconds
         self.collect_logs_poll_interval_seconds = collect_logs_poll_interval_seconds
         self.collect_logs_poll_timeout_seconds = collect_logs_poll_timeout_seconds
+        self.collect_logs_status_poll_retry_attempts = collect_logs_status_poll_retry_attempts
         self.transport = transport
         self._cached_workflow_jwt = ""
         self._cached_workflow_jwt_expires_at = 0.0
@@ -177,10 +179,41 @@ class McpWorkflowClient:
         """Poll MCP log-collection status until all tasks finish or timeout."""
 
         deadline: float = time.monotonic() + self.collect_logs_poll_timeout_seconds
+        consecutive_status_timeouts = 0
         while True:
-            status_payload: LogCollectionTaskStatusPayload = await self._get_log_collection_status(
-                session_id
-            )
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise self._log_collection_timeout_error(session_id)
+            try:
+                async with asyncio.timeout(remaining_seconds):
+                    status_payload: LogCollectionTaskStatusPayload = (
+                        await self._get_log_collection_status(
+                            session_id,
+                            timeout_seconds=min(self.timeout_seconds, remaining_seconds),
+                        )
+                    )
+            except TimeoutError as exc:
+                raise self._log_collection_timeout_error(session_id) from exc
+            except McpClientError as exc:
+                if not self._is_status_poll_timeout(exc):
+                    raise
+                consecutive_status_timeouts += 1
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise self._log_collection_timeout_error(session_id) from exc
+                if consecutive_status_timeouts > self.collect_logs_status_poll_retry_attempts:
+                    raise
+                logger.warning(
+                    "retrying MCP log collection status after timeout",
+                    extra={
+                        "event": "mcp_log_collection_status_retry",
+                        "session_id": session_id,
+                        "attempt": consecutive_status_timeouts,
+                    },
+                )
+                await asyncio.sleep(min(self.collect_logs_poll_interval_seconds, remaining_seconds))
+                continue
+            consecutive_status_timeouts = 0
             failed_tasks = [
                 task
                 for task in status_payload.tasks
@@ -202,25 +235,43 @@ class McpWorkflowClient:
             ):
                 return self._collect_logs_payload_from_status(status_payload)
 
-            if time.monotonic() >= deadline:
-                raise McpClientError(
-                    "MCP log collection timed out after "
-                    f"{self.collect_logs_poll_timeout_seconds:g} seconds "
-                    f"for session_id={session_id}.",
-                    mcp_url=self.base_url,
-                    tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
-                )
-            await asyncio.sleep(self.collect_logs_poll_interval_seconds)
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise self._log_collection_timeout_error(session_id)
+            await asyncio.sleep(min(self.collect_logs_poll_interval_seconds, remaining_seconds))
+
+    def _log_collection_timeout_error(self, session_id: str) -> McpClientError:
+        return McpClientError(
+            "MCP log collection timed out after "
+            f"{self.collect_logs_poll_timeout_seconds:g} seconds "
+            f"for session_id={session_id}.",
+            mcp_url=self.base_url,
+            tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
+            stage="collection_wait",
+            session_id=session_id,
+            timeout_seconds=self.collect_logs_poll_timeout_seconds,
+            root_cause="Background log collection did not complete before the deadline.",
+            retry_guidance=(
+                "Poll this session ID again before deciding whether to start a new collection."
+            ),
+        )
+
+    @staticmethod
+    def _is_status_poll_timeout(exc: McpClientError) -> bool:
+        return exc.stage == "status_poll" and isinstance(exc.__cause__, httpx.ReadTimeout)
 
     async def _get_log_collection_status(
         self,
         session_id: str,
+        *,
+        timeout_seconds: float,
     ) -> LogCollectionTaskStatusPayload:
         """Return the current MCP background log-collection status."""
 
         payload: dict[str, Any] = await self.call_deterministic_tool(
             McpToolName.GET_LOG_COLLECTION_STATUS,
             {"session_id": session_id},
+            timeout_seconds=timeout_seconds,
         )
         try:
             return LogCollectionTaskStatusPayload.model_validate(payload)
@@ -333,6 +384,8 @@ class McpWorkflowClient:
         self,
         name: str,
         arguments: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         """Execute one MCP-owned analysis tool requested by the LLM loop.
 
@@ -350,7 +403,9 @@ class McpWorkflowClient:
         code.
         """
 
-        response: dict[str, Any] = await self._make_call(name, arguments)
+        response: dict[str, Any] = await self._make_call(
+            name, arguments, timeout_seconds=timeout_seconds
+        )
         self._raise_tool_result_error_if_present(response, name)
         try:
             tool_response: McpGenericToolResponse = McpGenericToolResponse.model_validate(response)
@@ -431,9 +486,13 @@ class McpWorkflowClient:
         arguments: dict[str, Any] | None = None,
         *,
         request_payload: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         if request_payload is None:
             request_payload = self._build_tool_call_payload(name, arguments)
+        request_timeout_seconds = (
+            self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        )
 
         try:
             logger.info(
@@ -445,7 +504,7 @@ class McpWorkflowClient:
                 },
             )
             async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
+                timeout=request_timeout_seconds,
                 transport=self.transport,
             ) as client:
                 workflow_jwt = await self._get_workflow_jwt(client, name)
@@ -466,6 +525,23 @@ class McpWorkflowClient:
                     "error": str(exc),
                 },
             )
+            is_timeout = isinstance(exc, httpx.TimeoutException)
+            stage = ""
+            session_id = ""
+            retry_guidance = ""
+            if is_timeout and name == McpToolName.START_LOG_COLLECTION:
+                stage = "collection_start"
+                retry_guidance = (
+                    "Do not automatically restart collection because the start result is unknown; "
+                    "inspect MCP logs before rerunning the job."
+                )
+            elif is_timeout and name == McpToolName.GET_LOG_COLLECTION_STATUS:
+                stage = "status_poll"
+                session_id = str((arguments or {}).get("session_id", ""))
+                retry_guidance = (
+                    "Retry status polling with the same session ID; collection "
+                    "continues server-side."
+                )
             raise McpClientError(
                 f"MCP workflow call failed: {format_exception_chain(exc)}",
                 mcp_url=self.base_url,
@@ -475,6 +551,11 @@ class McpWorkflowClient:
                     "For Docker Compose commands, remember that localhost means the "
                     "monitoring container, not your host."
                 ),
+                stage=stage,
+                session_id=session_id,
+                timeout_seconds=request_timeout_seconds if is_timeout else None,
+                root_cause=format_exception_chain(exc) if is_timeout else "",
+                retry_guidance=retry_guidance,
             ) from exc
         except ValueError as exc:
             logger.warning(

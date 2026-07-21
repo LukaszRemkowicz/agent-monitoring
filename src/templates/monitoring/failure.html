@@ -90,6 +90,35 @@
                 <div class="label">Failure Summary</div>
                 <div class="value">{{ failure.error_message }}</div>
 
+                {% if failure.stage %}
+                <div class="label">Failure Stage</div>
+                <div class="value">{{ failure.stage }}</div>
+
+                <div class="label">MCP Tool</div>
+                <div class="value">{{ failure.tool_name }}</div>
+
+                <div class="label">Session ID</div>
+                <div class="value">{{ failure.session_id }}</div>
+
+                <div class="label">Timeout</div>
+                <div class="value">
+                    {% if failure.timeout_seconds is not none %}
+                    {{ "%g"|format(failure.timeout_seconds) }} seconds
+                    {% else %}
+                    not available
+                    {% endif %}
+                </div>
+
+                <div class="label">Root Cause</div>
+                <div class="value">{{ failure.root_cause }}</div>
+
+                <div class="label">Retry Guidance</div>
+                <div class="value">{{ failure.retry_guidance }}</div>
+
+                <div class="label">Raw Diagnostics</div>
+                <pre>{{ failure.raw_diagnostics }}</pre>
+                {% endif %}
+
                 <div class="label">Diagnostic Trace</div>
                 <pre>{{ failure.traceback_text }}</pre>
             </div>

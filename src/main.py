@@ -14,7 +14,11 @@ from agents import MonitoringWorkflowAgent
 from conf import settings
 from db.models import EmailDelivery
 from decorators import as_async, db
-from exceptions import format_operator_exception_message
+from exceptions import (
+    format_exception_chain,
+    format_operator_exception_message,
+    get_mcp_failure_context,
+)
 from llm import get_llm_provider
 from logging_config import get_logger
 from mcp import McpWorkflowClient
@@ -312,12 +316,22 @@ async def _send_command_failure_email(
 ) -> None:
     if not send_email:
         return
+    mcp_context = get_mcp_failure_context(exc)
     failure = MonitoringFailureEmail(
         command_name=command_name,
         analysis_date=analysis_date,
         error_type=type(exc).__name__,
         error_message=format_operator_exception_message(exc),
         traceback_text="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+        stage=str(mcp_context.get("stage", "")),
+        tool_name=str(mcp_context.get("tool_name", "")),
+        session_id=str(mcp_context.get("session_id", "")),
+        timeout_seconds=(
+            float(mcp_context["timeout_seconds"]) if "timeout_seconds" in mcp_context else None
+        ),
+        root_cause=str(mcp_context.get("root_cause", "")),
+        retry_guidance=str(mcp_context.get("retry_guidance", "")),
+        raw_diagnostics=format_exception_chain(exc),
     )
     try:
         email_service = MonitoringEmailService.create_default()

@@ -12,10 +12,10 @@ def format_exception_chain(exc: BaseException) -> str:
     """Return a compact message with chained exception details."""
 
     messages: list[str] = [_format_exception_message(exc, include_type=False)]
-    current: BaseException | None = exc.__cause__ or exc.__context__
+    current: BaseException | None = _next_exception_in_chain(exc)
     while current is not None:
         messages.append(_format_exception_message(current, include_type=True))
-        current = current.__cause__ or current.__context__
+        current = _next_exception_in_chain(current)
     return "\nCaused by: ".join(messages)
 
 
@@ -23,6 +23,16 @@ def format_operator_exception_message(exc: BaseException) -> str:
     """Return a short, actionable failure summary for operator emails."""
 
     chain: list[BaseException] = list(_iter_exception_chain(exc))
+    mcp_timeout = next(
+        (
+            chain_exc
+            for chain_exc in chain
+            if isinstance(chain_exc, McpClientError) and chain_exc.stage
+        ),
+        None,
+    )
+    if mcp_timeout is not None:
+        return _format_mcp_timeout_message(mcp_timeout)
     for chain_exc in chain:
         provider_message: str | None = _format_provider_status_message(chain_exc)
         if provider_message is not None:
@@ -53,13 +63,53 @@ def format_operator_exception_message(exc: BaseException) -> str:
     return _single_line(_operator_fallback_message(chain), max_length=280)
 
 
+def get_mcp_failure_context(exc: BaseException) -> dict[str, str | float]:
+    """Return structured MCP timeout details for the operator email."""
+
+    for chain_exc in _iter_exception_chain(exc):
+        if isinstance(chain_exc, McpClientError) and chain_exc.stage:
+            context: dict[str, str | float] = {
+                "stage": chain_exc.stage,
+                "tool_name": chain_exc.tool_name,
+                "session_id": chain_exc.session_id or "not available",
+                "root_cause": chain_exc.root_cause or str(chain_exc),
+                "retry_guidance": chain_exc.retry_guidance,
+            }
+            if chain_exc.timeout_seconds is not None:
+                context["timeout_seconds"] = chain_exc.timeout_seconds
+            return context
+    return {}
+
+
+def _format_mcp_timeout_message(error: McpClientError) -> str:
+    timeout = (
+        f"{error.timeout_seconds:g} seconds"
+        if error.timeout_seconds is not None
+        else "not available"
+    )
+    return (
+        f"Stage: {error.stage}; Tool: {error.tool_name or 'not available'}; "
+        f"Session ID: {error.session_id or 'not available'}; Timeout: {timeout}; "
+        f"Root cause: {error.root_cause or str(error)}; "
+        f"Retry guidance: {error.retry_guidance or 'Inspect raw diagnostics before retrying.'}"
+    )
+
+
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
     current: BaseException | None = exc
     while current is not None:
         chain.append(current)
-        current = current.__cause__ or current.__context__
+        current = _next_exception_in_chain(current)
     return chain
+
+
+def _next_exception_in_chain(exc: BaseException) -> BaseException | None:
+    if exc.__cause__ is not None:
+        return exc.__cause__
+    if exc.__suppress_context__:
+        return None
+    return exc.__context__
 
 
 def _format_exception_message(exc: BaseException, *, include_type: bool) -> str:
@@ -176,11 +226,21 @@ class McpClientError(RuntimeError):
         mcp_url: str = "",
         tool_name: str = "",
         hint: str = "",
+        stage: str = "",
+        session_id: str = "",
+        timeout_seconds: float | None = None,
+        root_cause: str = "",
+        retry_guidance: str = "",
     ) -> None:
         super().__init__(message)
         self.mcp_url = mcp_url
         self.tool_name = tool_name
         self.hint = hint
+        self.stage = stage
+        self.session_id = session_id
+        self.timeout_seconds = timeout_seconds
+        self.root_cause = root_cause
+        self.retry_guidance = retry_guidance
 
 
 class PrivateMonitoringContextError(RuntimeError):
