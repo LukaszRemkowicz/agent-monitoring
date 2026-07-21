@@ -12,6 +12,7 @@ import environ  # type: ignore[import-untyped]
 
 DEFAULT_STATE_ROOT = Path("/var/lib/agent-monitoring")
 PROD_COMPOSE_FILE = "docker-compose.prod.yml"
+PROD_COMPOSE_PROJECT_NAME = "agent-monitoring"
 PROD_COMPOSE_SERVICE = "app"
 CONTAINER_RUNTIME_MARKERS = (
     Path("/.dockerenv"),
@@ -103,6 +104,7 @@ def build_prod_compose_command(tag: str, command: Sequence[str]) -> list[str]:
     return [
         "env",
         f"TAG={tag}",
+        f"COMPOSE_PROJECT_NAME={PROD_COMPOSE_PROJECT_NAME}",
         "docker",
         "compose",
         "-f",

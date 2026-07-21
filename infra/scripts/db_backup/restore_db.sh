@@ -14,7 +14,7 @@ fi
 PROJECT_DIR="$(get_project_dir)"
 ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-local}")"
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
+COMPOSE_PROJECT_NAME="$(get_compose_project_name "$ENVIRONMENT")"
 BACKUP_FILE="$1"
 
 DATABASE_NAME="${DATABASE_NAME:-agent_monitoring}"

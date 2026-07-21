@@ -69,6 +69,7 @@ jobs:
       EMAIL_HOST: localhost
       EMAIL_FROM: monitoring@example.com
       EMAIL_TO: ops@example.com
+      SITEMAP_PUBLIC_HOST: https://example.com
 
     steps:
       - name: Checkout code

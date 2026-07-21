@@ -55,6 +55,7 @@ only-include = [
     "src/main.py",
     "src/mcp.py",
     "src/repositories.py",
+    "src/retry_policy.py",
     "src/schemas.py",
     "src/cli",
     "src/services",

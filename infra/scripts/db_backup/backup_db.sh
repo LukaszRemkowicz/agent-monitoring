@@ -13,7 +13,7 @@ if [[ -z "${ENVIRONMENT:-}" ]]; then
 fi
 ENVIRONMENT="$(normalize_environment "$ENVIRONMENT")"
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
+COMPOSE_PROJECT_NAME="$(get_compose_project_name "$ENVIRONMENT")"
 BACKUP_DIR="$(get_backup_dir "$PROJECT_DIR" "$ENVIRONMENT")"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 

@@ -48,7 +48,8 @@ done
 
 TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null || true)}"
 validate_tag "$TAG"
-export ENVIRONMENT TAG EMERGENCY
+SITEMAP_PUBLIC_HOST="${SITEMAP_PUBLIC_HOST:?SITEMAP_PUBLIC_HOST is required}"
+export ENVIRONMENT TAG EMERGENCY SITEMAP_PUBLIC_HOST
 
 log_header "Releasing ${ENVIRONMENT}-agent-monitoring:${TAG}"
 log_info "Environment: $ENVIRONMENT"

@@ -37,7 +37,7 @@ TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null ||
 validate_tag "$TAG"
 
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
+COMPOSE_PROJECT_NAME="$(get_compose_project_name "$ENVIRONMENT")"
 IMAGE_NAME="${ENVIRONMENT}-agent-monitoring:${TAG}"
 STATE_DIR="$(get_state_dir "$ENVIRONMENT")"
 LOCK_DIR="$STATE_DIR/deploy.lock"

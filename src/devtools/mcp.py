@@ -82,6 +82,8 @@ class FakerMCP(McpWorkflowClient):
         self,
         name: str,
         arguments: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         self.calls.append(f"call_deterministic_tool:{name}:{arguments}")
         self.called_tool_names.append(name)
