@@ -1597,6 +1597,8 @@ class MonitoringWorkflowAgent:
 
         zero_line_sources: list[str] = []
         unavailable_sources: list[str] = []
+        truncated_sources: list[str] = []
+        continuation_available_sources: list[str] = []
         for project in collect_logs.projects:
             project_name: str = project.project_name
             for source in project.sources:
@@ -1606,9 +1608,15 @@ class MonitoringWorkflowAgent:
                     unavailable_sources.append(source_name)
                 elif source.line_count == 0:
                     zero_line_sources.append(source_name)
+                if source.transfer is not None and source.transfer.truncated:
+                    truncated_sources.append(source_name)
+                if source.transfer is not None and source.transfer.next_offset is not None:
+                    continuation_available_sources.append(source_name)
         return LogAnalysisCurrentCoverage(
             zero_line_sources=zero_line_sources,
             unavailable_sources=unavailable_sources,
+            truncated_sources=truncated_sources,
+            continuation_available_sources=continuation_available_sources,
         )
 
     @staticmethod
@@ -1632,6 +1640,14 @@ class MonitoringWorkflowAgent:
                             status=source.status,
                             line_count=source.line_count,
                             zero_lines=source.line_count == 0,
+                            truncated=(
+                                source.transfer.truncated if source.transfer is not None else False
+                            ),
+                            continuation_available=(
+                                source.transfer.next_offset is not None
+                                if source.transfer is not None
+                                else False
+                            ),
                         )
                         for source in project.sources
                     ],

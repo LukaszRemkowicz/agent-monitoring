@@ -49,6 +49,31 @@ def _fingerprints(payload: dict[str, object]) -> LogAnalysisFingerprints:
     return LogAnalysisFingerprints.model_validate(payload)
 
 
+def test_log_collection_transfer_marks_incomplete_prompt_coverage() -> None:
+    payload = build_collect_logs_artifact_payload()
+    payload["projects"][0]["sources"][0]["transfer"] = {
+        "encoding": "base64",
+        "operation": "container_logs_page",
+        "truncated": True,
+        "byte_limit": 1_000_000,
+        "page_count": 1,
+        "next_offset": 1_000_000,
+        "returned_bytes": 1_000_000,
+    }
+    artifact = CollectLogsArtifact.model_validate(payload)
+
+    coverage = MonitoringWorkflowAgent._build_current_coverage(artifact)
+    collection = MonitoringWorkflowAgent._build_prompt_collection(artifact)
+
+    assert coverage.truncated_sources == ["demo-shop.backend"]
+    assert coverage.continuation_available_sources == ["demo-shop.backend"]
+    prompt_source = collection.projects[0].sources[0]
+    assert prompt_source.truncated is True
+    assert prompt_source.continuation_available is True
+    assert "encoding" not in prompt_source.model_dump()
+    assert "next_offset" not in prompt_source.model_dump()
+
+
 class FakeMcpWorkflowClient(McpWorkflowClient):
     def __init__(self) -> None:
         super().__init__(
@@ -658,6 +683,8 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
     assert user_prompt["current_coverage"] == {
         "zero_line_sources": [],
         "unavailable_sources": ["demo-shop.nginx"],
+        "truncated_sources": [],
+        "continuation_available_sources": [],
     }
     assert user_prompt["evidence"]["prompt_compacted"]["source_coverage"] == {
         "available": True,
@@ -1819,6 +1846,8 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage(
     assert user_prompt["current_coverage"] == {
         "zero_line_sources": [],
         "unavailable_sources": ["demo-shop.nginx"],
+        "truncated_sources": [],
+        "continuation_available_sources": [],
     }
     assert user_prompt["previous_analysis"]["coverage_snapshot"] == {
         "totals": {

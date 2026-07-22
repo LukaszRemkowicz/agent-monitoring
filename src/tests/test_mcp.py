@@ -363,6 +363,47 @@ async def test_mcp_workflow_client_collect_logs_accepts_provenance_diagnostics()
 
 
 @pytest.mark.asyncio
+async def test_mcp_workflow_client_collect_logs_accepts_transfer_metadata() -> None:
+    payload = build_collect_logs_artifact_payload(session_id="workflow-session")
+    payload["projects"][0]["sources"][0]["transfer"] = {
+        "encoding": "base64",
+        "operation": "container_logs_page",
+        "truncated": True,
+        "byte_limit": 1_000_000,
+        "page_count": 1,
+        "next_offset": 1_000_000,
+        "returned_bytes": 1_000_000,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_payload = json.loads(request.content)
+        tool_name = request_payload["params"]["name"]
+        if tool_name == McpToolName.START_LOG_COLLECTION:
+            return build_start_log_collection_response()
+        if tool_name == McpToolName.GET_LOG_COLLECTION_STATUS:
+            return build_log_collection_status_response(result=payload)
+        raise AssertionError(f"unexpected tool call: {tool_name}")
+
+    client = McpWorkflowClient(
+        base_url="http://mcp.local/mcp",
+        workflow_jwt="workflow-token",
+        transport=httpx.MockTransport(handler),
+        collect_logs_poll_interval_seconds=0.0,
+    )
+
+    artifact = await client.collect_logs(
+        since="2026-05-19T00:00:00Z",
+        until="2026-05-20T00:00:00Z",
+    )
+
+    transfer = artifact.projects[0].sources[0].transfer
+    assert transfer is not None
+    assert transfer.truncated is True
+    assert transfer.next_offset == 1_000_000
+    assert transfer.returned_bytes == 1_000_000
+
+
+@pytest.mark.asyncio
 async def test_mcp_workflow_client_collect_logs_polls_async_collection_until_completed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

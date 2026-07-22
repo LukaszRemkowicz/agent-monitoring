@@ -474,6 +474,7 @@ async def test_log_analysis_service_loads_workflow_bundle() -> None:
         "collected_sources": 1,
         "unavailable_sources": 0,
         "zero_line_sources": 0,
+        "truncated_sources": 0,
     }
     fingerprints = cast(
         dict[str, Any],
@@ -674,6 +675,7 @@ async def test_log_analysis_service_records_partial_collection_on_agent_failure(
         "collected_sources": 1,
         "unavailable_sources": 0,
         "zero_line_sources": 0,
+        "truncated_sources": 0,
     }
 
 
