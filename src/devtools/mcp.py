@@ -6,6 +6,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from mcp import McpWorkflowClient
 from schemas import (
     CollectLogsArtifact,
@@ -78,26 +80,27 @@ class FakerMCP(McpWorkflowClient):
             overrides=self.collect_logs_overrides,
         )
 
-    async def call_deterministic_tool(
+    async def call_deterministic_tool[ResponseModelT: BaseModel](
         self,
         name: str,
         arguments: dict[str, Any],
+        response_model: type[ResponseModelT],
         *,
         timeout_seconds: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> ResponseModelT:
         self.calls.append(f"call_deterministic_tool:{name}:{arguments}")
         self.called_tool_names.append(name)
         result_name: str | None = self._fixture_name_for_tool(name, arguments)
         result: dict[str, Any]
         if name == McpToolName.COLLECT_LOGS:
-            return self.load_collect_logs_fixture(
+            result = self.load_collect_logs_fixture(
                 since=str(arguments.get("since") or ""),
                 until=str(arguments.get("until") or ""),
                 session_id=str(arguments.get("session_id") or self.session_id or ""),
                 target_analysis_date=self.target_analysis_date,
                 overrides=self.collect_logs_overrides,
             ).model_dump(mode="json")
-        if result_name and (self.fixture_root / self.scenario / f"{result_name}.json").exists():
+        elif result_name and (self.fixture_root / self.scenario / f"{result_name}.json").exists():
             result = self.load_fixture_payload(
                 self.scenario,
                 result_name,
@@ -108,7 +111,7 @@ class FakerMCP(McpWorkflowClient):
             result = self._generic_tool_result(name, arguments)
         if name == McpToolName.GROUP_ERRORS:
             LogAnalysisGroupedErrorsResult.from_mcp_payload(result)
-        return result
+        return response_model.model_validate(result)
 
     @classmethod
     def load_fixture_payload(

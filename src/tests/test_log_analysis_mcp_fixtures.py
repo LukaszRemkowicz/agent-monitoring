@@ -109,7 +109,7 @@ async def test_fixture_backed_mcp_client_runs_real_agent_loop(
                         "arguments": {
                             "project_name": "demo-shop",
                             "source_key": "nginx",
-                            "pattern": "/.env",
+                            "grep": "/.env",
                         },
                     },
                     {

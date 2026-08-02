@@ -6,7 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from exceptions import McpClientError, format_exception_chain
 from logging_config import get_logger
@@ -159,21 +159,11 @@ class McpWorkflowClient:
     ) -> StartLogCollectionPayload:
         """Start MCP background log collection and return its polling handle."""
 
-        payload: dict[str, Any] = await self.call_deterministic_tool(
+        return await self.call_deterministic_tool(
             McpToolName.START_LOG_COLLECTION,
             {"since": since, "until": until},
+            response_model=StartLogCollectionPayload,
         )
-        try:
-            return StartLogCollectionPayload.model_validate(payload)
-        except ValidationError as exc:
-            raise McpClientError(
-                self._format_validation_error(
-                    "MCP start_log_collection result did not match expected shape.",
-                    exc,
-                ),
-                mcp_url=self.base_url,
-                tool_name=McpToolName.START_LOG_COLLECTION,
-            ) from exc
 
     async def _wait_for_log_collection(self, session_id: str) -> dict[str, Any]:
         """Poll MCP log-collection status until all tasks finish or timeout."""
@@ -268,22 +258,12 @@ class McpWorkflowClient:
     ) -> LogCollectionTaskStatusPayload:
         """Return the current MCP background log-collection status."""
 
-        payload: dict[str, Any] = await self.call_deterministic_tool(
+        return await self.call_deterministic_tool(
             McpToolName.GET_LOG_COLLECTION_STATUS,
             {"session_id": session_id},
+            response_model=LogCollectionTaskStatusPayload,
             timeout_seconds=timeout_seconds,
         )
-        try:
-            return LogCollectionTaskStatusPayload.model_validate(payload)
-        except ValidationError as exc:
-            raise McpClientError(
-                self._format_validation_error(
-                    "MCP get_log_collection_status result did not match expected shape.",
-                    exc,
-                ),
-                mcp_url=self.base_url,
-                tool_name=McpToolName.GET_LOG_COLLECTION_STATUS,
-            ) from exc
 
     def _collect_logs_payload_from_status(
         self,
@@ -380,22 +360,22 @@ class McpWorkflowClient:
             )
         return status_response.result.structured_content
 
-    async def call_deterministic_tool(
+    async def call_deterministic_tool[ResponseModelT: BaseModel](
         self,
         name: str,
         arguments: dict[str, Any],
+        response_model: type[ResponseModelT],
         *,
         timeout_seconds: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> ResponseModelT:
         """Execute one MCP-owned analysis tool requested by the LLM loop.
 
         The monitoring agent lets the LLM decide which advertised MCP tool it
         needs next, but the tool execution itself stays outside the LLM. This
         method is the narrow boundary for that handoff: it sends the validated
         tool name and arguments through the MCP JSON-RPC transport, checks the
-        generic tool-response envelope, converts MCP errors into
-        ``McpClientError``, and returns only the deterministic
-        ``structuredContent`` payload.
+        generic tool-response envelope, validates the tool-specific response
+        model, and converts MCP or validation errors into ``McpClientError``.
 
         Keeping this as a separate client method makes the workflow boundary
         explicit. The LLM can request facts, while MCP remains responsible for
@@ -430,6 +410,19 @@ class McpWorkflowClient:
                 mcp_url=self.base_url,
                 tool_name=name,
             )
+        try:
+            structured_response: ResponseModelT = response_model.model_validate(
+                tool_response.result.structured_content
+            )
+        except ValidationError as exc:
+            raise McpClientError(
+                self._format_validation_error(
+                    f"MCP {name} response did not match {response_model.__name__}.",
+                    exc,
+                ),
+                mcp_url=self.base_url,
+                tool_name=name,
+            ) from exc
         logger.info(
             "MCP workflow tool call completed",
             extra={
@@ -438,7 +431,7 @@ class McpWorkflowClient:
                 "mcp_url": self.base_url,
             },
         )
-        return tool_response.result.structured_content
+        return structured_response
 
     async def read_resource(self, uri: str) -> str:
         """Read one MCP resource and return its validated text content."""

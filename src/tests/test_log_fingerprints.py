@@ -14,6 +14,7 @@ from schemas import (
 from services.log_fingerprints import (
     LOG_ANALYSIS_FINGERPRINT_VERSION,
     LogAnalysisFingerprintBuilder,
+    build_grouped_error_run,
 )
 from tests.conftest import build_collect_logs_artifact_payload
 from utils.runtime import dump_arguments, hash_text
@@ -28,6 +29,7 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
         arguments={"project_name": "demo-shop"},
         structured_content={
             "action": McpToolName.GROUP_ERRORS,
+            "fingerprint_version": "group-errors-v2",
             "analysis_cautions": ["Only grouped matching lines are shown."],
             "grouped_error_count": 1,
             "project_name": "demo-shop",
@@ -52,6 +54,9 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
                     "status_codes": [404],
                     "levels": [],
                     "message_summary": "404 on /.env scanner probe",
+                    "identity_kind": "structured",
+                    "semantic_identity_hash": "a" * 64,
+                    "upstream_attempted": False,
                     "first_timestamp": "2026-05-19T02:00:00Z",
                     "last_timestamp": "2026-05-19T03:00:00Z",
                     "first_seen": {
@@ -143,6 +148,7 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     assert grouped_errors[0].last_seen.line_truncated is True
     assert packet.fingerprints.grouped_error_runs[0].arguments == {"project_name": "demo-shop"}
     assert packet.fingerprints.grouped_error_runs[0].result.action == McpToolName.GROUP_ERRORS
+    assert packet.fingerprints.grouped_error_runs[0].result.fingerprint_version == "group-errors-v2"
     assert packet.fingerprints.grouped_error_runs[0].result.analysis_cautions == [
         "Only grouped matching lines are shown."
     ]
@@ -164,6 +170,9 @@ def test_log_analysis_fingerprint_builder_summarizes_current_run_facts() -> None
     )
     assert packet.fingerprints.grouped_error_runs[0].result.truncated is False
     assert packet.fingerprints.grouped_error_runs[0].result.workspace == "workflow"
+    assert grouped_errors[0].identity_kind == "structured"
+    assert grouped_errors[0].semantic_identity_hash == "a" * 64
+    assert grouped_errors[0].upstream_attempted is False
     assert "grouped_error_signals" not in packet.fingerprints.model_dump()
     assert packet.evidence_fingerprints == [
         "evidence:" + hash_text("group_errors found no repeated errors."),
@@ -195,6 +204,92 @@ def test_coverage_snapshot_preserves_transfer_completeness() -> None:
     assert snapshot["projects"][0]["sources"][0]["truncated"] is True
     assert snapshot["projects"][0]["sources"][0]["continuation_available"] is True
     assert snapshot["totals"]["truncated_sources"] == 1
+
+
+def test_fingerprint_builder_persists_complete_preflight_baseline() -> None:
+    collect_logs = CollectLogsArtifact.model_validate(build_collect_logs_artifact_payload())
+    preflight = build_grouped_error_run(
+        arguments={"project_name": "demo-shop", "source_keys": ["backend", "nginx"]},
+        structured_content={
+            "action": McpToolName.GROUP_ERRORS,
+            "fingerprint_version": "group-errors-v2",
+            "project_name": "demo-shop",
+            "searched_source_keys": ["backend", "nginx"],
+            "grouped_error_count": 1,
+            "groups": [
+                {
+                    "fingerprint": "backend:v2:application_error:boom",
+                    "project_name": "demo-shop",
+                    "category": "application_error",
+                    "severity": "high",
+                    "count": 2,
+                    "source_keys": ["backend", "nginx"],
+                }
+            ],
+        },
+    )
+    report = LogAnalysisFinalReport(
+        action="final_report",
+        summary="One application error.",
+        severity=LogAnalysisSeverity.WARNING,
+        severity_rationale="Application error present.",
+        key_findings=["Application error."],
+        evidence=["Current grouped-error baseline."],
+        coverage_gaps=[],
+        recommendations="Investigate.",
+        watch_only_items=[],
+        trend_summary="No trend.",
+    )
+
+    packet = LogAnalysisFingerprintBuilder.build(
+        collect_logs=collect_logs,
+        tool_results=[
+            LogAnalysisToolResult(
+                tool_name=McpToolName.GROUP_ERRORS,
+                arguments={
+                    "project_name": "demo-shop",
+                    "source_keys": ["backend"],
+                    "levels": ["ERROR"],
+                },
+                structured_content={
+                    "action": McpToolName.GROUP_ERRORS,
+                    "project_name": "demo-shop",
+                    "searched_source_keys": ["backend"],
+                    "grouped_error_count": 1,
+                    "groups": [
+                        {
+                            "fingerprint": "backend:v2:application_error:boom",
+                            "project_name": "demo-shop",
+                            "category": "application_error",
+                            "severity": "high",
+                            "count": 2,
+                            "source_keys": ["backend"],
+                        }
+                    ],
+                },
+            ),
+            LogAnalysisToolResult(
+                tool_name=McpToolName.GROUP_ERRORS,
+                arguments={"project_name": "shop", "source_keys": ["proxy"]},
+                structured_content={
+                    "action": McpToolName.GROUP_ERRORS,
+                    "project_name": "shop",
+                    "searched_source_keys": ["proxy"],
+                    "grouped_error_count": 0,
+                    "groups": [],
+                },
+            ),
+        ],
+        preflight_grouped_error_runs=[preflight],
+        final_report=report,
+        log_window_since=datetime(2026, 5, 19, tzinfo=UTC),
+        log_window_until=datetime(2026, 5, 20, tzinfo=UTC),
+    )
+
+    stored = packet.fingerprints.grouped_error_runs
+    assert len(stored) == 2
+    assert stored[0].result.groups[0].count == 2
+    assert stored[1].arguments == {"project_name": "shop", "source_keys": ["proxy"]}
 
 
 def test_log_analysis_rejects_unknown_fingerprint_shape() -> None:
