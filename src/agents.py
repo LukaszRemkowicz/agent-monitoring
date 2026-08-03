@@ -520,9 +520,10 @@ class MonitoringWorkflowAgent:
                     "recommended_action": RecommendedAction.LLM_MAY_DECIDE,
                     "tool_scope_by_project": {},
                     "rationale": (
-                        "Current grouped-error evidence is already available. Treat "
-                        "source coverage changes and previous severity as comparison "
-                        "context; let the LLM decide whether more tools are needed."
+                        "Current grouped-error evidence already covers every available "
+                        "source. Other-source tools cannot replace changed or missing "
+                        "coverage: report the gap and limit trend claims. Call another "
+                        "tool only for a separate material question."
                     ),
                 }
             )
@@ -1242,10 +1243,20 @@ class MonitoringWorkflowAgent:
                 prompt.context.collection,
             )
         )
+        evidence_limitations: list[str] = [
+            limitation
+            for result in all_tool_results
+            for limitation in _string_list(result.structured_content.get("limitations"))
+        ]
+        instruction: str = (
+            "Use the retained initial prompt and critical rules. Interpret these exact "
+            "results, request only material missing evidence, or return final_report."
+        )
+        if evidence_limitations:
+            instruction += " Treat evidence_limitations as hard claim boundaries."
         payload: dict[str, object] = {
             "tool_results": [
-                MonitoringWorkflowAgent._compact_tool_result_for_prompt(tool_result)
-                for tool_result in all_tool_results
+                tool_result.model_dump(mode="json") for tool_result in all_tool_results
             ],
             "called_tool_names": sorted({result.tool_name for result in all_tool_results}),
             "optional_skill_status": {
@@ -1259,76 +1270,11 @@ class MonitoringWorkflowAgent:
                 if final_report_allowed
                 else LogAnalysisNextRequiredAction.CALL_TOOLS
             ),
-            "instruction": (
-                "Use the retained initial prompt and critical rules. Interpret these exact "
-                "results, request only material missing evidence, or return final_report."
-            ),
+            "instruction": instruction,
         }
+        if evidence_limitations:
+            payload["evidence_limitations"] = evidence_limitations
         return Message.from_text("user", json.dumps(payload, separators=(",", ":")))
-
-    @staticmethod
-    def _compact_tool_result_for_prompt(
-        tool_result: LogAnalysisToolResult,
-    ) -> dict[str, object]:
-        """Remove bulky auxiliary fields while retaining deterministic evidence."""
-
-        dumped: dict[str, object] = tool_result.model_dump(mode="json")
-        if tool_result.tool_name == McpToolName.GROUP_ERRORS:
-            dumped["structured_content"] = (
-                MonitoringWorkflowAgent._compact_group_errors_result_for_prompt(
-                    tool_result.structured_content
-                )
-            )
-        return dumped
-
-    @staticmethod
-    def _compact_group_errors_result_for_prompt(
-        structured_content: dict[str, Any],
-    ) -> dict[str, object]:
-        """Drop raw grouped-error examples without dropping group facts."""
-
-        groups: object = structured_content.get("groups", [])
-        if not isinstance(groups, list):
-            return dict(structured_content)
-        project_name = str(structured_content.get("project_name") or "")
-        signals = [
-            signal
-            for group in groups
-            if isinstance(group, dict)
-            if (
-                signal := LogAnalysisGroupedErrorSignal.from_mcp_payload(
-                    group,
-                    project_name=project_name,
-                )
-            )
-            is not None
-        ]
-        evidence = MonitoringWorkflowAgent._compact_grouped_error_baseline_for_prompt(
-            label=LogAnalysisGroupedErrorEvidenceLabel.CURRENT,
-            groups=signals,
-            run_count=1,
-            tool_scope_by_project={
-                project_name: _string_list(structured_content.get("searched_source_keys"))
-            },
-            rationale="Current grouped-error tool result.",
-        )
-        compacted: dict[str, object] = {
-            key: value for key, value in structured_content.items() if key != "groups"
-        }
-        compacted_groups = (
-            [row.model_dump(mode="json") for row in evidence.fingerprints]
-            if evidence is not None
-            else []
-        )
-        compacted.update(
-            {
-                "groups": compacted_groups,
-                "exact_group_count": len(groups),
-                "semantic_family_count": len(compacted_groups),
-                "prompt_compacted": True,
-            }
-        )
-        return compacted
 
     @staticmethod
     def _group_errors_cover_collection(
@@ -1382,10 +1328,7 @@ class MonitoringWorkflowAgent:
             "next_required_action": LogAnalysisNextRequiredAction.CALL_TOOLS,
             "final_report_allowed": False,
             "current_tool_result_count": len(tool_results),
-            "tool_results": [
-                MonitoringWorkflowAgent._compact_tool_result_for_prompt(tool_result)
-                for tool_result in tool_results
-            ],
+            "tool_results": [tool_result.model_dump(mode="json") for tool_result in tool_results],
             "instruction": (
                 "Call deterministic tools first. The prompt requires current MCP "
                 "tool evidence before final_report because final_report_allowed=false "
@@ -1504,8 +1447,7 @@ class MonitoringWorkflowAgent:
                         "TLS is healthy",
                     ],
                     "tool_results": [
-                        self._compact_tool_result_for_prompt(tool_result)
-                        for tool_result in tool_results
+                        tool_result.model_dump(mode="json") for tool_result in tool_results
                     ],
                     "instruction": (
                         "Return a corrected final_report. Keep current-run claims scoped "

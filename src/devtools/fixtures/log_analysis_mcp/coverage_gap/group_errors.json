@@ -1,0 +1,27 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "The demo-shop nginx source was unavailable, so absent edge fingerprints cannot be treated as resolved."
+  ],
+  "grouped_error_count": 0,
+  "groups": [],
+  "matching_line_count": 0,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 0,
+  "next_offset": 0,
+  "partial_page": false,
+  "next_step_tips": [
+    "Report demo-shop.nginx as unavailable; tools over other sources cannot prove this scope healthy or resolved."
+  ],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": ["traefik", "backend", "frontend", "worker", "scheduler"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "No grouped errors were found in the available demo-shop sources; nginx coverage is missing.",
+  "truncated": false,
+  "workspace": "workflow"
+}

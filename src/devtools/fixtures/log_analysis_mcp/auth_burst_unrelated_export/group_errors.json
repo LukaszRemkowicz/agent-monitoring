@@ -1,0 +1,157 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "Grouped evidence does not establish whether any admin login succeeded.",
+    "Same-day authentication and export families do not establish shared timing, ownership, or causality."
+  ],
+  "grouped_error_count": 4,
+  "groups": [
+    {
+      "fingerprint": "demo-shop:edge:auth_401:admin-login-burst",
+      "category": "auth_abuse",
+      "severity": "high",
+      "count": 31,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/admin/login"],
+      "request_methods": ["POST"],
+      "status_codes": [401],
+      "levels": [],
+      "message_summary": "A clustered admin-login failure burst has an unresolved authentication outcome.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "A clustered admin-login failure burst has an unresolved authentication outcome.",
+      "semantic_identity_hash": "",
+      "upstream_attempted": true,
+      "first_timestamp": "2026-05-19T03:14:01Z",
+      "last_timestamp": "2026-05-19T03:17:08Z",
+      "first_seen": {
+        "line": "198.51.100.91 - - [19/May/2026:03:14:01 +0000] \"POST /admin/login HTTP/1.1\" 401 96",
+        "line_number": 204,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "198.51.100.94 POST /admin/login 401 upstream_status=401",
+        "line_number": 258,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    },
+    {
+      "fingerprint": "demo-shop:backend:audit:privileged-export-completed",
+      "category": "privileged_activity",
+      "severity": "high",
+      "count": 1,
+      "source_keys": ["backend"],
+      "request_paths": [],
+      "status_codes": [],
+      "levels": ["warning"],
+      "message_summary": "A privileged audit export completed, but grouped evidence does not establish a relationship to the login burst.",
+      "has_explicit_message": true,
+      "identity_kind": "explicit_message",
+      "semantic_summary": "A privileged audit export completed, but grouped evidence does not establish a relationship to the login burst.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T14:00:04Z",
+      "last_timestamp": "2026-05-19T14:00:04Z",
+      "first_seen": {
+        "line": "WARNING privileged audit export completed job_id=audit-export-7 actor=service:reporter rows=84",
+        "line_number": 144,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/backend.log",
+        "source_key": "backend"
+      },
+      "last_seen": {
+        "line": "WARNING privileged audit export completed job_id=audit-export-7 actor=service:reporter rows=84",
+        "line_number": 144,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/backend.log",
+        "source_key": "backend"
+      }
+    },
+    {
+      "fingerprint": "demo-shop:edge:http_403:/.git/config",
+      "category": "blocked_sensitive_probe",
+      "severity": "medium",
+      "count": 11,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/.git/config"],
+      "status_codes": [403],
+      "levels": [],
+      "message_summary": "Blocked attempts to fetch Git configuration paths.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Blocked attempts to fetch Git configuration paths.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T01:30:00Z",
+      "last_timestamp": "2026-05-19T21:06:00Z",
+      "first_seen": {
+        "line": "198.51.100.77 - - [19/May/2026:01:30:00 +0000] \"GET /.git/config HTTP/1.1\" 403 0",
+        "line_number": 72,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "198.51.100.77 GET /.git/config 403",
+        "line_number": 609,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    },
+    {
+      "fingerprint": "demo-shop:edge:http_404:scanner-wordpress",
+      "category": "http_4xx",
+      "severity": "low",
+      "count": 38,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/wp-login.php", "/xmlrpc.php", "/wp-admin/setup-config.php"],
+      "status_codes": [404],
+      "levels": [],
+      "message_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T00:20:00Z",
+      "last_timestamp": "2026-05-19T23:40:00Z",
+      "first_seen": {
+        "line": "192.0.2.44 - - [19/May/2026:00:20:00 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153",
+        "line_number": 11,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "192.0.2.44 GET /xmlrpc.php 404",
+        "line_number": 751,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    }
+  ],
+  "matching_line_count": 81,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 4,
+  "next_offset": 4,
+  "partial_page": false,
+  "next_step_tips": [],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": [
+    "nginx",
+    "traefik",
+    "backend",
+    "frontend",
+    "worker",
+    "scheduler"
+  ],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "Complete grouped inventory contains two potentially related high-severity families plus stable blocked scanner noise.",
+  "truncated": false,
+  "workspace": "workflow"
+}

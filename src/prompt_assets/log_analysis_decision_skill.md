@@ -13,6 +13,13 @@ Use this skill before choosing `final_report`, `call_tools`, or `read_skills`.
    otherwise use the smallest targeted verification.
 5. Call only the smallest deterministic tool set that resolves material
    uncertainty about outcome, impact, scope, ownership, or confidence.
+6. Error groups prove only the listed responses. For actionable authentication
+   or security findings, retrieve targeted status evidence before `final_report`
+   when it can determine success and change severity. Never infer success or its
+   absence from error groups.
+7. An unavailable source cannot be replaced by rechecking other sources. Report
+   the gap, avoid trend claims for that scope, and call another tool only for a
+   separate material question.
 
 ## Optional Skills
 
@@ -20,9 +27,9 @@ Use this skill before choosing `final_report`, `call_tools`, or `read_skills`.
   the prompt, and never request one marked `retrieved` again.
 - Read `bot_detection` when unknown or material scanner/probe evidence needs
   interpretation. Skip it for known blocked watch-only 403/404 probes.
-- Read `owasp_security` before `final_report` for possible security impact,
-  successful sensitive-path access, auth/admin/API abuse, injection or path
-  traversal, malicious-input 5xx, security-control failure, or unclear impact.
+- After gathering needed deterministic facts, read `owasp_security` only when it
+  can still change unclear security interpretation or incident framing. Skip it
+  when mandatory guidance already establishes the outcome, severity, and action.
 - An optional skill is not evidence until it has been retrieved.
 
 ## Report Requirement
@@ -30,3 +37,7 @@ Use this skill before choosing `final_report`, `call_tools`, or `read_skills`.
 Treat zero-line and unavailable sources as coverage gaps, not proof of health.
 Use live tools for live-state claims. Synthesize impact, risk, confidence, and
 trend; do not turn the report into a family inventory.
+Access logs prove path, status, and response byte count, not response contents.
+Call sensitive-file disclosure potential unless separate evidence confirms it.
+Without that evidence, do not say the file was exposed, disclosed, compromised,
+or publicly retrievable, and do not claim exfiltration.

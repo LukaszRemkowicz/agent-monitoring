@@ -1,0 +1,31 @@
+{
+  "action": "grep_log_snapshot",
+  "project_name": "demo-shop",
+  "source_keys": ["nginx", "traefik", "scheduler", "backend"],
+  "pattern": "/admin/login|privileged audit export|audit-export-7",
+  "matching_line_count": 4,
+  "truncated": false,
+  "matches": [
+    {
+      "timestamp": "2026-05-19T03:14:01Z",
+      "source_key": "nginx",
+      "line": "198.51.100.91 - - [19/May/2026:03:14:01 +0000] \"POST /admin/login HTTP/1.1\" 401 96"
+    },
+    {
+      "timestamp": "2026-05-19T03:17:08Z",
+      "source_key": "traefik",
+      "line": "198.51.100.94 POST /admin/login 401 upstream_status=401"
+    },
+    {
+      "timestamp": "2026-05-19T13:59:58Z",
+      "source_key": "scheduler",
+      "line": "INFO dispatched scheduled audit export job_id=audit-export-7 actor=service:reporter schedule=daily"
+    },
+    {
+      "timestamp": "2026-05-19T14:00:04Z",
+      "source_key": "backend",
+      "line": "WARNING privileged audit export completed job_id=audit-export-7 actor=service:reporter rows=84"
+    }
+  ],
+  "summary": "Exact matches show separate time windows and no observed link between the early external login failures and later scheduled service-account export; this grep does not enumerate every possible login status."
+}

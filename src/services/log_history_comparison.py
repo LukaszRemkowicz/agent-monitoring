@@ -35,6 +35,7 @@ logger = get_logger(__name__)
 
 UNSUPPORTED_HISTORY_COMPARISON_CLAIM_TERMS: tuple[str, ...] = (
     "stable operation",
+    "health remains stable",
     "healthy",
     "no new or worsening",
     "no 5xx",
@@ -651,16 +652,29 @@ class LogAnalysisHistoryComparisonService:
         if comparison is None or not comparison.current_tool_scope_by_project:
             return []
 
-        scoped_projects: set[str] = set(comparison.current_tool_scope_by_project)
-        collected_projects: set[str] = {
-            project.project_name
+        collection_scope_by_project: dict[str, set[str]] = {
+            project.project_name: {source.source_key for source in project.sources}
             for project in prompt_context.collection.projects
             if project.project_name
         }
-        scope_is_limited: bool = bool(collected_projects - scoped_projects) or any(
-            "*" not in source_keys
-            for source_keys in comparison.current_tool_scope_by_project.values()
-        )
+        scoped_projects: set[str] = set(comparison.current_tool_scope_by_project)
+        collected_projects: set[str] = set(collection_scope_by_project)
+        if collection_scope_by_project:
+            scope_is_limited: bool = any(
+                project_name not in scoped_projects
+                or (
+                    "*" not in comparison.current_tool_scope_by_project[project_name]
+                    and not source_keys.issubset(
+                        set(comparison.current_tool_scope_by_project[project_name])
+                    )
+                )
+                for project_name, source_keys in collection_scope_by_project.items()
+            )
+        else:
+            scope_is_limited = any(
+                "*" not in source_keys
+                for source_keys in comparison.current_tool_scope_by_project.values()
+            )
         if not scope_is_limited:
             return []
 

@@ -10,7 +10,6 @@ from schemas import (
     GroupErrorsResponseModel,
     LogAnalysisGroupedErrorEvidenceLabel,
     LogAnalysisGroupedErrorSignal,
-    LogAnalysisToolResult,
     McpToolName,
 )
 
@@ -81,43 +80,6 @@ def test_grouped_error_prompt_preserves_complete_message_summary(
     assert evidence is not None
     assert evidence.fingerprints[0].message_summary == full_summary
     assert signal.message_summary == full_summary
-
-
-def test_grouped_error_followup_coalesces_exact_route_variants() -> None:
-    groups = [
-        {
-            "fingerprint": f"backend:http_4xx:404:/orders/{index}",
-            "category": "http_4xx",
-            "severity": "medium",
-            "count": 1,
-            "source_keys": ["backend"],
-            "request_paths": [f"/orders/{index}"],
-            "request_methods": ["GET"],
-            "status_codes": [404],
-        }
-        for index in range(100)
-    ]
-    result = LogAnalysisToolResult(
-        tool_name=McpToolName.GROUP_ERRORS,
-        arguments={"project_name": "demo", "source_keys": ["backend"]},
-        structured_content={
-            "action": McpToolName.GROUP_ERRORS,
-            "project_name": "demo",
-            "searched_source_keys": ["backend"],
-            "grouped_error_count": 100,
-            "groups": groups,
-        },
-    )
-
-    compacted = _agent()._compact_tool_result_for_prompt(result)
-
-    structured_content = cast(dict[str, object], compacted["structured_content"])
-    compacted_groups = cast(list[dict[str, object]], structured_content["groups"])
-    assert len(result.structured_content["groups"]) == 100
-    assert len(compacted_groups) == 1
-    assert compacted_groups[0]["count"] == 100
-    assert compacted_groups[0]["variant_count"] == 100
-    assert compacted_groups[0]["request_paths"] == ["/orders/{id}"]
 
 
 class _ManyPageMcpClient:

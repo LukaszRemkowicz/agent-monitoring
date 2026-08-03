@@ -2615,7 +2615,7 @@ async def test_monitoring_workflow_agent_does_not_add_local_probe_interpretation
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
+async def test_monitoring_workflow_agent_preserves_requested_group_error_evidence(
     agent_factory: AgentFactory,
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
@@ -2645,14 +2645,14 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
                     "source_key": "nginx",
                     "output_file": "/snapshots/demo-shop/nginx.log",
                     "line_number": index + 1,
-                    "line": "raw line payload that should stay out of prompts",
+                    "line": "requested raw line evidence",
                     "line_truncated": False,
                 },
                 "last_seen": {
                     "source_key": "nginx",
                     "output_file": "/snapshots/demo-shop/nginx.log",
                     "line_number": index + 1,
-                    "line": "raw line payload that should stay out of prompts",
+                    "line": "requested raw line evidence",
                     "line_truncated": False,
                 },
             }
@@ -2709,15 +2709,15 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
 
     stored_content = context.tool_results[0].structured_content
     assert len(stored_content["groups"]) == 50
-    assert "raw line payload that should stay out of prompts" in json.dumps(stored_content)
+    assert "requested raw line evidence" in json.dumps(stored_content)
     followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
-    assert "raw line payload that should stay out of prompts" not in followup_text
+    assert "requested raw line evidence" in followup_text
     followup_payload = json.loads(followup_text)
     followup_content = followup_payload["tool_results"][0]["structured_content"]
     assert followup_content["grouped_error_count"] == 50
     assert len(followup_content["groups"]) == 50
-    assert followup_content["prompt_compacted"] is True
-    assert len(followup_text) < len(json.dumps(context.tool_results[0].model_dump(mode="json")))
+    assert followup_content["groups"][0]["first_timestamp"] == "2026-05-19T02:00:00Z"
+    assert followup_content["groups"][0]["first_seen"]["line_number"] == 1
 
 
 @pytest.mark.asyncio
