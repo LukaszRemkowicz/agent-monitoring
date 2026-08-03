@@ -999,7 +999,7 @@ class MonitoringWorkflowAgent:
                 "offset": 0,
                 "returned_group_count": len(groups),
                 "next_offset": len(groups),
-                "partial_page": False,
+                "partial_page": not response.analysis_complete,
                 "truncated": False,
             }
         )
