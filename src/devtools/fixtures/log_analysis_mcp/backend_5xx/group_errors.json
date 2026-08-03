@@ -1,5 +1,7 @@
 {
   "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
   "analysis_cautions": [
     "Repeated 5xx groups should be checked against proxy and backend evidence before deciding service impact."
   ],
@@ -15,6 +17,9 @@
       "status_codes": [502],
       "levels": ["error"],
       "message_summary": "Backend catalog endpoint returned repeated 502 responses through ingress.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Backend catalog endpoint returned repeated 502 responses through ingress.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T04:05:00Z",
       "last_timestamp": "2026-05-19T04:19:00Z",
       "first_seen": {
@@ -42,6 +47,9 @@
       "status_codes": [],
       "levels": ["error"],
       "message_summary": "Frontend SSR logged product page fetch timeouts.",
+      "identity_kind": "explicit_message",
+      "semantic_summary": "Frontend SSR logged product page fetch timeouts.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T04:06:00Z",
       "last_timestamp": "2026-05-19T04:18:00Z",
       "first_seen": {
@@ -69,6 +77,9 @@
       "status_codes": [],
       "levels": ["warning"],
       "message_summary": "Celery worker retried catalog sync tasks without final failure.",
+      "identity_kind": "explicit_message",
+      "semantic_summary": "Celery worker retried catalog sync tasks without final failure.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T09:02:00Z",
       "last_timestamp": "2026-05-19T10:12:00Z",
       "first_seen": {
@@ -96,6 +107,9 @@
       "status_codes": [404],
       "levels": [],
       "message_summary": "Routine WordPress scanner probes were rejected.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine WordPress scanner probes were rejected.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T00:12:00Z",
       "last_timestamp": "2026-05-19T23:51:00Z",
       "first_seen": {
@@ -116,6 +130,10 @@
   ],
   "matching_line_count": 37,
   "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 4,
+  "next_offset": 4,
+  "partial_page": false,
   "next_step_tips": [
     "Use inspect_proxy_activity for upstream status context.",
     "Use build_incident_bundle if the 502 group needs a compact operator packet."

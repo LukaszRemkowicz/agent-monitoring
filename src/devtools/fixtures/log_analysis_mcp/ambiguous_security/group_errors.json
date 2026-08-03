@@ -1,0 +1,60 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "Grouped evidence shows a new admin-login burst but does not prove whether any login succeeded or whether accounts were locked."
+  ],
+  "grouped_error_count": 1,
+  "groups": [
+    {
+      "fingerprint": "demo-shop:edge:auth_401:admin-login-burst",
+      "category": "auth_abuse",
+      "severity": "high",
+      "count": 18,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/admin/login"],
+      "request_methods": ["POST"],
+      "status_codes": [401],
+      "levels": [],
+      "message_summary": "A short burst of failed admin login requests needs security interpretation.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "A short burst of failed admin login requests needs security interpretation.",
+      "semantic_identity_hash": "",
+      "upstream_attempted": true,
+      "first_timestamp": "2026-05-19T03:14:01Z",
+      "last_timestamp": "2026-05-19T03:16:42Z",
+      "first_seen": {
+        "line": "198.51.100.91 - - [19/May/2026:03:14:01 +0000] \"POST /admin/login HTTP/1.1\" 401 96",
+        "line_number": 204,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "198.51.100.94 POST /admin/login 401 upstream_status=401",
+        "line_number": 251,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    }
+  ],
+  "matching_line_count": 18,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 1,
+  "next_offset": 1,
+  "partial_page": false,
+  "next_step_tips": [
+    "Use inspect_proxy_activity to check whether the burst included successful admin responses or upstream failures."
+  ],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": ["nginx", "traefik", "backend", "frontend", "worker", "scheduler"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "A new, material admin authentication failure burst has unresolved security impact.",
+  "truncated": false,
+  "workspace": "workflow"
+}

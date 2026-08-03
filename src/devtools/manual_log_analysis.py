@@ -24,7 +24,31 @@ from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from utils.monitoring_context import load_private_monitoring_context
 
 DEFAULT_SCENARIO = "sensitive_path_success"
-SCENARIOS = {"sensitive_path_success", "backend_5xx"}
+SCENARIOS = (
+    "sensitive_path_success",
+    "backend_5xx",
+    "watch_only_probes",
+    "ambiguous_security",
+    "auth_burst_unrelated_export",
+    "coverage_gap",
+)
+COVERAGE_GAP_COLLECT_LOGS_OVERRIDES: dict[str, object] = {
+    "projects": [
+        {
+            "warnings": ["The demo-shop nginx source was unavailable for this collection."],
+            "sources": [
+                {
+                    "status": "unavailable",
+                    "line_count": 0,
+                    "byte_count": 0,
+                    "output_file": None,
+                    "error": "Synthetic fixture: nginx log source unavailable.",
+                    "retry_tips": ["Retry collection for demo-shop.nginx."],
+                }
+            ],
+        }
+    ]
+}
 PUBLIC_SAFE_MONITORING_CONTEXT = """# Public-Safe Manual Fixture Monitoring Context
 
 This context is synthetic and exists only for devtool fixture runs.
@@ -41,6 +65,9 @@ This context is synthetic and exists only for devtool fixture runs.
 - A successful 2xx response for sensitive paths such as `/.env` is critical.
 - Blocked scanner probes returning 403 or 404 are watch-only unless they become
   successful responses or correlate with service impact.
+- `/admin/login` is a real application route. A clustered failure burst has
+  unresolved security impact until deterministic evidence rules out success,
+  lockouts, and upstream failures.
 - Worker or scheduler retry noise is watch-only unless volume grows or
   correlates with user-facing failures.
 
@@ -94,7 +121,7 @@ async def run_manual_fixture(
 
     if scenario not in SCENARIOS:
         raise typer.BadParameter(
-            "Scenario must be one of: sensitive_path_success, backend_5xx.",
+            f"Scenario must be one of: {', '.join(SCENARIOS)}.",
             param_hint="--scenario",
         )
     parsed_analysis_date = _today_in_log_timezone()
@@ -106,8 +133,11 @@ async def run_manual_fixture(
     trace_id = uuid4().hex
     mcp_client = FakerMCP(
         scenario=scenario,
-        session_id=f"manual-{scenario}-{parsed_analysis_date.isoformat()}",
+        session_id=f"manual-fixture-{parsed_analysis_date.isoformat()}",
         target_analysis_date=parsed_analysis_date,
+        collect_logs_overrides=(
+            COVERAGE_GAP_COLLECT_LOGS_OVERRIDES if scenario == "coverage_gap" else None
+        ),
     )
     log_analysis_repository = LogAnalysisRepository()
     history_comparison_service = LogAnalysisHistoryComparisonService()
@@ -169,6 +199,16 @@ async def run_manual_fixture(
     _echo_list("Coverage gaps", final_report.coverage_gaps)
     typer.echo(f"Recommendations: {final_report.recommendations}")
     _echo_list("Watch-only items", final_report.watch_only_items)
+    optional_skill_reads = [
+        skill.name
+        for skill in workflow.optional_skills
+        if f"read_resource:{skill.resource_uri}" in mcp_client.calls
+    ]
+    _echo_list("Optional skills read", optional_skill_reads)
+    _echo_list(
+        "LLM follow-up actions",
+        [tool_result.tool_name for tool_result in result.agent_context.tool_results],
+    )
     typer.echo(f"LLM tokens used: {result.agent_context.llm_tokens_used}")
     typer.echo(f"LLM cost USD: {result.agent_context.llm_cost_usd:.6f}")
     typer.echo(f"LLM report time: {result.agent_context.llm_report_execution_time_seconds:.2f}s")

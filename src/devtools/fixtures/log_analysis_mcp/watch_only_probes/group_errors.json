@@ -1,0 +1,84 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [],
+  "grouped_error_count": 2,
+  "groups": [
+    {
+      "fingerprint": "demo-shop:edge:http_403:/.git/config",
+      "category": "blocked_sensitive_probe",
+      "severity": "medium",
+      "count": 11,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/.git/config"],
+      "status_codes": [403],
+      "levels": [],
+      "message_summary": "Blocked attempts to fetch Git configuration paths.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Blocked attempts to fetch Git configuration paths.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T01:30:00Z",
+      "last_timestamp": "2026-05-19T21:06:00Z",
+      "first_seen": {
+        "line": "198.51.100.77 - - [19/May/2026:01:30:00 +0000] \"GET /.git/config HTTP/1.1\" 403 0",
+        "line_number": 72,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "198.51.100.77 GET /.git/config 403",
+        "line_number": 609,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    },
+    {
+      "fingerprint": "demo-shop:edge:http_404:scanner-wordpress",
+      "category": "http_4xx",
+      "severity": "low",
+      "count": 38,
+      "source_keys": ["nginx", "traefik"],
+      "request_paths": ["/wp-login.php", "/xmlrpc.php", "/wp-admin/setup-config.php"],
+      "status_codes": [404],
+      "levels": [],
+      "message_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T00:20:00Z",
+      "last_timestamp": "2026-05-19T23:40:00Z",
+      "first_seen": {
+        "line": "192.0.2.44 - - [19/May/2026:00:20:00 +0000] \"GET /wp-login.php HTTP/1.1\" 404 153",
+        "line_number": 11,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "192.0.2.44 GET /xmlrpc.php 404",
+        "line_number": 751,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
+        "source_key": "traefik"
+      }
+    }
+  ],
+  "matching_line_count": 49,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 2,
+  "next_offset": 2,
+  "partial_page": false,
+  "next_step_tips": [],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": ["nginx", "traefik", "backend", "frontend", "worker", "scheduler"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "Only known blocked scanner fingerprints from the previous baseline were observed.",
+  "truncated": false,
+  "workspace": "workflow"
+}

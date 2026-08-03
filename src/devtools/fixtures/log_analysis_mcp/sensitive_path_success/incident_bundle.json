@@ -1,10 +1,12 @@
 {
   "action": "build_incident_bundle",
   "project_name": "demo-shop",
-  "incident_key": "sensitive-path-env-200",
-  "summary": "Current sensitive path success evidence for /.env.",
+  "incident_key": "multiple-sensitive-paths-200",
+  "summary": "Current evidence shows unexpected non-empty HTTP 200 responses on configuration, repository, and backup paths.",
   "evidence": [
-    "group_errors reported /.env status 200.",
-    "grep_log_snapshot returned two current matching lines."
+    "group_errors reported two /.env responses with status 200.",
+    "group_errors reported two /.git/config responses with status 200.",
+    "group_errors reported one /backup.sql response with status 200.",
+    "Exact snapshot matches contain current HTTP 200 lines for each affected path."
   ]
 }

@@ -6,6 +6,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from mcp import McpWorkflowClient
 from schemas import (
     CollectLogsArtifact,
@@ -49,15 +51,11 @@ class FakerMCP(McpWorkflowClient):
 
     async def read_resource(self, uri: str) -> str:
         self.calls.append(f"read_resource:{uri}")
-        skill_body_by_uri: dict[str, str] = {
-            "skill://workflow/normal_patterns": "Normal patterns skill body.",
-            "skill://workflow/application_monitoring": "Application monitoring skill body.",
-            "skill://workflow/severity_guide": "Severity guide skill body.",
-            "skill://workflow/recommendations_guide": "Recommendations guide skill body.",
-            "skill://workflow/bot_detection": "Bot detection skill body.",
-            "skill://workflow/owasp_security": "OWASP security skill body.",
-        }
-        return skill_body_by_uri[uri]
+        skill_name: str = uri.removeprefix("skill://workflow/")
+        skill_path: Path = self.fixture_root / "common" / "skills" / f"{skill_name}.md"
+        if not uri.startswith("skill://workflow/") or not skill_path.is_file():
+            raise KeyError(uri)
+        return skill_path.read_text(encoding="utf-8")
 
     async def list_projects(self) -> list[ProjectManifestSummary]:
         self.calls.append(McpToolName.LIST_PROJECTS)
@@ -78,26 +76,27 @@ class FakerMCP(McpWorkflowClient):
             overrides=self.collect_logs_overrides,
         )
 
-    async def call_deterministic_tool(
+    async def call_deterministic_tool[ResponseModelT: BaseModel](
         self,
         name: str,
         arguments: dict[str, Any],
+        response_model: type[ResponseModelT],
         *,
         timeout_seconds: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> ResponseModelT:
         self.calls.append(f"call_deterministic_tool:{name}:{arguments}")
         self.called_tool_names.append(name)
         result_name: str | None = self._fixture_name_for_tool(name, arguments)
         result: dict[str, Any]
         if name == McpToolName.COLLECT_LOGS:
-            return self.load_collect_logs_fixture(
+            result = self.load_collect_logs_fixture(
                 since=str(arguments.get("since") or ""),
                 until=str(arguments.get("until") or ""),
                 session_id=str(arguments.get("session_id") or self.session_id or ""),
                 target_analysis_date=self.target_analysis_date,
                 overrides=self.collect_logs_overrides,
             ).model_dump(mode="json")
-        if result_name and (self.fixture_root / self.scenario / f"{result_name}.json").exists():
+        elif result_name and (self.fixture_root / self.scenario / f"{result_name}.json").exists():
             result = self.load_fixture_payload(
                 self.scenario,
                 result_name,
@@ -106,9 +105,41 @@ class FakerMCP(McpWorkflowClient):
             )
         else:
             result = self._generic_tool_result(name, arguments)
+        if name == McpToolName.GREP_LOG_SNAPSHOT:
+            requested_source_keys: list[str] = []
+            if isinstance(arguments.get("source_key"), str):
+                requested_source_keys = [arguments["source_key"]]
+            elif isinstance(arguments.get("source_keys"), list):
+                requested_source_keys = [
+                    source_key
+                    for source_key in arguments["source_keys"]
+                    if isinstance(source_key, str)
+                ]
+            matches: object = result.get("matches")
+            if requested_source_keys and isinstance(matches, list):
+                result["matches"] = [
+                    match
+                    for match in matches
+                    if isinstance(match, dict) and match.get("source_key") in requested_source_keys
+                ]
+                result["matching_line_count"] = len(result["matches"])
+                requested_pattern: object = arguments.get("grep") or arguments.get("pattern")
+                if isinstance(requested_pattern, str):
+                    result["pattern"] = requested_pattern
+                result["summary"] = (
+                    f"Scoped grep returned {len(result['matches'])} matching lines from "
+                    f"{', '.join(requested_source_keys)}."
+                )
+                result["limitations"] = [
+                    "This scoped grep does not establish facts from unsearched sources."
+                ]
+                if "source_key" in result and len(requested_source_keys) == 1:
+                    result["source_key"] = requested_source_keys[0]
+                if "source_keys" in result:
+                    result["source_keys"] = requested_source_keys
         if name == McpToolName.GROUP_ERRORS:
             LogAnalysisGroupedErrorsResult.from_mcp_payload(result)
-        return result
+        return response_model.model_validate(result)
 
     @classmethod
     def load_fixture_payload(
@@ -196,20 +227,44 @@ class FakerMCP(McpWorkflowClient):
             raise TypeError("list_projects fixture must contain a list result.")
         return [ProjectManifestSummary.model_validate(project) for project in projects]
 
-    @staticmethod
-    def _fixture_name_for_tool(name: str, arguments: dict[str, Any]) -> str | None:
+    def _fixture_name_for_tool(self, name: str, arguments: dict[str, Any]) -> str | None:
+        source_key: object = arguments.get("source_key")
+        source_keys: object = arguments.get("source_keys")
+        if source_key is None and isinstance(source_keys, list) and len(source_keys) == 1:
+            source_key = source_keys[0]
         if name == McpToolName.GROUP_ERRORS:
             if arguments.get("project_name") == "host-security":
                 return "group_errors_host_security"
+            scoped_fixture: str = f"group_errors_{source_key}"
+            if (
+                isinstance(source_key, str)
+                and (self.fixture_root / self.scenario / f"{scoped_fixture}.json").exists()
+            ):
+                return scoped_fixture
             return "group_errors"
         if name == McpToolName.INSPECT_PROXY_ACTIVITY:
             return "inspect_proxy_activity"
         if name == McpToolName.BUILD_INCIDENT_BUNDLE:
+            scoped_fixture = f"incident_bundle_{source_key}"
+            if (
+                isinstance(source_key, str)
+                and (self.fixture_root / self.scenario / f"{scoped_fixture}.json").exists()
+            ):
+                return scoped_fixture
             return "incident_bundle"
         if name == McpToolName.GREP_LOG_SNAPSHOT:
             grep_pattern: str = str(arguments.get("grep") or arguments.get("pattern") or "")
+            matched_sensitive_path_count: int = sum(
+                path in grep_pattern for path in (".env", ".git/config", "backup.sql")
+            )
+            if matched_sensitive_path_count > 1:
+                return "grep_snapshot_sensitive_paths_200"
             if ".env" in grep_pattern:
                 return "grep_snapshot_env_200"
+            if ".git/config" in grep_pattern:
+                return "grep_snapshot_git_config_200"
+            if "backup.sql" in grep_pattern:
+                return "grep_snapshot_backup_sql_200"
             return "grep_snapshot"
         production_shape_tools_without_static_fixture = {
             "create_filtered_view",

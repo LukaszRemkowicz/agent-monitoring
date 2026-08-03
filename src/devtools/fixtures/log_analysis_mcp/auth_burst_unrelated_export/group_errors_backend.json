@@ -1,0 +1,60 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "The observed service-account actor does not establish that the export was authorized."
+  ],
+  "grouped_error_count": 1,
+  "groups": [
+    {
+      "fingerprint": "demo-shop:backend:audit:privileged-export-completed",
+      "category": "privileged_activity",
+      "severity": "high",
+      "count": 1,
+      "source_keys": ["backend"],
+      "request_paths": [],
+      "request_methods": [],
+      "request_hosts": [],
+      "status_codes": [],
+      "levels": ["warning"],
+      "message_summary": "A privileged audit export completed as service:reporter under job audit-export-7.",
+      "has_explicit_message": true,
+      "identity_kind": "explicit_message",
+      "semantic_summary": "A privileged audit export completed as service:reporter under job audit-export-7.",
+      "semantic_identity_hash": "",
+      "upstream_attempted": null,
+      "first_timestamp": "2026-05-19T14:00:04Z",
+      "last_timestamp": "2026-05-19T14:00:04Z",
+      "first_seen": {
+        "line": "WARNING privileged audit export completed job_id=audit-export-7 actor=service:reporter rows=84",
+        "line_number": 144,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/backend.log",
+        "source_key": "backend"
+      },
+      "last_seen": {
+        "line": "WARNING privileged audit export completed job_id=audit-export-7 actor=service:reporter rows=84",
+        "line_number": 144,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/backend.log",
+        "source_key": "backend"
+      }
+    }
+  ],
+  "matching_line_count": 1,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 1,
+  "next_offset": 1,
+  "partial_page": false,
+  "next_step_tips": [],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": ["backend"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "One backend privileged-export completion was grouped.",
+  "truncated": false,
+  "workspace": "workflow"
+}

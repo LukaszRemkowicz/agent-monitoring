@@ -529,8 +529,7 @@ async def test_log_analysis_service_passes_last_5_days_to_agent() -> None:
     assert agent.received_historical_context == (
         "## 2026-05-18 — Severity: INFO\n"
         "Summary: Previous run saw scanner noise only.\n"
-        "Key findings: ['No service impact.']\n"
-        "Recommendations: No action needed."
+        "Trend: Scanner noise was stable."
     )
 
 

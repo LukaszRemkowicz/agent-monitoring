@@ -21,6 +21,10 @@ from mcp import McpWorkflowClient
 from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
+    DeterministicToolResponseModel,
+    GroupedErrorResponseModel,
+    GroupErrorsArgumentsModel,
+    GroupErrorsResponseModel,
     LogAnalysisAgentContext,
     LogAnalysisAllowedAction,
     LogAnalysisCompactCoverageSnapshot,
@@ -67,15 +71,21 @@ from schemas import (
     WorkflowSkill,
     WorkflowSkillContent,
 )
-from services.log_fingerprints import LogAnalysisFingerprintBuilder, build_grouped_error_run
+from services.log_fingerprints import (
+    LOG_ANALYSIS_FINGERPRINT_VERSION,
+    LogAnalysisFingerprintBuilder,
+    build_grouped_error_run,
+)
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
+from utils.grouped_errors import attention_priority_rank, coalesce_grouped_errors
 from utils.llm_usage import usage_cost_usd
 from utils.runtime import dump_arguments, elapsed_ms, hash_text
 
 logger = get_logger(__name__)
 MAX_LLM_TOOL_LOOP_ITERATIONS = 5
+# Transport batch size only; `_collect_all_group_error_pages` reads every page.
+GROUP_ERRORS_PER_PAGE = 200
 LOG_ANALYSIS_INSTRUCTIONS = load_markdown_bullets("log_analysis_instructions.md")
-LOG_ANALYSIS_FOLLOWUP_INSTRUCTIONS = load_markdown_bullets("log_analysis_followup_instructions.md")
 LOG_ANALYSIS_REPORT_CONTRACT = load_markdown_mapping("log_analysis_report_contract.md")
 LOG_ANALYSIS_DECISION_SKILL = load_text("log_analysis_decision_skill.md")
 LOG_ANALYSIS_CRITICAL_DECISION_RULES = load_text("log_analysis_critical_decision_rules.md")
@@ -115,7 +125,7 @@ class MonitoringWorkflowAgent:
         historical_context: str = "",
         previous_analysis: LogAnalysisOut | None = None,
     ) -> LogAnalysisAgentContext:
-        """Prepare deterministic context before the first log-analysis LLM call."""
+        """Orchestrate the daily log-analysis workflow."""
 
         logger.info(
             "loading MCP daily log workflow bundle",
@@ -125,37 +135,137 @@ class MonitoringWorkflowAgent:
         mandatory_skills: list[WorkflowSkillContent] = await self._read_mandatory_skills(
             workflow.mandatory_skills
         )
-        available_projects: list[ProjectManifestSummary] = await self.mcp_client.list_projects()
-        if not available_projects:
-            raise McpClientError(
-                (
-                    "MCP list_projects returned no projects for this workflow caller. "
-                    "Upload project manifests to MCP or check the caller project scope "
-                    "before collecting logs."
-                ),
-                mcp_url=self.mcp_client.base_url,
-                tool_name=McpToolName.LIST_PROJECTS,
-            )
-        current_logs: CollectLogsArtifact = await self.mcp_client.collect_logs(
-            since=log_window.since,
-            until=log_window.until,
+        available_projects: list[ProjectManifestSummary] = await self._load_available_projects()
+        current_logs: CollectLogsArtifact = await self._collect_current_logs(
+            workflow=workflow,
+            log_window=log_window,
         )
         previous_analysis_context: PreviousLogAnalysisContext | None = (
             PreviousLogAnalysisContext.from_analysis(previous_analysis)
             if previous_analysis is not None
             else None
         )
-        current_grouped_errors: list[LogAnalysisGroupedErrorRunFingerprint] = (
-            await self._collect_current_grouped_errors(current_logs=current_logs)
+        preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = (
+            await self._collect_preflight_grouped_error_runs(
+                workflow=workflow,
+                current_logs=current_logs,
+            )
         )
         current_coverage_snapshot: dict[str, Any] = (
             LogAnalysisFingerprintBuilder.build_coverage_snapshot(current_logs)
         )
         prepared_evidence: LogAnalysisPromptEvidence = self._prepare_log_analysis_evidence(
-            current_grouped_errors=current_grouped_errors,
+            current_grouped_errors=preflight_grouped_error_runs,
             current_coverage_snapshot=current_coverage_snapshot,
             previous_analysis=previous_analysis_context,
         )
+        self._log_history_mode_selection(
+            analysis_date=analysis_date,
+            previous_analysis=previous_analysis,
+            prepared_evidence=prepared_evidence,
+        )
+        prompt: LogAnalysisPreparedPrompt = self._build_log_analysis_prompt(
+            analysis_date=analysis_date,
+            workflow=workflow,
+            mandatory_skills=mandatory_skills,
+            available_projects=available_projects,
+            collect_logs=current_logs,
+            private_monitoring_context=self.private_monitoring_context,
+            historical_context=historical_context,
+            previous_analysis=previous_analysis_context,
+            prepared_evidence=prepared_evidence,
+        )
+        (
+            final_report,
+            tool_results,
+            llm_tokens_used,
+            llm_cost_usd,
+            llm_report_execution_time_seconds,
+        ) = await self._execute_llm_analysis(
+            prompt=prompt,
+            workflow=workflow,
+            analysis_date=analysis_date,
+            current_logs=current_logs,
+            preflight_grouped_error_runs=preflight_grouped_error_runs,
+        )
+        logger.info(
+            "completed log-analysis LLM tool loop",
+            extra={
+                "event": "log_analysis_llm_final_report_done",
+                "workflow_name": workflow.workflow_name,
+                "mandatory_skill_count": len(workflow.mandatory_skills),
+                "optional_skill_count": len(workflow.optional_skills),
+                "tool_count": len(workflow.tools),
+                "available_project_count": len(available_projects),
+                "collected_project_count": len(current_logs.projects),
+                "tool_result_count": len(tool_results),
+                "log_window_since": log_window.since,
+                "log_window_until": log_window.until,
+                "severity": final_report.severity,
+                "llm_report_execution_time_seconds": llm_report_execution_time_seconds,
+            },
+        )
+        return LogAnalysisAgentContext(
+            workflow=workflow,
+            collect_logs=current_logs,
+            prompt=prompt,
+            preflight_grouped_error_runs=preflight_grouped_error_runs,
+            tool_results=tool_results,
+            final_report=final_report,
+            log_window_since=log_window.since_datetime,
+            log_window_until=log_window.until_datetime,
+            llm_tokens_used=llm_tokens_used,
+            llm_cost_usd=llm_cost_usd,
+            llm_report_execution_time_seconds=llm_report_execution_time_seconds,
+        )
+
+    async def _load_available_projects(self) -> list[ProjectManifestSummary]:
+        """Load and validate the projects visible to the workflow caller."""
+
+        available_projects: list[ProjectManifestSummary] = await self.mcp_client.list_projects()
+        if available_projects:
+            return available_projects
+        raise McpClientError(
+            (
+                "MCP list_projects returned no projects for this workflow caller. "
+                "Upload project manifests to MCP or check the caller project scope "
+                "before collecting logs."
+            ),
+            mcp_url=self.mcp_client.base_url,
+            tool_name=McpToolName.LIST_PROJECTS,
+        )
+
+    async def _collect_current_logs(
+        self,
+        *,
+        workflow: WorkflowBootstrap,
+        log_window: LogCollectionWindow,
+    ) -> CollectLogsArtifact:
+        """Collect current logs and reject truncated snapshots."""
+
+        current_logs: CollectLogsArtifact = await self.mcp_client.collect_logs(
+            since=log_window.since,
+            until=log_window.until,
+        )
+        truncated_sources: list[str] = self._build_current_coverage(current_logs).truncated_sources
+        if truncated_sources:
+            raise LogAnalysisAgentError(
+                "Current log collection is incomplete because sources were truncated: "
+                + ", ".join(truncated_sources),
+                workflow=workflow,
+                collect_logs=current_logs,
+            )
+        return current_logs
+
+    def _log_history_mode_selection(
+        self,
+        *,
+        analysis_date: date,
+        previous_analysis: LogAnalysisOut | None,
+        prepared_evidence: LogAnalysisPromptEvidence,
+    ) -> None:
+        """Log the deterministic evidence mode selected for this run."""
+
         history_comparison_status: LogAnalysisHistoryComparisonStatus | None = (
             prepared_evidence.history_comparison.status
             if prepared_evidence.history_comparison is not None
@@ -178,28 +288,26 @@ class MonitoringWorkflowAgent:
                 "llm_decision_mode": prepared_evidence.kind.value,
             },
         )
-        prompt: LogAnalysisPreparedPrompt = self._build_log_analysis_prompt(
-            analysis_date=analysis_date,
-            workflow=workflow,
-            mandatory_skills=mandatory_skills,
-            available_projects=available_projects,
-            collect_logs=current_logs,
-            private_monitoring_context=self.private_monitoring_context,
-            historical_context=historical_context,
-            previous_analysis=previous_analysis_context,
-            prepared_evidence=prepared_evidence,
-        )
-        llm_report_started_at: float = monotonic()
-        final_report: LogAnalysisFinalReport
-        tool_results: list[LogAnalysisToolResult]
-        llm_tokens_used: int
-        llm_cost_usd: float
+
+    async def _execute_llm_analysis(
+        self,
+        *,
+        prompt: LogAnalysisPreparedPrompt,
+        workflow: WorkflowBootstrap,
+        analysis_date: date,
+        current_logs: CollectLogsArtifact,
+        preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint],
+    ) -> tuple[LogAnalysisFinalReport, list[LogAnalysisToolResult], int, float, float]:
+        """Run the LLM tool loop and retain failure context and timing."""
+
+        started_at: float = monotonic()
         try:
-            final_report, tool_results, llm_tokens_used, llm_cost_usd = await self._run_tool_loop(
+            final_report, tool_results, tokens_used, cost_usd = await self._run_tool_loop(
                 prompt=prompt,
                 workflow=workflow,
                 analysis_date=analysis_date,
                 mcp_session_id=current_logs.session_id,
+                preflight_grouped_error_runs=preflight_grouped_error_runs,
             )
         except Exception as exc:
             raise LogAnalysisAgentError(
@@ -208,36 +316,8 @@ class MonitoringWorkflowAgent:
                 collect_logs=current_logs,
                 prompt=prompt,
             ) from exc
-        llm_report_execution_time_seconds: float = round(monotonic() - llm_report_started_at, 3)
-        logger.info(
-            "completed log-analysis LLM tool loop",
-            extra={
-                "event": "log_analysis_llm_final_report_done",
-                "workflow_name": workflow.workflow_name,
-                "mandatory_skill_count": len(workflow.mandatory_skills),
-                "optional_skill_count": len(workflow.optional_skills),
-                "tool_count": len(workflow.tools),
-                "available_project_count": len(available_projects),
-                "collected_project_count": len(current_logs.projects),
-                "tool_result_count": len(tool_results),
-                "log_window_since": log_window.since,
-                "log_window_until": log_window.until,
-                "severity": final_report.severity,
-                "llm_report_execution_time_seconds": llm_report_execution_time_seconds,
-            },
-        )
-        return LogAnalysisAgentContext(
-            workflow=workflow,
-            collect_logs=current_logs,
-            prompt=prompt,
-            tool_results=tool_results,
-            final_report=final_report,
-            log_window_since=log_window.since_datetime,
-            log_window_until=log_window.until_datetime,
-            llm_tokens_used=llm_tokens_used,
-            llm_cost_usd=llm_cost_usd,
-            llm_report_execution_time_seconds=llm_report_execution_time_seconds,
-        )
+        execution_time_seconds: float = round(monotonic() - started_at, 3)
+        return final_report, tool_results, tokens_used, cost_usd, execution_time_seconds
 
     async def _read_mandatory_skills(
         self,
@@ -290,8 +370,18 @@ class MonitoringWorkflowAgent:
                     "Current grouped-error fingerprints collected from today's log window. "
                     "This is current deterministic evidence, but not a Python history diff."
                 ),
+                grouped_error_runs=current_grouped_errors,
             )
         )
+        coverage_totals = current_coverage_snapshot.get("totals", {})
+        if (
+            current_grouped_error_evidence is not None
+            and isinstance(coverage_totals, dict)
+            and _int_or_zero(coverage_totals.get("truncated_sources")) > 0
+        ):
+            current_grouped_error_evidence = current_grouped_error_evidence.model_copy(
+                update={"evidence_complete": False}
+            )
         if previous_analysis is None:
             return LogAnalysisPromptEvidence(
                 kind=LogAnalysisPromptEvidenceKind.GROUPED_ERROR_BASELINE,
@@ -317,6 +407,7 @@ class MonitoringWorkflowAgent:
                 history_comparison_status=history_comparison_status,
                 source_coverage_comparison=source_coverage_comparison,
                 grouped_error_comparison=compact_grouped_error_comparison,
+                current_grouped_errors=current_grouped_error_evidence,
             )
 
         previous_groups: list[LogAnalysisGroupedErrorSignal] = (
@@ -326,14 +417,25 @@ class MonitoringWorkflowAgent:
             label=LogAnalysisGroupedErrorEvidenceLabel.PREVIOUS,
             groups=previous_groups,
             run_count=len(previous_analysis.fingerprints.grouped_error_runs),
-            tool_scope_by_project=self._build_previous_grouped_error_tool_scope_by_project(
-                previous_analysis
+            tool_scope_by_project=(
+                LogAnalysisHistoryComparisonService.build_grouped_error_run_scope_by_project(
+                    previous_analysis.fingerprints.grouped_error_runs
+                )
             ),
             rationale=(
                 "Previous grouped-error fingerprints from the stored log-analysis DB object. "
                 "Use as historical baseline evidence, not as current log evidence."
             ),
+            grouped_error_runs=previous_analysis.fingerprints.grouped_error_runs,
         )
+        if (
+            previous_grouped_error_evidence is not None
+            and _int_or_zero(previous_analysis.coverage_snapshot.totals.get("truncated_sources"))
+            > 0
+        ):
+            previous_grouped_error_evidence = previous_grouped_error_evidence.model_copy(
+                update={"evidence_complete": False}
+            )
         return LogAnalysisPromptEvidence(
             kind=LogAnalysisPromptEvidenceKind.GROUPED_ERROR_BASELINE,
             decision_prompt=LOG_ANALYSIS_NO_COMPARE_HISTORY_PROMPT,
@@ -361,12 +463,6 @@ class MonitoringWorkflowAgent:
         evidence object.
         """
 
-        grouped_error_comparison: LogAnalysisGroupedErrorComparison | None = (
-            self.history_comparison_service.compare_grouped_errors(  # type: ignore[union-attr]
-                previous_grouped_errors=previous_analysis.fingerprints.grouped_error_runs,
-                current_grouped_errors=current_grouped_errors,
-            )
-        )
         source_coverage_comparison: LogAnalysisSourceCoverageComparison = (
             self.history_comparison_service.build_missing_source_comparison(  # type: ignore[union-attr]
                 previous_coverage_snapshot=previous_analysis.coverage_snapshot.model_dump(
@@ -374,6 +470,45 @@ class MonitoringWorkflowAgent:
                 ),
                 current_coverage_snapshot=current_coverage_snapshot,
                 previous_severity=previous_analysis.severity,
+            )
+        )
+        previous_evidence_incomplete: bool = any(
+            run.result.truncated for run in previous_analysis.fingerprints.grouped_error_runs
+        ) or (_int_or_zero(previous_analysis.coverage_snapshot.totals.get("truncated_sources")) > 0)
+        if previous_evidence_incomplete:
+            return (
+                LogAnalysisHistoryComparisonStatus.UNAVAILABLE,
+                source_coverage_comparison.model_copy(
+                    update={
+                        "recommended_action": RecommendedAction.LLM_MAY_DECIDE,
+                        "rationale": (
+                            "Structured history comparison is unavailable because previous "
+                            "log evidence is incomplete. "
+                            "Use complete current evidence only and do not claim a trend."
+                        ),
+                    }
+                ),
+                None,
+            )
+        if previous_analysis.fingerprints.version != LOG_ANALYSIS_FINGERPRINT_VERSION:
+            return (
+                LogAnalysisHistoryComparisonStatus.UNAVAILABLE,
+                source_coverage_comparison.model_copy(
+                    update={
+                        "recommended_action": RecommendedAction.LLM_MAY_DECIDE,
+                        "rationale": (
+                            "Structured history comparison is unavailable because the "
+                            "previous semantic fingerprint format is not comparable. "
+                            "Use complete current evidence and do not claim a trend."
+                        ),
+                    }
+                ),
+                None,
+            )
+        grouped_error_comparison: LogAnalysisGroupedErrorComparison | None = (
+            self.history_comparison_service.compare_grouped_errors(  # type: ignore[union-attr]
+                previous_grouped_errors=previous_analysis.fingerprints.grouped_error_runs,
+                current_grouped_errors=current_grouped_errors,
             )
         )
         if (
@@ -385,9 +520,10 @@ class MonitoringWorkflowAgent:
                     "recommended_action": RecommendedAction.LLM_MAY_DECIDE,
                     "tool_scope_by_project": {},
                     "rationale": (
-                        "Current grouped-error evidence is already available. Treat "
-                        "source coverage changes and previous severity as comparison "
-                        "context; let the LLM decide whether more tools are needed."
+                        "Current grouped-error evidence already covers every available "
+                        "source. Other-source tools cannot replace changed or missing "
+                        "coverage: report the gap and limit trend claims. Call another "
+                        "tool only for a separate material question."
                     ),
                 }
             )
@@ -448,10 +584,10 @@ class MonitoringWorkflowAgent:
             and prompt_compacted.source_coverage is not None
             and prompt_compacted.source_coverage.recommended_action == RecommendedAction.CALL_TOOLS
         )
-        current_grouped_evidence_available: bool = prepared_evidence.kind in {
-            LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON,
-            LogAnalysisPromptEvidenceKind.GROUPED_ERROR_BASELINE,
-        }
+        current_grouped_errors = prepared_evidence.current_grouped_errors
+        current_grouped_evidence_available = bool(
+            current_grouped_errors is not None and current_grouped_errors.evidence_complete
+        )
         evidence_mode: LogAnalysisEvidenceMode
         if current_grouped_evidence_available:
             evidence_mode = LogAnalysisEvidenceMode.CURRENT_GROUPED_ERRORS_AVAILABLE
@@ -471,10 +607,7 @@ class MonitoringWorkflowAgent:
             evidence_mode = LogAnalysisEvidenceMode.MCP_TOOL_RESULTS_REQUIRED
 
         next_required_action: LogAnalysisNextRequiredAction
-        if current_grouped_evidence_available or (
-            previous_analysis_context is not None
-            and prepared_evidence.kind != LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON
-        ):
+        if current_grouped_evidence_available:
             next_required_action = LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
         else:
             next_required_action = LogAnalysisNextRequiredAction.CALL_TOOLS
@@ -511,13 +644,7 @@ class MonitoringWorkflowAgent:
                     LogAnalysisAllowedAction.FINAL_REPORT,
                 ],
                 next_required_action=next_required_action,
-                final_report_allowed=(
-                    current_grouped_evidence_available
-                    or (
-                        prepared_evidence.kind != LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON
-                        and previous_analysis_context is not None
-                    )
-                ),
+                final_report_allowed=current_grouped_evidence_available,
                 available_projects=available_projects,
                 mandatory_skills=[
                     WorkflowSkill(
@@ -592,6 +719,7 @@ class MonitoringWorkflowAgent:
         history_comparison_status: LogAnalysisHistoryComparisonStatus,
         source_coverage_comparison: LogAnalysisSourceCoverageComparison | None,
         grouped_error_comparison: LogAnalysisPromptGroupedErrorComparison | None,
+        current_grouped_errors: LogAnalysisPromptGroupedErrorEvidence | None,
     ) -> LogAnalysisPromptEvidence:
         """Build prompt evidence for deterministic history-comparison mode."""
 
@@ -601,6 +729,7 @@ class MonitoringWorkflowAgent:
             history_comparison=LogAnalysisPromptHistoryComparisonState(
                 status=history_comparison_status,
             ),
+            current_grouped_errors=current_grouped_errors,
             prompt_compacted=LogAnalysisPromptCompactedEvidence(
                 source_coverage=source_coverage_comparison,
                 grouped_error_diff=grouped_error_comparison,
@@ -661,28 +790,6 @@ class MonitoringWorkflowAgent:
         ]
 
     @staticmethod
-    def _build_previous_grouped_error_tool_scope_by_project(
-        previous_analysis: PreviousLogAnalysisContext,
-    ) -> dict[str, list[str]]:
-        """Return group_errors project/source scope stored in the previous DB analysis."""
-
-        tool_scope_by_project: dict[str, set[str]] = {}
-        for run in previous_analysis.fingerprints.grouped_error_runs:
-            project_name: object = run.arguments.get("project_name")
-            if not isinstance(project_name, str) or not project_name:
-                continue
-            raw_source_keys: object = run.arguments.get("source_keys")
-            if isinstance(raw_source_keys, list):
-                source_keys = {str(source_key) for source_key in raw_source_keys if source_key}
-            else:
-                source_keys = set()
-            tool_scope_by_project.setdefault(project_name, set()).update(source_keys)
-        return {
-            project: sorted(source_keys)
-            for project, source_keys in sorted(tool_scope_by_project.items())
-        }
-
-    @staticmethod
     def _compact_grouped_error_baseline_for_prompt(
         *,
         label: LogAnalysisGroupedErrorEvidenceLabel,
@@ -690,88 +797,92 @@ class MonitoringWorkflowAgent:
         run_count: int,
         tool_scope_by_project: dict[str, list[str]],
         rationale: str,
+        grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] | None = None,
     ) -> LogAnalysisPromptGroupedErrorEvidence | None:
-        """Return the shared compact baseline shape for previous or current grouped errors."""
+        """Return every semantic family, ordered by operational attention."""
 
         if run_count == 0 and not groups:
             return None
+        coalesced = coalesce_grouped_errors(groups)
+
+        fingerprints = sorted(
+            [
+                LogAnalysisPromptGroupedErrorFingerprint(
+                    fingerprint=family.signal.fingerprint,
+                    project_name=family.signal.project_name,
+                    category=family.signal.category,
+                    severity=family.signal.severity,
+                    source_keys=family.signal.source_keys,
+                    status_codes=family.signal.status_codes,
+                    count=family.signal.count,
+                    request_paths=list(family.semantics.normalized_paths),
+                    request_methods=list(family.semantics.request_methods),
+                    request_hosts=list(family.semantics.request_hosts),
+                    message_summary=family.signal.message_summary,
+                    upstream_attempted=family.signal.upstream_attempted,
+                    attention_priority=family.semantics.attention_priority,
+                    variant_count=family.variant_count,
+                )
+                for family in coalesced.values()
+            ],
+            key=lambda item: (
+                attention_priority_rank(item.attention_priority),
+                (
+                    0
+                    if item.severity.casefold() in {"high", "critical"}
+                    or any(status_code >= 500 for status_code in item.status_codes)
+                    else 1
+                ),
+                item.project_name,
+                item.fingerprint,
+            ),
+        )
         severity_counts: dict[str, int] = {}
         category_counts: dict[str, int] = {}
         status_code_counts: dict[str, int] = {}
         source_key_counts: dict[str, int] = {}
-        for group in groups:
-            severity: str = group.severity or "unknown"
-            category: str = group.category or "unknown"
+        attention_priority_counts: dict[str, int] = {}
+        attention_priority_event_counts: dict[str, int] = {}
+        for family in fingerprints:
+            severity: str = family.severity or "unknown"
+            category: str = family.category or "unknown"
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
             category_counts[category] = category_counts.get(category, 0) + 1
-            for status_code in group.status_codes:
+            priority = family.attention_priority.value
+            attention_priority_counts[priority] = attention_priority_counts.get(priority, 0) + 1
+            attention_priority_event_counts[priority] = (
+                attention_priority_event_counts.get(priority, 0) + family.count
+            )
+            for status_code in family.status_codes:
                 status_code_key: str = str(status_code)
                 status_code_counts[status_code_key] = status_code_counts.get(status_code_key, 0) + 1
-            for source_key in group.source_keys:
+            for source_key in family.source_keys:
                 source_key_counts[source_key] = source_key_counts.get(source_key, 0) + 1
+        runs = grouped_error_runs or []
+        event_count = sum(family.count for family in fingerprints)
         return LogAnalysisPromptGroupedErrorEvidence(
             available=True,
             label=label,
             tool_scope_by_project=tool_scope_by_project,
             run_count=run_count,
             group_count=len(groups),
+            unique_group_count=len(fingerprints),
+            event_count=event_count,
+            evidence_complete=not any(run.result.truncated for run in runs),
+            attention_priority_counts=attention_priority_counts,
+            attention_priority_event_counts=attention_priority_event_counts,
             severity_counts=severity_counts,
             category_counts=category_counts,
             status_code_counts=status_code_counts,
             source_key_counts=source_key_counts,
-            fingerprints=[
-                MonitoringWorkflowAgent._compact_grouped_error_fingerprint(signal)
-                for signal in groups
-            ],
+            fingerprints=fingerprints,
             rationale=rationale,
         )
 
     @staticmethod
-    def _compact_grouped_error_fingerprint(
-        signal: LogAnalysisGroupedErrorSignal,
-    ) -> LogAnalysisPromptGroupedErrorFingerprint:
-        """Keep only stable fingerprint identity fields for prompt baselines."""
-
-        return LogAnalysisPromptGroupedErrorFingerprint(
-            fingerprint=signal.fingerprint,
-            project_name=signal.project_name,
-            category=signal.category,
-            severity=signal.severity,
-            source_keys=signal.source_keys,
-            status_codes=signal.status_codes,
-        )
-
-    @staticmethod
-    def _build_grouped_error_tool_scope_by_project(
-        current_tool_results: list[LogAnalysisToolResult],
-    ) -> dict[str, list[str]]:
-        """Return the project/source scope covered by `group_errors` tool calls."""
-
-        source_keys_by_project: dict[str, set[str]] = {}
-        for tool_result in current_tool_results:
-            if tool_result.tool_name != McpToolName.GROUP_ERRORS:
-                continue
-            project_name: str = str(tool_result.arguments.get("project_name") or "")
-            if not project_name:
-                continue
-            raw_source_keys: object = tool_result.arguments.get("source_keys")
-            raw_source_key: object = tool_result.arguments.get("source_key")
-            if isinstance(raw_source_keys, list):
-                source_keys = [str(source_key) for source_key in raw_source_keys if source_key]
-            elif raw_source_key:
-                source_keys = [str(raw_source_key)]
-            else:
-                source_keys = []
-            source_keys_by_project.setdefault(project_name, set()).update(source_keys)
-        return {
-            project_name: sorted(source_keys)
-            for project_name, source_keys in sorted(source_keys_by_project.items())
-        }
-
-    @staticmethod
     def _build_group_errors_arguments_from_current_logs(
         current_logs: CollectLogsArtifact,
-    ) -> list[dict[str, Any]]:
+    ) -> list[GroupErrorsArgumentsModel]:
         """Build scoped `group_errors` arguments from the current log collection.
 
         `collect_logs` tells us which project sources produced snapshot files,
@@ -780,7 +891,7 @@ class MonitoringWorkflowAgent:
         asking MCP to inspect unavailable sources.
         """
 
-        arguments_list: list[dict[str, Any]] = []
+        arguments_list: list[GroupErrorsArgumentsModel] = []
         for project in sorted(current_logs.projects, key=lambda item: item.project_name):
             project_name: str = project.project_name
             if not project_name:
@@ -798,34 +909,147 @@ class MonitoringWorkflowAgent:
             )
             if not source_keys:
                 continue
-            arguments: dict[str, Any] = {"project_name": project_name}
-            arguments["source_keys"] = source_keys
+            arguments = GroupErrorsArgumentsModel(
+                project_name=project_name,
+                source_keys=source_keys,
+                max_groups=GROUP_ERRORS_PER_PAGE,
+            )
             arguments_list.append(arguments)
         return arguments_list
 
-    async def _collect_current_grouped_errors(
+    async def _collect_all_group_error_pages(
         self,
         *,
+        arguments: GroupErrorsArgumentsModel,
+    ) -> GroupErrorsResponseModel:
+        """Read every group_errors page without an arbitrary ceiling."""
+
+        arguments_payload: dict[str, Any] = arguments.model_dump(
+            mode="json",
+            exclude_defaults=True,
+            exclude_none=True,
+        )
+        response: GroupErrorsResponseModel = await self.mcp_client.call_deterministic_tool(
+            McpToolName.GROUP_ERRORS,
+            arguments_payload,
+            response_model=GroupErrorsResponseModel,
+        )
+        if response.project_name != arguments.project_name:
+            raise ValueError("group_errors returned an unexpected project scope")
+        requested_source_keys: set[str] = set(arguments.source_keys or [])
+        if arguments.source_key:
+            requested_source_keys.add(arguments.source_key)
+        if not requested_source_keys <= set(response.searched_source_keys):
+            raise ValueError("group_errors returned a narrower source scope than requested")
+
+        groups: list[GroupedErrorResponseModel] = []
+        page = response
+        offset: int = arguments.offset
+        snapshot_identity = (
+            response.fingerprint_version,
+            response.project_name,
+            response.workspace,
+            response.session_id,
+            response.snapshot_collected_at,
+            response.snapshot_dir,
+            response.grouped_error_count,
+            response.searched_source_keys,
+        )
+
+        while True:
+            if (
+                page.fingerprint_version,
+                page.project_name,
+                page.workspace,
+                page.session_id,
+                page.snapshot_collected_at,
+                page.snapshot_dir,
+                page.grouped_error_count,
+                page.searched_source_keys,
+            ) != snapshot_identity:
+                raise ValueError("group_errors snapshot changed during pagination")
+            if page.offset != offset:
+                raise ValueError("group_errors returned a non-contiguous page")
+
+            groups.extend(page.groups)
+            next_offset = page.next_offset
+            if page.truncated:
+                if (
+                    not page.groups
+                    or next_offset != offset + len(page.groups)
+                    or next_offset >= response.grouped_error_count
+                ):
+                    raise ValueError("group_errors returned an invalid next_offset")
+                offset = next_offset
+                page = await self.mcp_client.call_deterministic_tool(
+                    McpToolName.GROUP_ERRORS,
+                    {**arguments_payload, "offset": offset},
+                    response_model=GroupErrorsResponseModel,
+                )
+                continue
+            break
+
+        if response.grouped_error_count != len(groups):
+            raise ValueError(
+                "group_errors pagination finished with a mismatched grouped_error_count"
+            )
+        return response.model_copy(
+            update={
+                "groups": groups,
+                "offset": 0,
+                "returned_group_count": len(groups),
+                "next_offset": len(groups),
+                "partial_page": False,
+                "truncated": False,
+            }
+        )
+
+    async def _collect_preflight_grouped_error_runs(
+        self,
+        *,
+        workflow: WorkflowBootstrap,
         current_logs: CollectLogsArtifact,
     ) -> list[LogAnalysisGroupedErrorRunFingerprint]:
         """Collect current grouped-error evidence before the LLM decision."""
 
-        grouped_errors: list[LogAnalysisGroupedErrorRunFingerprint] = []
-        group_errors_arguments: list[dict[str, Any]] = (
+        group_errors_arguments: list[GroupErrorsArgumentsModel] = (
             self._build_group_errors_arguments_from_current_logs(current_logs)
         )
-        for arguments in group_errors_arguments:
-            structured_content: dict[str, Any] = await self.mcp_client.call_deterministic_tool(
-                McpToolName.GROUP_ERRORS,
-                arguments,
+        if not group_errors_arguments:
+            raise LogAnalysisAgentError(
+                "Current log collection contains no usable collected source snapshots.",
+                workflow=workflow,
+                collect_logs=current_logs,
             )
-            grouped_errors.append(
-                build_grouped_error_run(
+
+        grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = []
+        try:
+            for arguments in group_errors_arguments:
+                response: GroupErrorsResponseModel = await self._collect_all_group_error_pages(
                     arguments=arguments,
-                    structured_content=structured_content,
                 )
-            )
-        return grouped_errors
+                arguments_payload: dict[str, Any] = arguments.model_dump(
+                    mode="json",
+                    exclude_defaults=True,
+                    exclude_none=True,
+                )
+                structured_content: dict[str, Any] = response.model_dump(
+                    mode="json",
+                    exclude_unset=True,
+                )
+                grouped_error_runs.append(
+                    build_grouped_error_run(
+                        arguments=arguments_payload,
+                        structured_content=structured_content,
+                    )
+                )
+        except Exception as exc:
+            raise LogAnalysisAgentError(
+                str(exc),
+                workflow=workflow,
+                collect_logs=current_logs,
+            ) from exc
+        return grouped_error_runs
 
     @staticmethod
     def _build_system_prompt_with_mandatory_skills(
@@ -876,6 +1100,7 @@ class MonitoringWorkflowAgent:
         workflow: WorkflowBootstrap,
         analysis_date: date,
         mcp_session_id: str | None = None,
+        preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] | None = None,
     ) -> tuple[LogAnalysisFinalReport, list[LogAnalysisToolResult], int, float]:
         """Run the LLM action loop until a final report is produced."""
 
@@ -885,7 +1110,15 @@ class MonitoringWorkflowAgent:
         ]
         tool_results: list[LogAnalysisToolResult] = []
         fetched_skill_names: set[str] = set()
-        executed_mcp_tool_calls: set[str] = set()
+        executed_mcp_tool_calls: set[str] = {
+            self._build_mcp_tool_call_key(
+                LogAnalysisToolCall(
+                    tool_name=McpToolName.GROUP_ERRORS,
+                    arguments=dict(run.arguments),
+                )
+            )
+            for run in preflight_grouped_error_runs or []
+        }
         llm_tokens_used: int = 0
         llm_cost_usd: float = 0.0
         for iteration in range(1, MAX_LLM_TOOL_LOOP_ITERATIONS + 1):
@@ -895,23 +1128,34 @@ class MonitoringWorkflowAgent:
                 analysis_date=analysis_date,
                 iteration=iteration,
             )
-            if llm_response.usage is not None:
-                llm_tokens_used += llm_response.usage.total_tokens
-                llm_cost_usd += usage_cost_usd(llm_response.usage)
+            usage = llm_response.usage
+            if usage is not None:
+                llm_tokens_used += usage.total_tokens
+                llm_cost_usd += usage_cost_usd(usage)
 
-            payload: dict[str, Any] = self._extract_llm_payload(llm_response)
-            action: object = payload.get("action")
-            await self._record_llm_step(
-                LogAnalysisLLMCallIn(
-                    analysis_date=analysis_date,
-                    workflow_name=workflow.workflow_name,
-                    mcp_session_id=mcp_session_id,
-                    iteration=iteration,
-                    step_type="llm_call",
-                    action=str(action or ""),
-                    llm_response_text=llm_response.text or "",
-                )
+            llm_step = LogAnalysisLLMCallIn(
+                analysis_date=analysis_date,
+                workflow_name=workflow.workflow_name,
+                mcp_session_id=mcp_session_id,
+                iteration=iteration,
+                step_type="llm_call",
+                status="succeeded",
+                llm_response_text=llm_response.text or "",
             )
+            try:
+                payload: dict[str, Any] = self._extract_llm_payload(llm_response)
+            except Exception as exc:
+                await self._record_llm_step(
+                    llm_step.model_copy(
+                        update={
+                            "status": "failed",
+                            "error_message": str(exc),
+                        }
+                    )
+                )
+                raise
+            action: object = payload.get("action")
+            await self._record_llm_step(llm_step.model_copy(update={"action": str(action or "")}))
             self._log_llm_action_payload(
                 response=llm_response,
                 payload=payload,
@@ -920,18 +1164,20 @@ class MonitoringWorkflowAgent:
             )
             if action == "final_report":
                 final_report: LogAnalysisFinalReport = self._build_final_report_payload(payload)
-                if (
-                    not prompt.context.final_report_allowed
-                    and prompt.context.next_required_action
-                    == LogAnalysisNextRequiredAction.CALL_TOOLS
-                    and not tool_results
-                ):
-                    messages.append(
+                final_report_allowed = not prompt.context.current_coverage.truncated_sources and (
+                    prompt.context.final_report_allowed
+                    or self._group_errors_cover_collection(
+                        tool_results,
+                        prompt.context.collection,
+                    )
+                )
+                if not final_report_allowed:
+                    messages[2:] = [
                         self._build_final_report_not_allowed_message(
                             previous_action=payload,
-                            prompt=prompt,
+                            tool_results=tool_results,
                         )
-                    )
+                    ]
                     continue
                 if self.history_comparison_enabled:
                     correction_message: Message | None = (
@@ -941,10 +1187,11 @@ class MonitoringWorkflowAgent:
                             payload=payload,
                             workflow=workflow,
                             iteration=iteration,
+                            tool_results=tool_results,
                         )
                     )
                     if correction_message is not None:
-                        messages.append(correction_message)
+                        messages[2:] = [correction_message]
                         continue
                 return final_report, tool_results, llm_tokens_used, llm_cost_usd
             if action == "call_tools":
@@ -971,289 +1218,117 @@ class MonitoringWorkflowAgent:
                 raise ValueError("LLM action did not match expected shape.")
 
             tool_results.extend(new_tool_results)
-            messages.append(
+            messages[2:] = [
                 self._build_tool_loop_followup_message(
-                    previous_action=payload,
-                    new_tool_results=new_tool_results,
                     all_tool_results=tool_results,
-                    workflow=workflow,
-                    prompt=prompt,
                     fetched_skill_names=fetched_skill_names,
+                    prompt=prompt,
                 )
-            )
+            ]
 
         raise ValueError("LLM tool loop exceeded maximum iterations before final_report.")
 
     @staticmethod
     def _build_tool_loop_followup_message(
         *,
-        previous_action: dict[str, object],
-        new_tool_results: list[LogAnalysisToolResult],
         all_tool_results: list[LogAnalysisToolResult],
-        workflow: WorkflowBootstrap,
-        prompt: LogAnalysisPreparedPrompt,
         fetched_skill_names: set[str],
+        prompt: LogAnalysisPreparedPrompt,
     ) -> Message:
-        """Build the next LLM message after tools or skills were executed."""
+        """Send a prompt-safe evidence ledger without repeating the initial prompt."""
 
-        called_tool_names: set[str] = {result.tool_name for result in all_tool_results}
-        current_evidence_available: bool = bool(all_tool_results)
+        final_report_allowed = prompt.context.final_report_allowed or (
+            MonitoringWorkflowAgent._group_errors_cover_collection(
+                all_tool_results,
+                prompt.context.collection,
+            )
+        )
+        evidence_limitations: list[str] = [
+            limitation
+            for result in all_tool_results
+            for limitation in _string_list(result.structured_content.get("limitations"))
+        ]
+        instruction: str = (
+            "Use the retained initial prompt and critical rules. Interpret these exact "
+            "results, request only material missing evidence, or return final_report."
+        )
+        if evidence_limitations:
+            instruction += " Treat evidence_limitations as hard claim boundaries."
         payload: dict[str, object] = {
-            "previous_action": previous_action,
             "tool_results": [
-                MonitoringWorkflowAgent._compact_tool_result_for_prompt(tool_result)
-                for tool_result in new_tool_results
+                tool_result.model_dump(mode="json") for tool_result in all_tool_results
             ],
-            "available_tool_status": [
-                {
-                    "tool_name": tool.tool_name,
-                    "already_called": tool.tool_name in called_tool_names,
-                }
-                for tool in workflow.tools
-            ],
-            "optional_skill_status": [
-                {
-                    "skill_name": skill.name,
-                    "already_retrieved": skill.name in fetched_skill_names,
-                }
-                for skill in workflow.optional_skills
-            ],
-            "initial_context_reference": {
-                "instruction": (
-                    "Use the initial prompt already present earlier in this conversation for "
-                    "previous_analysis, evidence, current_coverage, full tool "
-                    "inventory, report_contract, and mandatory instructions. This follow-up "
-                    "contains only new evidence and small status updates to avoid repeating "
-                    "large prompt context."
-                ),
-                "historical_context_available": prompt.context.historical_context_available,
-                "previous_analysis_available": prompt.context.previous_analysis is not None,
-                "history_comparison_status": (
-                    prompt.context.evidence.get("history_comparison", {}).get("status")
-                    if isinstance(prompt.context.evidence.get("history_comparison"), dict)
-                    else None
-                ),
-                "history_comparison_has_grouped_error_diff": (
-                    isinstance(prompt.context.evidence.get("prompt_compacted"), dict)
-                    and prompt.context.evidence.get("prompt_compacted", {}).get(
-                        "grouped_error_diff"
-                    )
-                    is not None
-                ),
-                "current_coverage_available": True,
+            "called_tool_names": sorted({result.tool_name for result in all_tool_results}),
+            "optional_skill_status": {
+                skill.name: ("retrieved" if skill.name in fetched_skill_names else "available")
+                for skill in prompt.context.optional_skills
             },
-            "evidence_mode": (
-                "current_tool_results_available"
-                if current_evidence_available
-                else prompt.context.evidence_mode
-            ),
             "current_tool_result_count": len(all_tool_results),
+            "final_report_allowed": final_report_allowed,
             "next_required_action": (
-                "choose_next_action"
-                if current_evidence_available
-                else prompt.context.next_required_action
+                LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
+                if final_report_allowed
+                else LogAnalysisNextRequiredAction.CALL_TOOLS
             ),
-            "final_report_allowed": (
-                True if current_evidence_available else prompt.context.final_report_allowed
-            ),
-            "trend_summary_instruction": prompt.context.trend_summary_instruction,
-            "instructions": MonitoringWorkflowAgent._build_mode_specific_followup_instructions(
-                prompt
-            ),
+            "instruction": instruction,
         }
+        if evidence_limitations:
+            payload["evidence_limitations"] = evidence_limitations
         return Message.from_text("user", json.dumps(payload, separators=(",", ":")))
 
     @staticmethod
-    def _build_mode_specific_followup_instructions(
-        prompt: LogAnalysisPreparedPrompt,
-    ) -> list[str]:
-        """Return follow-up instructions matching the initial evidence mode."""
-
-        evidence_kind = prompt.context.evidence.get("kind")
-        excluded_markers: tuple[str, ...]
-        if evidence_kind == "history_comparison":
-            excluded_markers = (
-                "history_baseline",
-                "grouped_error_baseline",
-                "disabled-history",
-                "previous_grouped_errors and current_grouped_errors",
-            )
-        else:
-            excluded_markers = (
-                "history_comparison.",
-                "history_comparison.status",
-                "grouped_error_diff",
-                "compare-history",
-                "deterministic history comparison",
-            )
-        return [
-            instruction
-            for instruction in LOG_ANALYSIS_FOLLOWUP_INSTRUCTIONS
-            if not any(marker in instruction for marker in excluded_markers)
-        ]
-
-    @staticmethod
-    def _compact_tool_result_for_prompt(tool_result: LogAnalysisToolResult) -> dict[str, object]:
-        """Return a bounded prompt-facing view of one deterministic tool result."""
-
-        dumped: dict[str, object] = tool_result.model_dump(mode="json")
-        if tool_result.tool_name == McpToolName.GROUP_ERRORS:
-            dumped["structured_content"] = (
-                MonitoringWorkflowAgent._compact_group_errors_result_for_prompt(
-                    tool_result.structured_content
-                )
-            )
-        elif tool_result.tool_name == McpToolName.GREP_LOG_SNAPSHOT:
-            dumped["structured_content"] = (
-                MonitoringWorkflowAgent._compact_grep_log_snapshot_result_for_prompt(
-                    tool_result.structured_content
-                )
-            )
-        return dumped
-
-    @staticmethod
-    def _compact_group_errors_result_for_prompt(
-        structured_content: dict[str, Any],
-        *,
-        max_groups: int = 20,
-    ) -> dict[str, object]:
-        """Compact MCP group_errors output while preserving decision facts."""
-
-        groups: object = structured_content.get("groups", [])
-        if not isinstance(groups, list):
-            return dict(structured_content)
-
-        compacted_groups: list[dict[str, object]] = [
-            MonitoringWorkflowAgent._compact_group_error_for_prompt(group)
-            for group in groups[:max_groups]
-            if isinstance(group, dict)
-        ]
-        severity_counts: dict[str, int] = {}
-        category_counts: dict[str, int] = {}
-        status_code_counts: dict[str, int] = {}
-        source_key_counts: dict[str, int] = {}
-        for group in groups:
-            if not isinstance(group, dict):
+    def _group_errors_cover_collection(
+        tool_results: list[LogAnalysisToolResult],
+        collection: LogAnalysisPromptCollection,
+    ) -> bool:
+        required = {
+            project.project_name: {
+                source.source_key
+                for source in project.sources
+                if source.status == LogSourceCollectionStatus.COLLECTED
+            }
+            for project in collection.projects
+        }
+        covered: dict[str, set[str]] = {}
+        complete_result_found = False
+        for result in tool_results:
+            if (
+                result.tool_name != McpToolName.GROUP_ERRORS
+                or result.structured_content.get("truncated")
+                or result.structured_content.get("partial_page")
+            ):
                 continue
-            severity: str = str(group.get("severity") or "unknown")
-            category: str = str(group.get("category") or "unknown")
-            severity_counts[severity] = severity_counts.get(severity, 0) + 1
-            category_counts[category] = category_counts.get(category, 0) + 1
-            for status_code in group.get("status_codes") or []:
-                status_code_key: str = str(status_code)
-                status_code_counts[status_code_key] = status_code_counts.get(status_code_key, 0) + 1
-            for source_key in group.get("source_keys") or []:
-                source_key_name: str = str(source_key)
-                source_key_counts[source_key_name] = source_key_counts.get(source_key_name, 0) + 1
-
-        compacted: dict[str, object] = {
-            key: value for key, value in structured_content.items() if key not in {"groups"}
-        }
-        compacted.update(
-            {
-                "prompt_compacted": True,
-                "groups": compacted_groups,
-                "included_group_count": len(compacted_groups),
-                "omitted_group_count": max(len(groups) - len(compacted_groups), 0),
-                "severity_counts": severity_counts,
-                "category_counts": category_counts,
-                "status_code_counts": status_code_counts,
-                "source_key_counts": source_key_counts,
-            }
-        )
-        return compacted
-
-    @staticmethod
-    def _compact_group_error_for_prompt(group: dict[str, object]) -> dict[str, object]:
-        """Drop bulky grouped-error fields that do not affect LLM decisions."""
-
-        return {
-            key: group[key]
-            for key in [
-                "fingerprint",
-                "category",
-                "severity",
-                "count",
-                "source_keys",
-                "request_paths",
-                "status_codes",
-                "levels",
-                "message_summary",
-                "first_timestamp",
-                "last_timestamp",
-            ]
-            if key in group
-        }
-
-    @staticmethod
-    def _compact_grep_log_snapshot_result_for_prompt(
-        structured_content: dict[str, Any],
-        *,
-        max_matches: int = 20,
-        max_line_chars: int = 160,
-    ) -> dict[str, object]:
-        """Compact grep output while preserving representative matches."""
-
-        matches: object = structured_content.get("matches", [])
-        if not isinstance(matches, list):
-            return dict(structured_content)
-
-        compacted_matches: list[object] = [
-            MonitoringWorkflowAgent._compact_grep_match_for_prompt(
-                match,
-                max_line_chars=max_line_chars,
+            project_name = str(result.structured_content.get("project_name") or "")
+            raw_source_keys = result.structured_content.get("searched_source_keys")
+            if not project_name or not isinstance(raw_source_keys, list):
+                continue
+            complete_result_found = True
+            source_keys = {str(value) for value in raw_source_keys if value}
+            covered.setdefault(project_name, set()).update(source_keys)
+        return (
+            complete_result_found
+            and any(required.values())
+            and all(
+                source_keys <= covered.get(project_name, set())
+                for project_name, source_keys in required.items()
             )
-            for match in matches[:max_matches]
-        ]
-        compacted: dict[str, object] = {
-            key: value for key, value in structured_content.items() if key not in {"matches"}
-        }
-        compacted.update(
-            {
-                "prompt_compacted": True,
-                "matches": compacted_matches,
-                "included_match_count": len(compacted_matches),
-                "omitted_match_count": max(len(matches) - len(compacted_matches), 0),
-            }
         )
-        return compacted
-
-    @staticmethod
-    def _compact_grep_match_for_prompt(
-        match: object,
-        *,
-        max_line_chars: int,
-    ) -> object:
-        """Trim grep match text while preserving match metadata and timestamps."""
-
-        if isinstance(match, str):
-            return _truncate_prompt_text(match, max_chars=max_line_chars)
-        if not isinstance(match, dict):
-            return match
-
-        compacted: dict[str, object] = {}
-        for key, value in match.items():
-            if key in {"line", "message", "text", "raw", "raw_line"} and isinstance(value, str):
-                compacted[key] = _truncate_prompt_text(value, max_chars=max_line_chars)
-            elif key not in {"context_before", "context_after"}:
-                compacted[key] = value
-        return compacted
 
     @staticmethod
     def _build_final_report_not_allowed_message(
         *,
         previous_action: dict[str, object],
-        prompt: LogAnalysisPreparedPrompt,
+        tool_results: list[LogAnalysisToolResult],
     ) -> Message:
         """Build a correction message when current tool evidence is required first."""
 
         payload: dict[str, object] = {
             "previous_action": previous_action,
             "final_report_not_allowed_yet": True,
-            "next_required_action": prompt.context.next_required_action,
-            "final_report_allowed": prompt.context.final_report_allowed,
-            "evidence": prompt.context.evidence,
-            "current_tool_result_count": prompt.context.current_tool_result_count,
+            "next_required_action": LogAnalysisNextRequiredAction.CALL_TOOLS,
+            "final_report_allowed": False,
+            "current_tool_result_count": len(tool_results),
+            "tool_results": [tool_result.model_dump(mode="json") for tool_result in tool_results],
             "instruction": (
                 "Call deterministic tools first. The prompt requires current MCP "
                 "tool evidence before final_report because final_report_allowed=false "
@@ -1270,6 +1345,7 @@ class MonitoringWorkflowAgent:
         payload: dict[str, object],
         workflow: WorkflowBootstrap,
         iteration: int,
+        tool_results: list[LogAnalysisToolResult],
     ) -> Message | None:
         """Return an LLM correction prompt for overbroad history-comparison claims."""
 
@@ -1370,7 +1446,9 @@ class MonitoringWorkflowAgent:
                         "stable operation",
                         "TLS is healthy",
                     ],
-                    "evidence": prompt.context.evidence,
+                    "tool_results": [
+                        tool_result.model_dump(mode="json") for tool_result in tool_results
+                    ],
                     "instruction": (
                         "Return a corrected final_report. Keep current-run claims scoped "
                         "to current_grouped_error_scope_by_project. Do not claim stable "
@@ -1526,10 +1604,28 @@ class MonitoringWorkflowAgent:
             tool_started_at = datetime.now(UTC)
             tool_started_monotonic = monotonic()
             try:
-                structured_content: dict[str, Any] = await self.mcp_client.call_deterministic_tool(
-                    tool_call.tool_name,
-                    tool_call.arguments,
-                )
+                if tool_call.tool_name == McpToolName.GROUP_ERRORS:
+                    group_errors_arguments = GroupErrorsArgumentsModel.model_validate(
+                        tool_call.arguments
+                    )
+                    group_errors_response: GroupErrorsResponseModel = (
+                        await self._collect_all_group_error_pages(
+                            arguments=group_errors_arguments,
+                        )
+                    )
+                    structured_content: dict[str, Any] = group_errors_response.model_dump(
+                        mode="json",
+                        exclude_unset=True,
+                    )
+                else:
+                    deterministic_response: DeterministicToolResponseModel = (
+                        await self.mcp_client.call_deterministic_tool(
+                            tool_call.tool_name,
+                            arguments=tool_call.arguments,
+                            response_model=DeterministicToolResponseModel,
+                        )
+                    )
+                    structured_content = deterministic_response.model_dump(mode="json")
             except McpClientError as exc:
                 await self._record_llm_step(
                     _build_tool_call_entry(
@@ -1813,18 +1909,6 @@ def _string_list(value: object) -> list[str]:
     return [str(item) for item in value if item is not None and str(item)]
 
 
-def _int_list(value: object) -> list[int]:
-    if not isinstance(value, list):
-        return []
-    values: list[int] = []
-    for item in value:
-        try:
-            values.append(int(item))
-        except (TypeError, ValueError):
-            continue
-    return values
-
-
 def _int_or_zero(value: object) -> int:
     if isinstance(value, int):
         return value
@@ -1839,20 +1923,13 @@ def _int_or_zero(value: object) -> int:
         return 0
 
 
-def _optional_string(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value)
-    return text or None
-
-
 def _normalized_group_errors_arguments_for_dedup(arguments: dict[str, Any]) -> dict[str, Any]:
     """Return group_errors arguments normalized for same-scope duplicate detection."""
 
     normalized: dict[str, Any] = {
         key: value
         for key, value in arguments.items()
-        if key not in {"max_groups", "limit", "include_examples"}
+        if key not in {"max_groups", "limit", "offset", "include_examples"}
     }
     source_keys: set[str] = set()
     source_key: object = arguments.get("source_key")
@@ -1866,9 +1943,3 @@ def _normalized_group_errors_arguments_for_dedup(arguments: dict[str, Any]) -> d
     if source_keys:
         normalized["source_keys"] = sorted(source_keys)
     return normalized
-
-
-def _truncate_prompt_text(value: str, *, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return f"{value[: max_chars - 15]}... [truncated]"

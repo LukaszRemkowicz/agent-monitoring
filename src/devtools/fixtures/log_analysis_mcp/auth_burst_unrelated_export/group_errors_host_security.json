@@ -1,0 +1,25 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "No grouped host-security event confirms a ban or account lockout for the admin-login burst."
+  ],
+  "grouped_error_count": 0,
+  "groups": [],
+  "matching_line_count": 0,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 0,
+  "next_offset": 0,
+  "partial_page": false,
+  "next_step_tips": [],
+  "project_name": "host-security",
+  "requested_project_name": "host-security",
+  "searched_source_keys": ["fail2ban", "edge_access", "proxy_access"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/host-security/2026-05-19",
+  "summary": "Host-security grouped evidence does not resolve the authentication outcome.",
+  "truncated": false,
+  "workspace": "workflow"
+}

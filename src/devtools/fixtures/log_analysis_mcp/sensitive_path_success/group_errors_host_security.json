@@ -1,5 +1,7 @@
 {
   "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
   "analysis_cautions": [],
   "grouped_error_count": 3,
   "groups": [
@@ -13,6 +15,9 @@
       "status_codes": [],
       "levels": ["notice"],
       "message_summary": "Fail2ban recorded repeated probe bans.",
+      "identity_kind": "explicit_message",
+      "semantic_summary": "Fail2ban recorded repeated probe bans.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T01:15:00Z",
       "last_timestamp": "2026-05-19T22:40:00Z",
       "first_seen": {
@@ -40,6 +45,9 @@
       "status_codes": [403],
       "levels": [],
       "message_summary": "Edge logs show blocked sensitive-path probes.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Edge logs show blocked sensitive-path probes.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T03:11:00Z",
       "last_timestamp": "2026-05-19T20:24:00Z",
       "first_seen": {
@@ -67,6 +75,9 @@
       "status_codes": [404],
       "levels": [],
       "message_summary": "Routine PHP exploit probes were blocked at the edge.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine PHP exploit probes were blocked at the edge.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T00:40:00Z",
       "last_timestamp": "2026-05-19T23:02:00Z",
       "first_seen": {
@@ -87,6 +98,10 @@
   ],
   "matching_line_count": 50,
   "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 3,
+  "next_offset": 3,
+  "partial_page": false,
   "next_step_tips": ["Use inspect_proxy_activity if edge probe context is needed."],
   "project_name": "host-security",
   "requested_project_name": "host-security",

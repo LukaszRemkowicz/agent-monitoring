@@ -1,0 +1,25 @@
+{
+  "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
+  "analysis_cautions": [
+    "No grouped scheduler error is not proof that the export was authorized or expected."
+  ],
+  "grouped_error_count": 0,
+  "groups": [],
+  "matching_line_count": 0,
+  "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 0,
+  "next_offset": 0,
+  "partial_page": false,
+  "next_step_tips": [],
+  "project_name": "demo-shop",
+  "requested_project_name": "demo-shop",
+  "searched_source_keys": ["scheduler"],
+  "session_id": "fixture-session-id",
+  "snapshot_dir": "workflow/demo-shop/2026-05-19",
+  "summary": "No scheduler error-like group was found; this does not establish export ownership or authorization.",
+  "truncated": false,
+  "workspace": "workflow"
+}

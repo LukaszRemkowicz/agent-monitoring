@@ -39,6 +39,15 @@ class LogAnalysisGroupedErrorEvidenceLabel(StrEnum):
     CURRENT = "current"
 
 
+class LogAnalysisAttentionPriority(StrEnum):
+    """Operational attention bands for compact current grouped-error families."""
+
+    ACTIONABLE = "actionable"
+    INVESTIGATE = "investigate"
+    WATCH_ONLY = "watch_only"
+    ROUTINE = "routine"
+
+
 class LogAnalysisHistoryComparisonStatus(StrEnum):
     """History-comparison availability state for log-analysis prompt evidence."""
 
@@ -109,6 +118,14 @@ class McpToolName(StrEnum):
     INSPECT_PROXY_ACTIVITY = "inspect_proxy_activity"
     BUILD_INCIDENT_BUNDLE = "build_incident_bundle"
     GREP_LOG_SNAPSHOT = "grep_log_snapshot"
+
+
+class DeterministicToolResponseModel(BaseModel):
+    """Typed response returned by one deterministic MCP tool call."""
+
+    action: str
+
+    model_config = ConfigDict(extra="allow")
 
 
 class McpToolError(BaseModel):
@@ -613,11 +630,11 @@ class LogAnalysisSourceCoverageComparison(BaseModel):
 class LogAnalysisGroupedErrorSeenLine(BaseModel):
     """Line reference shape returned by MCP `group_errors` for first/last sightings."""
 
-    line: str = ""
-    line_number: int = 0
-    line_truncated: bool = False
-    output_file: str = ""
-    source_key: str = ""
+    line: str
+    line_number: int
+    line_truncated: bool
+    output_file: str
+    source_key: str
 
     model_config = ConfigDict(extra="forbid")
 
@@ -636,6 +653,81 @@ class LogAnalysisGroupedErrorSeenLine(BaseModel):
         )
 
 
+class GroupErrorsArgumentsModel(BaseModel):
+    """Validated arguments for collecting every `group_errors` page."""
+
+    project_name: str
+    session_id: str | None = None
+    archive_name: str | None = None
+    source_keys: list[str] | None = None
+    source_key: str | None = None
+    max_groups: int = Field(default=50, ge=1, le=200)
+    offset: Literal[0] = 0
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class GroupedErrorResponseModel(BaseModel):
+    """One grouped error returned by MCP `group_errors`."""
+
+    fingerprint: str
+    category: str
+    severity: Literal["high", "medium", "low"]
+    count: int
+    source_keys: list[str]
+    request_paths: list[str]
+    request_methods: list[str] = Field(default_factory=list)
+    request_hosts: list[str] = Field(default_factory=list)
+    status_codes: list[int]
+    levels: list[str]
+    message_summary: str
+    has_explicit_message: bool = False
+    identity_kind: Literal[
+        "explicit_message",
+        "http_summary",
+        "structured_semantic",
+        "raw_fallback",
+        "plain_text_message",
+    ]
+    semantic_summary: str = Field(max_length=2000)
+    semantic_identity_hash: str = Field(pattern=r"^(?:|[0-9a-f]{64})$")
+    upstream_attempted: bool | None = None
+    first_timestamp: str | None
+    last_timestamp: str | None
+    first_seen: LogAnalysisGroupedErrorSeenLine
+    last_seen: LogAnalysisGroupedErrorSeenLine
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GroupErrorsResponseModel(DeterministicToolResponseModel):
+    """Complete typed response for one MCP `group_errors` page."""
+
+    action: Literal["group_errors"]
+    fingerprint_version: Literal["group-errors-v2"]
+    requested_project_name: str | None
+    project_name: str
+    workspace: LogWorkspace
+    session_id: str | None
+    snapshot_collected_at: str
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    analysis_cautions: list[str]
+    next_step_tips: list[str]
+    grouped_error_count: int
+    matching_line_count: int
+    max_groups: int
+    offset: int
+    returned_group_count: int
+    next_offset: int
+    truncated: bool
+    partial_page: bool
+    summary: str
+    groups: list[GroupedErrorResponseModel]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class LogAnalysisGroupedErrorSignal(BaseModel):
     """One grouped-error fingerprint from MCP `group_errors` output."""
 
@@ -644,11 +736,19 @@ class LogAnalysisGroupedErrorSignal(BaseModel):
     category: str = ""
     severity: str = ""
     count: int = 0
+    variant_count: int = Field(default=1, exclude_if=lambda value: value == 1)
     source_keys: list[str] = Field(default_factory=list)
     request_paths: list[str] = Field(default_factory=list)
+    request_methods: list[str] = Field(default_factory=list)
+    request_hosts: list[str] = Field(default_factory=list)
     status_codes: list[int] = Field(default_factory=list)
     levels: list[str] = Field(default_factory=list)
     message_summary: str = ""
+    has_explicit_message: bool | None = None
+    semantic_summary: str = ""
+    identity_kind: str = ""
+    semantic_identity_hash: str = ""
+    upstream_attempted: bool | None = None
     first_timestamp: str | None = None
     last_timestamp: str | None = None
     first_seen: LogAnalysisGroupedErrorSeenLine | None = None
@@ -674,11 +774,25 @@ class LogAnalysisGroupedErrorSignal(BaseModel):
             category=str(value.get("category") or ""),
             severity=str(value.get("severity") or ""),
             count=_int_or_zero(value.get("count")),
+            variant_count=max(_int_or_zero(value.get("variant_count")), 1),
             source_keys=_string_list(value.get("source_keys")),
             request_paths=_string_list(value.get("request_paths")),
+            request_methods=_string_list(value.get("request_methods")),
+            request_hosts=_string_list(value.get("request_hosts")),
             status_codes=_int_list(value.get("status_codes")),
             levels=_string_list(value.get("levels")),
             message_summary=str(value.get("message_summary") or ""),
+            has_explicit_message=(
+                bool(value["has_explicit_message"]) if "has_explicit_message" in value else None
+            ),
+            semantic_summary=str(value.get("semantic_summary") or ""),
+            identity_kind=str(value.get("identity_kind") or ""),
+            semantic_identity_hash=str(value.get("semantic_identity_hash") or ""),
+            upstream_attempted=(
+                value.get("upstream_attempted")
+                if isinstance(value.get("upstream_attempted"), bool)
+                else None
+            ),
             first_timestamp=_optional_string(value.get("first_timestamp")),
             last_timestamp=_optional_string(value.get("last_timestamp")),
             first_seen=LogAnalysisGroupedErrorSeenLine.from_mcp_payload(value.get("first_seen")),
@@ -690,6 +804,7 @@ class LogAnalysisGroupedErrorsResult(BaseModel):
     """MCP `group_errors` structured result shape stored for history comparison."""
 
     action: McpToolName = McpToolName.GROUP_ERRORS
+    fingerprint_version: str = ""
     analysis_cautions: list[str] = Field(default_factory=list)
     grouped_error_count: int = 0
     groups: list[LogAnalysisGroupedErrorSignal] = Field(default_factory=list)
@@ -712,6 +827,7 @@ class LogAnalysisGroupedErrorsResult(BaseModel):
         """Build the typed stored result from loose MCP group_errors output."""
 
         project_name: str = str(structured_content.get("project_name") or "")
+        partial_page = bool(structured_content.get("partial_page"))
         groups: object = structured_content.get("groups", [])
         grouped_error_signals: list[LogAnalysisGroupedErrorSignal] = []
         if isinstance(groups, list):
@@ -728,6 +844,7 @@ class LogAnalysisGroupedErrorsResult(BaseModel):
             ]
         return cls(
             action=McpToolName.GROUP_ERRORS,
+            fingerprint_version=str(structured_content.get("fingerprint_version") or ""),
             analysis_cautions=_string_list(structured_content.get("analysis_cautions")),
             grouped_error_count=_int_or_zero(structured_content.get("grouped_error_count")),
             groups=grouped_error_signals,
@@ -740,7 +857,7 @@ class LogAnalysisGroupedErrorsResult(BaseModel):
             session_id=_optional_string(structured_content.get("session_id")),
             snapshot_dir=str(structured_content.get("snapshot_dir") or ""),
             summary=str(structured_content.get("summary") or ""),
-            truncated=bool(structured_content.get("truncated")),
+            truncated=bool(structured_content.get("truncated")) or partial_page,
             workspace=str(structured_content.get("workspace") or ""),
         )
 
@@ -773,7 +890,7 @@ def _optional_string(value: Any) -> str | None:
     return str(value)
 
 
-LogAnalysisFingerprintArgumentValue = (
+type LogAnalysisFingerprintArgumentValue = (
     str | int | float | bool | None | list[str] | list[int] | list[float] | list[bool]
 )
 
@@ -939,6 +1056,9 @@ class LogAnalysisPromptGroupedErrorExample(BaseModel):
     request_paths: list[str] = Field(default_factory=list)
     status_codes: list[int] = Field(default_factory=list)
     message_summary: str = ""
+    upstream_attempted: bool | None = None
+    attention_priority: LogAnalysisAttentionPriority = LogAnalysisAttentionPriority.ROUTINE
+    variant_count: int = 1
 
 
 class LogAnalysisPromptGroupedErrorFingerprint(BaseModel):
@@ -950,13 +1070,35 @@ class LogAnalysisPromptGroupedErrorFingerprint(BaseModel):
     severity: str = ""
     source_keys: list[str] = Field(default_factory=list)
     status_codes: list[int] = Field(default_factory=list)
+    count: int = 0
+    request_paths: list[str] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    request_methods: list[str] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    request_hosts: list[str] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
+    message_summary: str = Field(
+        default="",
+        exclude_if=lambda value: not value,
+    )
+    upstream_attempted: bool | None = None
+    attention_priority: LogAnalysisAttentionPriority = LogAnalysisAttentionPriority.ROUTINE
+    variant_count: int = Field(
+        default=1,
+        exclude_if=lambda value: value == 1,
+    )
 
 
 class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     """Prompt-safe grouped-error comparison view.
 
-    Full fingerprint lists stay in deterministic Python state. The LLM receives
-    counts plus a bounded set of examples so compare-history stays cheap.
+    Every changed semantic family is included without raw seen-line payloads.
     """
 
     available: bool
@@ -975,14 +1117,6 @@ class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     resolved_high_severity_tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
     resolved_high_severity_current_scope_covered: bool = True
     evidence_quality_warnings: list[str] = Field(default_factory=list)
-    next_evidence_hint: str = ""
-    priority_current_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
-        default_factory=list,
-        description=(
-            "Current changed examples ordered for report wording: new high-severity "
-            "families first, then other changed families."
-        ),
-    )
     current_changed_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
         default_factory=list
     )
@@ -1004,6 +1138,11 @@ class LogAnalysisPromptGroupedErrorEvidence(BaseModel):
     tool_scope_by_project: dict[str, list[str]] = Field(default_factory=dict)
     run_count: int = 0
     group_count: int = 0
+    unique_group_count: int = 0
+    event_count: int = 0
+    evidence_complete: bool = True
+    attention_priority_counts: dict[str, int] = Field(default_factory=dict)
+    attention_priority_event_counts: dict[str, int] = Field(default_factory=dict)
     severity_counts: dict[str, int] = Field(default_factory=dict)
     category_counts: dict[str, int] = Field(default_factory=dict)
     status_code_counts: dict[str, int] = Field(default_factory=dict)
@@ -1101,11 +1240,14 @@ class LogAnalysisPromptEvidence(BaseModel):
     def to_prompt_dict(self) -> dict[str, Any]:
         """Return the exact JSON shape expected by the LLM prompt."""
 
-        data: dict[str, Any] = {
-            "kind": self.kind.value,
-            "decision_prompt": self.decision_prompt,
-        }
+        data: dict[str, Any] = {"kind": self.kind.value}
         if self.kind == LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON:
+            data["current_grouped_errors"] = (
+                self.current_grouped_errors.model_dump(mode="json")
+                if self.current_grouped_errors is not None
+                else None
+            )
+            data["decision_prompt"] = self.decision_prompt
             data["history_comparison"] = (
                 self.history_comparison.model_dump(mode="json")
                 if self.history_comparison is not None
@@ -1117,6 +1259,7 @@ class LogAnalysisPromptEvidence(BaseModel):
                 else None
             )
             return data
+        data["decision_prompt"] = self.decision_prompt
         data["previous_grouped_errors"] = (
             self.previous_grouped_errors.model_dump(mode="json")
             if self.previous_grouped_errors is not None
@@ -1245,6 +1388,9 @@ class LogAnalysisAgentContext(BaseModel):
     workflow: WorkflowBootstrap
     collect_logs: CollectLogsArtifact
     prompt: LogAnalysisPreparedPrompt
+    preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = Field(
+        default_factory=list
+    )
     tool_results: list[LogAnalysisToolResult] = Field(default_factory=list)
     final_report: LogAnalysisFinalReport
     log_window_since: datetime

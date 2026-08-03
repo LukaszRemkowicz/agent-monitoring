@@ -6,9 +6,10 @@ import pytest
 from llm_core.providers.mock import MockProvider
 from llm_core.types import ResponseFormat, TextPart
 from llm_core.usage import Usage
+from pydantic import BaseModel, ValidationError
 from pytest_mock import MockerFixture
 
-from agents import MonitoringWorkflowAgent
+from agents import LOG_ANALYSIS_DECISION_SKILL, MonitoringWorkflowAgent
 from db.models import LogAnalysisLLMCall
 from exceptions import (
     LogAnalysisAgentError,
@@ -19,24 +20,31 @@ from mcp import McpWorkflowClient
 from repositories import LLMCallRepository
 from schemas import (
     CollectLogsArtifact,
+    GroupErrorsArgumentsModel,
     LogAnalysisAgentContext,
     LogAnalysisAllowedAction,
+    LogAnalysisCoverageSnapshot,
     LogAnalysisFingerprints,
-    LogAnalysisHistoryComparisonStatus,
+    LogAnalysisGroupedErrorRunFingerprint,
+    LogAnalysisGroupedErrorsResult,
     LogAnalysisNextRequiredAction,
     LogAnalysisOut,
     LogAnalysisPromptPhase,
     LogAnalysisSeverity,
+    LogAnalysisToolResult,
     LogCollectionWindow,
     LogSourceCollectionStatus,
     LogWorkspace,
     McpToolName,
+    PreviousLogAnalysisContext,
     ProjectManifestSummary,
     RecommendedAction,
     WorkflowBootstrap,
     WorkflowSkill,
     WorkflowTool,
 )
+from services.log_fingerprints import LOG_ANALYSIS_FINGERPRINT_VERSION
+from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from tests.conftest import (
     PRIVATE_MONITORING_CONTEXT,
     AgentFactory,
@@ -46,7 +54,9 @@ from tests.conftest import (
 
 
 def _fingerprints(payload: dict[str, object]) -> LogAnalysisFingerprints:
-    return LogAnalysisFingerprints.model_validate(payload)
+    return LogAnalysisFingerprints.model_validate(
+        {"version": LOG_ANALYSIS_FINGERPRINT_VERSION, **payload}
+    )
 
 
 def test_log_collection_transfer_marks_incomplete_prompt_coverage() -> None:
@@ -73,6 +83,179 @@ def test_log_collection_transfer_marks_incomplete_prompt_coverage() -> None:
     assert "encoding" not in prompt_source.model_dump()
     assert "next_offset" not in prompt_source.model_dump()
 
+    agent = MonitoringWorkflowAgent(
+        cast(Any, object()),
+        llm_provider=MockProvider(),
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+    evidence = agent._prepare_log_analysis_evidence(
+        current_grouped_errors=[
+            LogAnalysisGroupedErrorRunFingerprint(
+                result=LogAnalysisGroupedErrorsResult(
+                    grouped_error_count=0,
+                    project_name="demo-shop",
+                )
+            )
+        ],
+        current_coverage_snapshot={"totals": {"truncated_sources": 1}},
+        previous_analysis=None,
+    )
+
+    assert evidence.current_grouped_errors is not None
+    assert evidence.current_grouped_errors.evidence_complete is False
+
+    history_agent = MonitoringWorkflowAgent(
+        cast(Any, object()),
+        llm_provider=MockProvider(),
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+        history_comparison_service=LogAnalysisHistoryComparisonService(),
+        history_comparison_enabled=True,
+    )
+    status, _coverage, comparison = history_agent.prepare_history_comparison_evidence_context(
+        previous_analysis=PreviousLogAnalysisContext(
+            analysis_date=date(2026, 5, 18),
+            summary="Previous partial run.",
+            severity=LogAnalysisSeverity.INFO,
+            fingerprints=LogAnalysisFingerprints(version=LOG_ANALYSIS_FINGERPRINT_VERSION),
+            coverage_snapshot=LogAnalysisCoverageSnapshot(totals={"truncated_sources": 1}),
+            fingerprint_version=LOG_ANALYSIS_FINGERPRINT_VERSION,
+        ),
+        current_grouped_errors=[],
+        current_coverage_snapshot={"totals": {"truncated_sources": 0}},
+    )
+
+    assert status == "unavailable"
+    assert comparison is None
+
+    legacy_previous = PreviousLogAnalysisContext(
+        analysis_date=date(2026, 5, 18),
+        summary="Previous incompatible run.",
+        severity=LogAnalysisSeverity.INFO,
+        fingerprints=LogAnalysisFingerprints(version="log-analysis-fingerprint-v1"),
+        coverage_snapshot=LogAnalysisCoverageSnapshot(totals={"truncated_sources": 0}),
+        fingerprint_version="log-analysis-fingerprint-v1",
+    )
+    status, _coverage, comparison = history_agent.prepare_history_comparison_evidence_context(
+        previous_analysis=legacy_previous,
+        current_grouped_errors=[],
+        current_coverage_snapshot={"totals": {"truncated_sources": 0}},
+    )
+
+    assert status == "unavailable"
+    assert comparison is None
+
+
+def test_no_compare_history_marks_truncated_previous_collection_incomplete() -> None:
+    agent = MonitoringWorkflowAgent(
+        cast(Any, object()),
+        llm_provider=MockProvider(),
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+    previous = PreviousLogAnalysisContext(
+        analysis_date=date(2026, 5, 18),
+        summary="Previous partial run.",
+        severity=LogAnalysisSeverity.INFO,
+        fingerprints=_fingerprints(
+            {
+                "grouped_error_runs": [
+                    {
+                        "arguments": {"project_name": "demo-shop"},
+                        "result": {
+                            "project_name": "demo-shop",
+                            "searched_source_keys": ["backend"],
+                            "groups": [
+                                {
+                                    "fingerprint": "backend:application_error:timeout",
+                                    "project_name": "demo-shop",
+                                    "category": "application_error",
+                                    "severity": "high",
+                                    "count": 1,
+                                    "source_keys": ["backend"],
+                                }
+                            ],
+                        },
+                    }
+                ]
+            }
+        ),
+        coverage_snapshot=LogAnalysisCoverageSnapshot(totals={"truncated_sources": 1}),
+        fingerprint_version=LOG_ANALYSIS_FINGERPRINT_VERSION,
+    )
+
+    evidence = agent._prepare_log_analysis_evidence(
+        current_grouped_errors=[
+            LogAnalysisGroupedErrorRunFingerprint(
+                result=LogAnalysisGroupedErrorsResult(
+                    project_name="demo-shop",
+                    searched_source_keys=["backend"],
+                )
+            )
+        ],
+        current_coverage_snapshot={"totals": {"truncated_sources": 0}},
+        previous_analysis=previous,
+    )
+
+    assert evidence.previous_grouped_errors is not None
+    assert evidence.previous_grouped_errors.evidence_complete is False
+
+
+def test_only_complete_grouped_scope_unlocks_final_report() -> None:
+    collection = MonitoringWorkflowAgent._build_prompt_collection(
+        CollectLogsArtifact.model_validate(build_collect_logs_artifact_payload())
+    )
+    skill_result = LogAnalysisToolResult(
+        tool_name="read_skills",
+        structured_content={"action": "read_skills"},
+    )
+    skipped_result = LogAnalysisToolResult(
+        tool_name="duplicate_mcp_tool_call_skipped",
+        structured_content={"action": "duplicate_mcp_tool_call_skipped"},
+    )
+    narrow_result = LogAnalysisToolResult(
+        tool_name=McpToolName.GREP_LOG_SNAPSHOT,
+        arguments={"project_name": "demo-shop", "pattern": "error"},
+        structured_content={"action": McpToolName.GREP_LOG_SNAPSHOT},
+    )
+    complete_result = LogAnalysisToolResult(
+        tool_name=McpToolName.GROUP_ERRORS,
+        arguments={"project_name": "demo-shop"},
+        structured_content={
+            "action": McpToolName.GROUP_ERRORS,
+            "project_name": "demo-shop",
+            "searched_source_keys": ["backend"],
+        },
+    )
+
+    assert not MonitoringWorkflowAgent._group_errors_cover_collection(
+        [skill_result, skipped_result, narrow_result],
+        collection,
+    )
+    assert MonitoringWorkflowAgent._group_errors_cover_collection(
+        [complete_result],
+        collection,
+    )
+    collection_without_current_logs = collection.model_copy(
+        update={
+            "projects": [
+                project.model_copy(
+                    update={
+                        "sources": [
+                            source.model_copy(
+                                update={"status": LogSourceCollectionStatus.UNAVAILABLE}
+                            )
+                            for source in project.sources
+                        ]
+                    }
+                )
+                for project in collection.projects
+            ]
+        }
+    )
+    assert not MonitoringWorkflowAgent._group_errors_cover_collection(
+        [complete_result],
+        collection_without_current_logs,
+    )
+
 
 class FakeMcpWorkflowClient(McpWorkflowClient):
     def __init__(self) -> None:
@@ -84,13 +267,26 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
         self.tool_results: dict[str, dict[str, object]] = {
             McpToolName.GROUP_ERRORS: {
                 "action": McpToolName.GROUP_ERRORS,
+                "fingerprint_version": "group-errors-v2",
+                "requested_project_name": "demo-shop",
                 "project_name": "demo-shop",
-                "groups": [
-                    {
-                        "message": "No repeated errors detected",
-                        "count": 0,
-                    }
-                ],
+                "workspace": LogWorkspace.WORKFLOW,
+                "session_id": None,
+                "snapshot_collected_at": "2026-05-19T00:00:00Z",
+                "snapshot_dir": "/snapshots/demo-shop",
+                "searched_source_keys": ["backend"],
+                "analysis_cautions": [],
+                "next_step_tips": [],
+                "grouped_error_count": 0,
+                "matching_line_count": 0,
+                "max_groups": 200,
+                "offset": 0,
+                "returned_group_count": 0,
+                "next_offset": 0,
+                "truncated": False,
+                "partial_page": False,
+                "summary": "No grouped errors.",
+                "groups": [],
             }
         }
 
@@ -192,17 +388,18 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
             ),
         ]
 
-    async def call_deterministic_tool(
+    async def call_deterministic_tool[ResponseModelT: BaseModel](
         self,
         name: str,
         arguments: dict[str, Any],
+        response_model: type[ResponseModelT],
         *,
         timeout_seconds: float | None = None,
-    ) -> dict[str, Any]:
+    ) -> ResponseModelT:
         """Mirror the MCP client boundary used by the LLM tool loop in tests."""
 
         self.calls.append(f"call_deterministic_tool:{name}:{arguments}")
-        return self.tool_results[name]
+        return response_model.model_validate(self.tool_results[name])
 
 
 def _final_report_payload(
@@ -239,10 +436,25 @@ def _group_errors_result(
 ) -> dict[str, object]:
     return {
         "action": McpToolName.GROUP_ERRORS,
+        "fingerprint_version": "group-errors-v2",
+        "requested_project_name": project_name,
         "project_name": project_name,
+        "workspace": LogWorkspace.WORKFLOW,
+        "session_id": None,
+        "snapshot_collected_at": "2026-05-19T00:00:00Z",
+        "snapshot_dir": f"/snapshots/{project_name}",
+        "searched_source_keys": sorted({"backend", source_key}),
+        "analysis_cautions": [],
+        "next_step_tips": [],
         "grouped_error_count": 1,
         "matching_line_count": count,
+        "max_groups": 200,
+        "offset": 0,
+        "returned_group_count": 1,
+        "next_offset": 1,
         "truncated": False,
+        "partial_page": False,
+        "summary": message_summary,
         "groups": [
             {
                 "fingerprint": fingerprint,
@@ -251,11 +463,32 @@ def _group_errors_result(
                 "count": count,
                 "source_keys": [source_key],
                 "request_paths": [request_path],
+                "request_methods": ["GET"],
+                "request_hosts": [],
                 "status_codes": [status_code],
                 "levels": [],
                 "message_summary": message_summary,
+                "has_explicit_message": False,
+                "identity_kind": "http_summary",
+                "semantic_summary": message_summary,
+                "semantic_identity_hash": "",
+                "upstream_attempted": None,
                 "first_timestamp": "2026-05-19T02:00:00Z",
                 "last_timestamp": "2026-05-19T03:00:00Z",
+                "first_seen": {
+                    "source_key": source_key,
+                    "output_file": f"/snapshots/{project_name}/{source_key}.log",
+                    "line_number": 1,
+                    "line": message_summary,
+                    "line_truncated": False,
+                },
+                "last_seen": {
+                    "source_key": source_key,
+                    "output_file": f"/snapshots/{project_name}/{source_key}.log",
+                    "line_number": 2,
+                    "line": message_summary,
+                    "line_truncated": False,
+                },
             }
         ],
     }
@@ -273,13 +506,151 @@ def test_group_errors_arguments_skip_unavailable_snapshot_sources() -> None:
         current_logs
     )
 
-    assert arguments == [{"project_name": "demo-shop", "source_keys": ["backend"]}]
+    assert len(arguments) == 1
+    assert isinstance(arguments[0], GroupErrorsArgumentsModel)
+    assert arguments[0].model_dump(mode="json", exclude_defaults=True, exclude_none=True) == {
+        "project_name": "demo-shop",
+        "source_keys": ["backend"],
+        "max_groups": 200,
+    }
+
+
+@pytest.mark.parametrize("offset", [-1, 1])
+def test_group_errors_arguments_require_zero_start_offset(offset: int) -> None:
+    with pytest.raises(ValidationError, match="offset"):
+        GroupErrorsArgumentsModel.model_validate(
+            {
+                "project_name": "demo-shop",
+                "source_keys": ["backend"],
+                "offset": offset,
+            }
+        )
 
 
 class FakeMcpWorkflowClientWithoutProjects(FakeMcpWorkflowClient):
     async def list_projects(self) -> list[ProjectManifestSummary]:
         self.calls.append(McpToolName.LIST_PROJECTS)
         return []
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_fails_before_llm_for_truncated_collection(
+    agent_factory: AgentFactory,
+    mocker: MockerFixture,
+) -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    payload = build_collect_logs_artifact_payload()
+    payload["projects"][0]["sources"][0]["transfer"] = {
+        "encoding": "base64",
+        "operation": "container_logs_page",
+        "truncated": True,
+        "byte_limit": 1_000_000,
+        "page_count": 1,
+        "next_offset": 1_000_000,
+        "returned_bytes": 1_000_000,
+    }
+    mocker.patch.object(
+        mcp_client,
+        "collect_logs",
+        return_value=CollectLogsArtifact.model_validate(payload),
+    )
+    llm_provider = MockProvider()
+    for _ in range(5):
+        llm_provider.queue_text_response(json.dumps(_final_report_payload()))
+    agent = agent_factory(mcp_client, llm_provider)
+
+    with pytest.raises(
+        LogAnalysisAgentError,
+        match=(
+            "Current log collection is incomplete because sources were truncated: "
+            "demo-shop.backend"
+        ),
+    ):
+        await agent.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogCollectionWindow(
+                since="2026-05-19T00:00:00Z",
+                until="2026-05-20T00:00:00Z",
+                since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+                until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+            ),
+        )
+
+    assert llm_provider.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_update",
+    [
+        {
+            "status": LogSourceCollectionStatus.UNAVAILABLE,
+            "line_count": 0,
+            "byte_count": 0,
+            "output_file": None,
+            "error": "source unavailable",
+        },
+        {"output_file": None},
+    ],
+)
+async def test_monitoring_workflow_agent_fails_before_llm_without_usable_sources(
+    agent_factory: AgentFactory,
+    mocker: MockerFixture,
+    source_update: dict[str, object],
+) -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    payload = build_collect_logs_artifact_payload()
+    source = payload["projects"][0]["sources"][0]
+    source.update(source_update)
+    mocker.patch.object(
+        mcp_client,
+        "collect_logs",
+        return_value=CollectLogsArtifact.model_validate(payload),
+    )
+    llm_provider = MockProvider()
+    for _ in range(5):
+        llm_provider.queue_text_response(json.dumps(_final_report_payload()))
+    agent = agent_factory(mcp_client, llm_provider)
+
+    with pytest.raises(
+        LogAnalysisAgentError,
+        match="Current log collection contains no usable collected source snapshots",
+    ):
+        await agent.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogCollectionWindow(
+                since="2026-05-19T00:00:00Z",
+                until="2026-05-20T00:00:00Z",
+                since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+                until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+            ),
+        )
+
+    assert llm_provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_preserves_collection_on_preflight_failure(
+    agent_factory: AgentFactory,
+) -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    mcp_client.tool_results[McpToolName.GROUP_ERRORS]["project_name"] = "unexpected"
+    llm_provider = MockProvider()
+    agent = agent_factory(mcp_client, llm_provider)
+
+    with pytest.raises(LogAnalysisAgentError, match="unexpected project scope") as error:
+        await agent.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogCollectionWindow(
+                since="2026-05-19T00:00:00Z",
+                until="2026-05-20T00:00:00Z",
+                since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+                until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+            ),
+        )
+
+    assert error.value.collect_logs is not None
+    assert llm_provider.requests == []
 
 
 def test_monitoring_workflow_agent_requires_history_service_when_enabled() -> None:
@@ -352,7 +723,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend']}"
+            "'source_keys': ['backend'], 'max_groups': 200}"
         ),
         "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
@@ -361,6 +732,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     prompt_project = context.prompt.context.collection.projects[0]
     assert collected_project.resolved_source_keys == prompt_project.resolved_source_keys
     assert PRIVATE_MONITORING_CONTEXT in context.prompt.system_prompt
+    assert LOG_ANALYSIS_DECISION_SKILL in context.prompt.system_prompt
     assert PRIVATE_MONITORING_CONTEXT not in context.prompt.user_prompt
     assert context.prompt.context.analysis_date == analysis_date
     assert [project.project_name for project in context.prompt.context.available_projects] == (
@@ -391,26 +763,15 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert [message.role for message in followup_request.messages] == ["system", "user", "user"]
     followup_text: str = cast(TextPart, followup_request.messages[-1].parts[0]).text
     followup_payload = json.loads(followup_text)
-    assert followup_payload["previous_action"]["action"] == LogAnalysisAllowedAction.CALL_TOOLS
     assert followup_payload["tool_results"][0]["tool_name"] == McpToolName.GROUP_ERRORS
-    tool_status_by_name = {
-        status["tool_name"]: status for status in followup_payload["available_tool_status"]
+    assert followup_payload["called_tool_names"] == [McpToolName.GROUP_ERRORS]
+    assert followup_payload["optional_skill_status"] == {
+        "bot_detection": "available",
     }
-    assert tool_status_by_name[McpToolName.GROUP_ERRORS]["already_called"] is True
-    assert tool_status_by_name[McpToolName.INSPECT_PROXY_ACTIVITY]["already_called"] is False
-    optional_skill_status_by_name = {
-        status["skill_name"]: status for status in followup_payload["optional_skill_status"]
-    }
-    assert optional_skill_status_by_name["bot_detection"]["already_retrieved"] is False
-    assert followup_payload["initial_context_reference"]["current_coverage_available"] is True
     assert followup_payload["current_tool_result_count"] == 1
-    followup_instructions = "\n".join(followup_payload["instructions"])
-    assert "blocked_probe" in followup_instructions
-    assert "empty upstream_addr/upstream_status" in followup_instructions
-    assert "real upstream 5xx" in followup_instructions
-    assert followup_payload["next_required_action"] == (
-        LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
-    )
+    assert followup_payload["final_report_allowed"] is True
+    assert followup_payload["next_required_action"] == "choose_next_action"
+    assert "retained initial prompt" in followup_payload["instruction"]
     assert "blocked scanner/probe noise" not in context.prompt.user_prompt
     user_prompt = json.loads(context.prompt.user_prompt)
     assert user_prompt["analysis_date"] == analysis_date.isoformat()
@@ -453,9 +814,8 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert instructions
     assert all(isinstance(instruction, str) for instruction in instructions)
     joined_instructions = "\n".join(instructions)
-    assert "blocked_probe" in joined_instructions
-    assert "empty upstream_addr/upstream_status" in joined_instructions
-    assert "real upstream 5xx" in joined_instructions
+    assert "critical decision rules" in joined_instructions
+    assert "complete current evidence" in joined_instructions
     assert set(user_prompt["report_contract"]) == {
         "summary",
         "severity",
@@ -539,8 +899,8 @@ async def test_monitoring_workflow_agent_includes_historical_context_in_system_p
         "tool results against it and do not claim no historical data was provided."
     )
     followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
-    assert '"historical_context_available":true' in followup_text
-    assert "do not claim no historical data was provided" in followup_text
+    assert historical_context not in followup_text
+    assert historical_context in cast(TextPart, llm_provider.requests[1].messages[0].parts[0]).text
 
 
 @pytest.mark.asyncio
@@ -722,14 +1082,10 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
     assert "previous_analysis" not in followup_prompt
     assert "history_comparison" not in followup_prompt
     assert "current_coverage" not in followup_prompt
-    assert followup_prompt["initial_context_reference"]["previous_analysis_available"] is True
-    assert followup_prompt["initial_context_reference"]["history_comparison_status"] == "available"
-    assert followup_prompt["evidence_mode"] == "current_tool_results_available"
-    assert followup_prompt["current_tool_result_count"] == 1
-    assert followup_prompt["next_required_action"] == (
-        LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
-    )
-    assert followup_prompt["final_report_allowed"] is True
+    assert followup_prompt["called_tool_names"] == [McpToolName.GROUP_ERRORS]
+    assert followup_prompt["optional_skill_status"] == {
+        "bot_detection": "available",
+    }
 
 
 @pytest.mark.asyncio
@@ -823,16 +1179,13 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     assert previous_grouped_errors["group_count"] == 1
     assert previous_grouped_errors["severity_counts"] == {"medium": 1}
     assert previous_grouped_errors["category_counts"] == {"http_4xx": 1}
-    assert previous_grouped_errors["fingerprints"] == [
-        {
-            "fingerprint": "nginx:http_4xx:404:/.env",
-            "project_name": "demo-shop",
-            "category": "http_4xx",
-            "severity": "medium",
-            "source_keys": ["nginx"],
-            "status_codes": [404],
-        }
-    ]
+    previous_fingerprint = previous_grouped_errors["fingerprints"][0]
+    assert previous_fingerprint["fingerprint"] == "nginx:http_4xx:404:/.env"
+    assert previous_fingerprint["project_name"] == "demo-shop"
+    assert previous_fingerprint["source_keys"] == ["nginx"]
+    assert previous_fingerprint["request_paths"] == ["/.env"]
+    assert previous_fingerprint["count"] == 4
+    assert previous_fingerprint["attention_priority"] == "watch_only"
     assert user_prompt["evidence"]["current_grouped_errors"]["available"] is True
     assert user_prompt["evidence"]["current_grouped_errors"]["label"] == "current"
     assert user_prompt["evidence"]["current_grouped_errors"]["run_count"] == 1
@@ -841,21 +1194,14 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
     }
     decision_prompt = user_prompt["evidence"]["decision_prompt"]
     assert decision_prompt["mode"] == "no_compare_history"
-    assert any(
-        "Do not decide from group_count or run_count alone" in rule
-        for rule in decision_prompt["decision_rules"]
-    )
-    assert any(
-        "semantic fingerprint families" in rule for rule in decision_prompt["decision_rules"]
-    )
-    assert any(
-        "cost-saving final_report path is only for a stable baseline" in rule
-        for rule in decision_prompt["decision_rules"]
-    )
-    assert any(
-        "visible current fingerprints introduce, remove, or shift source ownership" in rule
-        for rule in decision_prompt["decision_rules"]
-    )
+    assert decision_prompt["attention_order"] == [
+        "actionable",
+        "investigate",
+        "watch_only",
+        "routine",
+    ]
+    assert "Primary" in decision_prompt["evidence_contract"]["current_grouped_errors"]
+    assert "Secondary" in decision_prompt["evidence_contract"]["history"]
     assert user_prompt["previous_analysis"]["summary"] == "Previous scanner noise only."
     assert user_prompt["next_required_action"] == LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
     assert user_prompt["final_report_allowed"] is True
@@ -871,7 +1217,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
 
 
 @pytest.mark.asyncio
-async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
+async def test_no_compare_grouped_error_prompt_preserves_broad_baseline(
     agent_factory: AgentFactory,
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
@@ -913,8 +1259,32 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
             "count": 1,
             "source_keys": ["backend"],
             "request_paths": [f"/new-{index}.json"],
+            "request_methods": ["GET"],
+            "request_hosts": [],
             "status_codes": [404],
+            "levels": [],
             "message_summary": "New backend probe",
+            "has_explicit_message": False,
+            "identity_kind": "http_summary",
+            "semantic_summary": "New backend probe",
+            "semantic_identity_hash": "",
+            "upstream_attempted": None,
+            "first_timestamp": None,
+            "last_timestamp": None,
+            "first_seen": {
+                "source_key": "backend",
+                "output_file": "/snapshots/demo-shop/backend.log",
+                "line_number": index + 1,
+                "line": "New backend probe",
+                "line_truncated": False,
+            },
+            "last_seen": {
+                "source_key": "backend",
+                "output_file": "/snapshots/demo-shop/backend.log",
+                "line_number": index + 1,
+                "line": "New backend probe",
+                "line_truncated": False,
+            },
         }
         for index in range(25)
     ] + [
@@ -925,15 +1295,56 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
             "count": 2,
             "source_keys": ["traefik"],
             "request_paths": [f"/new-traefik-{index}.json"],
+            "request_methods": ["GET"],
+            "request_hosts": [],
             "status_codes": [404],
+            "levels": [],
             "message_summary": "New traefik probe",
+            "has_explicit_message": False,
+            "identity_kind": "http_summary",
+            "semantic_summary": "New traefik probe",
+            "semantic_identity_hash": "",
+            "upstream_attempted": None,
+            "first_timestamp": None,
+            "last_timestamp": None,
+            "first_seen": {
+                "source_key": "traefik",
+                "output_file": "/snapshots/demo-shop/traefik.log",
+                "line_number": index + 1,
+                "line": "New traefik probe",
+                "line_truncated": False,
+            },
+            "last_seen": {
+                "source_key": "traefik",
+                "output_file": "/snapshots/demo-shop/traefik.log",
+                "line_number": index + 1,
+                "line": "New traefik probe",
+                "line_truncated": False,
+            },
         }
         for index in range(5)
     ]
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = {
         "action": McpToolName.GROUP_ERRORS,
+        "fingerprint_version": "group-errors-v2",
+        "requested_project_name": "demo-shop",
         "project_name": "demo-shop",
+        "workspace": LogWorkspace.WORKFLOW,
+        "session_id": None,
+        "snapshot_collected_at": "2026-05-19T00:00:00Z",
+        "snapshot_dir": "/snapshots/demo-shop",
+        "searched_source_keys": ["backend", "traefik"],
+        "analysis_cautions": [],
+        "next_step_tips": [],
         "grouped_error_count": len(current_groups),
+        "matching_line_count": 35,
+        "max_groups": 200,
+        "offset": 0,
+        "returned_group_count": len(current_groups),
+        "next_offset": len(current_groups),
+        "truncated": False,
+        "partial_page": False,
+        "summary": "Current grouped errors.",
         "groups": current_groups,
     }
     previous_analysis = LogAnalysisOut(
@@ -988,8 +1399,10 @@ async def test_no_compare_grouped_error_prompt_compacts_broad_baseline_examples(
         ("nginx",),
     }
     assert "omitted_example_count" not in previous_evidence
-    assert all("request_paths" not in row for row in previous_evidence["fingerprints"])
-    assert all("message_summary" not in row for row in previous_evidence["fingerprints"])
+    assert {path for row in previous_evidence["fingerprints"] for path in row["request_paths"]} == {
+        *(f"/old-{index}.php" for index in range(25)),
+        *(f"/old-backend-{index}.json" for index in range(5)),
+    }
     assert len(current_evidence["fingerprints"]) == 30
     assert {tuple(row["source_keys"]) for row in current_evidence["fingerprints"]} == {
         ("backend",),
@@ -1089,9 +1502,15 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
                                     "count": 5,
                                     "source_keys": ["frontend"],
                                     "request_paths": ["/favicon.png"],
+                                    "request_methods": ["GET"],
+                                    "request_hosts": [],
                                     "status_codes": [404],
                                     "levels": [],
                                     "message_summary": "Grouped frontend favicon probe",
+                                    "has_explicit_message": False,
+                                    "identity_kind": "http_summary",
+                                    "semantic_summary": "Grouped frontend favicon probe",
+                                    "semantic_identity_hash": "",
                                     "first_timestamp": "2026-05-18T02:00:00Z",
                                     "last_timestamp": "2026-05-18T03:00:00Z",
                                 }
@@ -1146,7 +1565,7 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend']}"
+            "'source_keys': ['backend'], 'max_groups': 200}"
         ),
     ]
     user_prompt = json.loads(context.prompt.user_prompt)
@@ -1159,15 +1578,10 @@ async def test_monitoring_workflow_agent_compares_current_grouped_errors_with_hi
     assert grouped_error_diff["previous_group_count"] == 1
     assert grouped_error_diff["current_group_count"] == 1
     assert grouped_error_diff["persisting_fingerprint_count"] == 1
-    assert grouped_error_diff["worsened_fingerprint_count"] == 1
-    assert grouped_error_diff["evidence_quality_warnings"] == [
-        "worsened_grouped_error_fingerprints_present"
-    ]
-    assert len(grouped_error_diff["current_changed_examples"]) == 1
-    assert len(grouped_error_diff["previous_changed_examples"]) == 1
-    assert grouped_error_diff["current_changed_examples"][0]["fingerprint"] == (
-        grouped_error_diff["previous_changed_examples"][0]["fingerprint"]
-    )
+    assert grouped_error_diff["worsened_fingerprint_count"] == 0
+    assert grouped_error_diff["evidence_quality_warnings"] == []
+    assert grouped_error_diff["current_changed_examples"] == []
+    assert grouped_error_diff["previous_changed_examples"] == []
     assert context.tool_results == []
     assert len(llm_provider.requests) == 1
 
@@ -1232,6 +1646,10 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
                                     "status_codes": [404],
                                     "levels": [],
                                     "message_summary": "Grouped scanner probe",
+                                    "has_explicit_message": False,
+                                    "identity_kind": "http_summary",
+                                    "semantic_summary": "Grouped scanner probe",
+                                    "semantic_identity_hash": "",
                                     "first_timestamp": "2026-05-18T02:00:00Z",
                                     "last_timestamp": "2026-05-18T03:00:00Z",
                                 }
@@ -1279,7 +1697,7 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
     assert grouped_errors["resolved_fingerprint_count"] == 1
     assert grouped_errors["new_high_severity_fingerprints"] == ["nginx:http_5xx:500:/api"]
     assert grouped_errors["new_high_severity_fingerprint_count"] == 1
-    assert grouped_errors["priority_current_examples"][0]["fingerprint"] == (
+    assert grouped_errors["current_changed_examples"][0]["fingerprint"] == (
         "nginx:http_5xx:500:/api"
     )
     assert user_prompt["next_required_action"] == LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
@@ -1289,15 +1707,10 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
     followup_prompt = json.loads(
         cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     )
-    initial_context_reference = followup_prompt["initial_context_reference"]
-    assert initial_context_reference["historical_context_available"] is False
-    assert initial_context_reference["previous_analysis_available"] is True
-    assert (
-        initial_context_reference["history_comparison_status"]
-        == LogAnalysisHistoryComparisonStatus.AVAILABLE
-    )
-    assert initial_context_reference["history_comparison_has_grouped_error_diff"] is True
-    assert initial_context_reference["current_coverage_available"] is True
+    assert followup_prompt["called_tool_names"] == [McpToolName.INSPECT_PROXY_ACTIVITY]
+    assert followup_prompt["optional_skill_status"] == {
+        "bot_detection": "available",
+    }
 
 
 @pytest.mark.asyncio
@@ -1583,7 +1996,7 @@ async def test_agent_rejects_broad_final_report_outside_grouped_error_scope(
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
+async def test_monitoring_workflow_agent_reduces_requests_for_stable_history(
     agent_factory: AgentFactory,
     history_agent_factory: HistoryAgentFactory,
 ) -> None:
@@ -1631,7 +2044,7 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
     )
     full_agent = agent_factory(full_mcp_client, full_llm_provider)
 
-    full_context: LogAnalysisAgentContext = await full_agent.run_log_analysis(
+    await full_agent.run_log_analysis(
         analysis_date=date(2026, 5, 19),
         log_window=LogCollectionWindow(
             since="2026-05-19T00:00:00Z",
@@ -1691,9 +2104,15 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
                                     "count": 5,
                                     "source_keys": ["nginx"],
                                     "request_paths": ["/.env"],
+                                    "request_methods": ["GET"],
+                                    "request_hosts": [],
                                     "status_codes": [404],
                                     "levels": [],
                                     "message_summary": "Grouped scanner probe",
+                                    "has_explicit_message": False,
+                                    "identity_kind": "http_summary",
+                                    "semantic_summary": "Grouped scanner probe",
+                                    "semantic_identity_hash": "",
                                     "first_timestamp": "2026-05-18T02:00:00Z",
                                     "last_timestamp": "2026-05-18T03:00:00Z",
                                 }
@@ -1756,9 +2175,22 @@ async def test_monitoring_workflow_agent_reduces_iterations_for_stable_history(
     )
     assert stable_context.tool_results == []
     assert len(stable_llm_provider.requests) == 1
-    assert stable_context.llm_tokens_used < full_context.llm_tokens_used
-    assert stable_context.llm_cost_usd < full_context.llm_cost_usd
     assert len(stable_llm_provider.requests) < len(full_llm_provider.requests)
+    full_request_chars = sum(
+        len(part.text)
+        for request in full_llm_provider.requests
+        for message in request.messages
+        for part in message.parts
+        if isinstance(part, TextPart)
+    )
+    stable_request_chars = sum(
+        len(part.text)
+        for request in stable_llm_provider.requests
+        for message in request.messages
+        for part in message.parts
+        if isinstance(part, TextPart)
+    )
+    assert stable_request_chars < full_request_chars
 
 
 @pytest.mark.asyncio
@@ -2001,7 +2433,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
         "collect_logs:2026-05-19T00:00:00Z:2026-05-20T00:00:00Z",
         (
             "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_keys': ['backend']}"
+            "'source_keys': ['backend'], 'max_groups': 200}"
         ),
         "call_deterministic_tool:group_errors:{'project_name': 'demo-shop'}",
     ]
@@ -2020,6 +2452,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
     }
     followup_text: str = cast(TextPart, llm_provider.requests[2].messages[-1].parts[0]).text
     assert "duplicate_mcp_tool_call_skipped" in followup_text
+    assert [len(request.messages) for request in llm_provider.requests] == [2, 3, 3]
     duplicate_log_calls = [
         call
         for call in info_mock.call_args_list
@@ -2033,7 +2466,7 @@ async def test_monitoring_workflow_agent_skips_duplicate_mcp_tool_calls(
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_different_limits(
+async def test_monitoring_workflow_agent_reuses_preflight_group_errors_for_same_scope(
     agent_factory: AgentFactory,
     mocker: MockerFixture,
 ) -> None:
@@ -2087,16 +2520,9 @@ async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_diff
         ),
     )
 
-    assert (
-        mcp_client.calls.count(
-            "call_deterministic_tool:group_errors:{'project_name': 'demo-shop', "
-            "'source_key': 'backend', 'max_groups': 50}"
-        )
-        == 1
-    )
-    assert all("'max_groups': 200" not in call for call in mcp_client.calls)
+    assert all("'source_key': 'backend'" not in call for call in mcp_client.calls)
     assert [result.tool_name for result in context.tool_results] == [
-        McpToolName.GROUP_ERRORS,
+        "duplicate_mcp_tool_call_skipped",
         "duplicate_mcp_tool_call_skipped",
     ]
     duplicate_log_calls = [
@@ -2104,7 +2530,7 @@ async def test_monitoring_workflow_agent_skips_same_scope_group_errors_with_diff
         for call in info_mock.call_args_list
         if call.args and call.args[0] == "skipping duplicate LLM-requested MCP tool call"
     ]
-    assert len(duplicate_log_calls) == 1
+    assert len(duplicate_log_calls) == 2
 
 
 @pytest.mark.asyncio
@@ -2189,7 +2615,7 @@ async def test_monitoring_workflow_agent_does_not_add_local_probe_interpretation
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
+async def test_monitoring_workflow_agent_preserves_requested_group_error_evidence(
     agent_factory: AgentFactory,
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
@@ -2203,20 +2629,55 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
                 "count": index + 1,
                 "source_keys": ["nginx"],
                 "request_paths": [f"/probe-{index}.php"],
+                "request_methods": ["GET"],
+                "request_hosts": [],
                 "status_codes": [404],
                 "levels": [],
                 "message_summary": "Grouped scanner probe",
+                "has_explicit_message": False,
+                "identity_kind": "http_summary",
+                "semantic_summary": "Grouped scanner probe",
+                "semantic_identity_hash": "",
+                "upstream_attempted": None,
                 "first_timestamp": "2026-05-19T02:00:00Z",
                 "last_timestamp": "2026-05-19T03:00:00Z",
-                "example_lines": ["raw line payload that should stay out of prompts"] * 20,
+                "first_seen": {
+                    "source_key": "nginx",
+                    "output_file": "/snapshots/demo-shop/nginx.log",
+                    "line_number": index + 1,
+                    "line": "requested raw line evidence",
+                    "line_truncated": False,
+                },
+                "last_seen": {
+                    "source_key": "nginx",
+                    "output_file": "/snapshots/demo-shop/nginx.log",
+                    "line_number": index + 1,
+                    "line": "requested raw line evidence",
+                    "line_truncated": False,
+                },
             }
         )
     mcp_client.tool_results[McpToolName.GROUP_ERRORS] = {
         "action": McpToolName.GROUP_ERRORS,
+        "fingerprint_version": "group-errors-v2",
+        "requested_project_name": "demo-shop",
         "project_name": "demo-shop",
+        "workspace": LogWorkspace.WORKFLOW,
+        "session_id": None,
+        "snapshot_collected_at": "2026-05-19T00:00:00Z",
+        "snapshot_dir": "/snapshots/demo-shop",
+        "searched_source_keys": ["backend", "nginx"],
+        "analysis_cautions": [],
+        "next_step_tips": [],
         "grouped_error_count": len(groups),
         "matching_line_count": 1275,
+        "max_groups": 200,
+        "offset": 0,
+        "returned_group_count": len(groups),
+        "next_offset": len(groups),
         "truncated": False,
+        "partial_page": False,
+        "summary": "Grouped scanner probes.",
         "groups": groups,
     }
     llm_provider = MockProvider()
@@ -2246,34 +2707,47 @@ async def test_monitoring_workflow_agent_compacts_large_group_error_followup(
         ),
     )
 
-    assert len(context.tool_results[0].structured_content["groups"]) == 50
+    stored_content = context.tool_results[0].structured_content
+    assert len(stored_content["groups"]) == 50
+    assert "requested raw line evidence" in json.dumps(stored_content)
     followup_text = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
-    assert "raw line payload that should stay out of prompts" not in followup_text
+    assert "requested raw line evidence" in followup_text
     followup_payload = json.loads(followup_text)
     followup_content = followup_payload["tool_results"][0]["structured_content"]
-    assert followup_content["prompt_compacted"] is True
     assert followup_content["grouped_error_count"] == 50
-    assert followup_content["included_group_count"] == 20
-    assert followup_content["omitted_group_count"] == 30
-    assert followup_content["severity_counts"] == {"medium": 50}
-    assert len(followup_content["groups"]) == 20
+    assert len(followup_content["groups"]) == 50
+    assert followup_content["groups"][0]["first_timestamp"] == "2026-05-19T02:00:00Z"
+    assert followup_content["groups"][0]["first_seen"]["line_number"] == 1
 
 
 @pytest.mark.asyncio
-async def test_monitoring_workflow_agent_compacts_large_grep_followup(
+async def test_monitoring_workflow_agent_preserves_large_grep_result(
     agent_factory: AgentFactory,
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
     mcp_client.tool_results[McpToolName.GREP_LOG_SNAPSHOT] = {
         "action": McpToolName.GREP_LOG_SNAPSHOT,
+        "requested_project_name": "demo-shop",
         "project_name": "demo-shop",
-        "source_key": "nginx",
+        "workspace": "workflow",
+        "session_id": None,
+        "snapshot_dir": "workflow/demo-shop/latest",
         "grep": "/\\.env",
+        "searched_source_keys": ["nginx"],
+        "matched_source_keys": ["nginx"],
+        "match_offset": 0,
+        "max_matches": 100,
         "match_count": 50,
+        "returned_match_count": 50,
+        "next_step_tips": [],
+        "truncated": False,
         "matches": [
             {
+                "source_key": "nginx",
+                "output_file": "nginx.log",
                 "line_number": index + 1,
-                "line": f"very long raw grep line {index} " + ("x" * 240),
+                "line": f"very long raw grep line {index} " + ("x" * 1_200),
+                "line_truncated": False,
             }
             for index in range(50)
         ],
@@ -2310,17 +2784,16 @@ async def test_monitoring_workflow_agent_compacts_large_grep_followup(
         ),
     )
 
-    assert len(context.tool_results[0].structured_content["matches"]) == 50
+    stored_content = context.tool_results[0].structured_content
+    assert len(stored_content["matches"]) == 50
+    assert len(stored_content["matches"][0]["line"]) > 1_000
     followup_payload = json.loads(
         cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     )
     structured_content = followup_payload["tool_results"][0]["structured_content"]
-    assert structured_content["prompt_compacted"] is True
-    assert structured_content["included_match_count"] == 20
-    assert structured_content["omitted_match_count"] == 30
-    assert len(structured_content["matches"]) == 20
-    assert "very long raw grep line 49" not in json.dumps(structured_content)
-    assert len(structured_content["matches"][0]["line"]) < 180
+    assert len(structured_content["matches"]) == 50
+    assert all(len(match["line"]) > 1_000 for match in structured_content["matches"])
+    assert structured_content == stored_content
 
 
 @pytest.mark.asyncio
@@ -2533,6 +3006,10 @@ async def test_monitoring_workflow_agent_reads_optional_skills(
     )
     followup_text: str = cast(TextPart, llm_provider.requests[1].messages[-1].parts[0]).text
     assert "Bot detection skill body." in followup_text
+    followup_payload = json.loads(followup_text)
+    assert followup_payload["optional_skill_status"] == {
+        "bot_detection": "retrieved",
+    }
 
 
 @pytest.mark.asyncio

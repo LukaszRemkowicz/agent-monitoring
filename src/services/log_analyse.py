@@ -175,6 +175,7 @@ class LogAnalysisService:
         fingerprint_packet: LogAnalysisFingerprintPacket = LogAnalysisFingerprintBuilder.build(
             collect_logs=agent_context.collect_logs,
             tool_results=agent_context.tool_results,
+            preflight_grouped_error_runs=agent_context.preflight_grouped_error_runs,
             final_report=agent_context.final_report,
             log_window_since=agent_context.log_window_since,
             log_window_until=agent_context.log_window_until,
@@ -298,12 +299,13 @@ class HistoricalContextBuilder:
 
         lines: list[str] = []
         for record in records:
-            lines.append(
+            entry = (
                 f"## {record.analysis_date} — Severity: {record.severity}\n"
-                f"Summary: {record.summary}\n"
-                f"Key findings: {record.key_findings}\n"
-                f"Recommendations: {record.recommendations}"
+                f"Summary: {record.summary}"
             )
+            if record.trend_summary:
+                entry += f"\nTrend: {record.trend_summary}"
+            lines.append(entry)
         return "\n\n".join(lines)
 
 
