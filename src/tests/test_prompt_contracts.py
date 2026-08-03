@@ -29,7 +29,7 @@ def test_central_decision_contract_defines_priority_probe_and_completeness_rules
     assert "current complete paginated evidence is primary" in central_contract
     assert "historical summaries" in central_contract
     assert "secondary" in central_contract
-    assert "all semantic families" in central_contract
+    assert "all grouped semantic families" in central_contract
     assert "actionable, investigate, watch_only, routine" in central_contract
     assert "/wp-login.php" in central_contract
     assert "403/404" in central_contract
