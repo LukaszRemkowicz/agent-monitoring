@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from typing import TypeAliasType
 
 import pytest
 
@@ -6,6 +7,7 @@ from exceptions import LogAnalysisComparisonMissingException
 from schemas import (
     CollectLogsArtifact,
     LogAnalysisAllowedAction,
+    LogAnalysisAttentionPriority,
     LogAnalysisCurrentCoverage,
     LogAnalysisEvidenceMode,
     LogAnalysisFinalReport,
@@ -27,15 +29,23 @@ from schemas import (
     RecommendedAction,
     SnapshotAccessGuidance,
 )
-from services.log_fingerprints import LogAnalysisFingerprintBuilder
+from services.log_fingerprints import (
+    LOG_ANALYSIS_FINGERPRINT_VERSION,
+    LogAnalysisFingerprintBuilder,
+)
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
 from tests.conftest import build_collect_logs_artifact_payload
+from utils.grouped_errors import build_grouped_error_semantics, coalesce_grouped_errors
+
+
+def test_fingerprint_argument_value_is_an_explicit_type_alias() -> None:
+    assert isinstance(LogAnalysisFingerprintArgumentValue, TypeAliasType)
 
 
 def test_prompt_grouped_error_compaction_requires_comparison() -> None:
     with pytest.raises(
         LogAnalysisComparisonMissingException,
-        match="grouped-error comparison is required for prompt compaction",
+        match="grouped-error comparison is required for prompt evidence",
     ):
         LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(None)  # type: ignore[arg-type]
 
@@ -62,8 +72,41 @@ def _grouped_error_run(
     )
 
 
+def test_grouped_error_run_scope_uses_result_sources_and_project_wildcard() -> None:
+    scope = LogAnalysisHistoryComparisonService.build_grouped_error_run_scope_by_project(
+        [
+            _grouped_error_run(
+                project_name="demo-shop",
+                source_keys=None,
+            ).model_copy(
+                update={
+                    "result": LogAnalysisGroupedErrorsResult(
+                        project_name="demo-shop",
+                        searched_source_keys=["backend"],
+                    )
+                }
+            ),
+            _grouped_error_run(
+                project_name="host-security",
+                source_keys=None,
+            ),
+            _grouped_error_run(
+                project_name="host-security",
+                source_keys=["fail2ban"],
+            ),
+        ]
+    )
+
+    assert scope == {
+        "demo-shop": ["backend"],
+        "host-security": ["*"],
+    }
+
+
 def _fingerprints(payload: dict[str, object]) -> LogAnalysisFingerprints:
-    return LogAnalysisFingerprints.model_validate(payload)
+    return LogAnalysisFingerprints.model_validate(
+        {"version": LOG_ANALYSIS_FINGERPRINT_VERSION, **payload}
+    )
 
 
 def _coverage_snapshot(collect_logs: CollectLogsArtifact) -> dict[str, object]:
@@ -138,6 +181,356 @@ def test_history_comparison_service_compares_grouped_errors_with_yesterday() -> 
     assert result is not None
     assert result.new_fingerprints == ["nginx:http_4xx:404:/.env"]
     assert result.resolved_fingerprints == ["backend:http_4xx:404:/robots.txt"]
+
+
+def test_history_comparison_matches_dynamic_route_variants_as_one_semantic_family() -> None:
+    previous = _grouped_error_run(
+        source_keys=["proxy"],
+        groups=[
+            {
+                "fingerprint": "proxy:http_4xx:v2:previous",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 5,
+                "source_keys": ["proxy"],
+                "request_paths": ["/orders/123?trace=old"],
+                "request_methods": ["GET"],
+                "request_hosts": ["shop.example.com"],
+                "status_codes": [404],
+                "has_explicit_message": True,
+                "message_summary": "Order route was not found.",
+                "semantic_identity_hash": "a" * 64,
+            }
+        ],
+    )
+    current = _grouped_error_run(
+        source_keys=["proxy"],
+        groups=[
+            {
+                "fingerprint": "proxy:http_4xx:v2:current",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 7,
+                "source_keys": ["proxy"],
+                "request_paths": ["/orders/456?trace=new"],
+                "request_methods": ["GET"],
+                "request_hosts": ["shop.example.com"],
+                "status_codes": [404],
+                "has_explicit_message": True,
+                "message_summary": "Order route was not found.",
+                "semantic_identity_hash": "b" * 64,
+            }
+        ],
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[previous],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    assert comparison.previous_group_count == 1
+    assert comparison.current_group_count == 1
+    assert comparison.new_fingerprints == []
+    assert comparison.resolved_fingerprints == []
+    assert len(comparison.persisting_fingerprints) == 1
+
+
+def test_history_comparison_preserves_semantic_family_variant_count() -> None:
+    current = _grouped_error_run(
+        source_keys=["proxy"],
+        groups=[
+            {
+                "fingerprint": f"proxy:http_4xx:v2:{index}",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": index,
+                "source_keys": ["proxy"],
+                "request_paths": [f"/orders/{index}"],
+                "request_methods": ["GET"],
+                "request_hosts": ["shop.example.com"],
+                "status_codes": [404],
+                "has_explicit_message": True,
+                "message_summary": "Order route was not found.",
+            }
+            for index in (1, 2)
+        ],
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    assert comparison.current_group_count == 1
+    compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+        comparison
+    )
+    assert compact.current_changed_examples[0].variant_count == 2
+    assert compact.current_changed_examples[0].request_paths == ["/orders/{id}"]
+
+
+def test_prompt_history_example_preserves_complete_message_summary() -> None:
+    full_summary = "x" * 2_000
+    signal = LogAnalysisGroupedErrorSignal(
+        fingerprint="backend:application_error:v2:one",
+        project_name="demo",
+        category="application_error",
+        source_keys=["backend"],
+        identity_kind="explicit_message",
+        message_summary=full_summary,
+    )
+
+    example = LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
+    raw_fallback = LogAnalysisHistoryComparisonService._compact_grouped_error_example(
+        signal.model_copy(update={"identity_kind": "raw_fallback"})
+    )
+
+    assert example.message_summary == full_summary
+    assert raw_fallback.message_summary == full_summary
+    assert signal.message_summary == full_summary
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"request_methods": ["POST"]},
+        {"request_hosts": ["admin.example.com"]},
+        {"message_summary": "Authentication failed."},
+    ],
+)
+def test_semantic_family_preserves_method_host_and_explicit_message_changes(
+    change: dict[str, object],
+) -> None:
+    signal = LogAnalysisGroupedErrorSignal(
+        fingerprint="proxy:http_4xx:404:/orders/123",
+        project_name="demo-shop",
+        category="http_4xx",
+        request_paths=["/orders/123"],
+        request_methods=["GET"],
+        request_hosts=["shop.example.com"],
+        status_codes=[404],
+        has_explicit_message=True,
+        message_summary="Order route was not found.",
+    )
+
+    assert (
+        build_grouped_error_semantics(signal).signature
+        != build_grouped_error_semantics(signal.model_copy(update=change)).signature
+    )
+
+
+def test_semantic_family_preserves_explicit_messages_with_same_semantic_summary() -> None:
+    first = LogAnalysisGroupedErrorSignal(
+        fingerprint="backend:application_error:v2:first",
+        project_name="demo-shop",
+        category="application_error",
+        source_keys=["backend"],
+        has_explicit_message=True,
+        semantic_summary="operation=checkout",
+        message_summary="Database timeout.",
+    )
+    second = first.model_copy(
+        update={
+            "fingerprint": "backend:application_error:v2:second",
+            "message_summary": "Payment was declined.",
+        }
+    )
+
+    assert len(coalesce_grouped_errors([first, second])) == 2
+
+
+def test_semantic_family_keeps_edge_and_upstream_5xx_separate() -> None:
+    edge = LogAnalysisGroupedErrorSignal(
+        fingerprint="proxy:http_5xx:v2:edge",
+        project_name="demo-shop",
+        category="http_5xx",
+        severity="high",
+        source_keys=["proxy"],
+        request_paths=["/.env"],
+        status_codes=[503],
+        upstream_attempted=False,
+    )
+    upstream = edge.model_copy(
+        update={
+            "fingerprint": "proxy:http_5xx:v2:upstream",
+            "upstream_attempted": True,
+        }
+    )
+
+    families = coalesce_grouped_errors([edge, upstream])
+
+    assert len(families) == 2
+    assert (
+        build_grouped_error_semantics(edge).attention_priority
+        == LogAnalysisAttentionPriority.INVESTIGATE
+    )
+    assert (
+        build_grouped_error_semantics(upstream).attention_priority
+        == LogAnalysisAttentionPriority.ACTIONABLE
+    )
+
+
+def test_history_comparison_does_not_call_minor_count_only_change_worsened() -> None:
+    previous = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "backend:http_4xx:404:/orders",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 10,
+                "source_keys": ["backend"],
+                "request_paths": ["/orders"],
+                "status_codes": [404],
+            }
+        ]
+    )
+    current = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "backend:http_4xx:404:/orders",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 11,
+                "source_keys": ["backend"],
+                "request_paths": ["/orders"],
+                "status_codes": [404],
+            }
+        ]
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[previous],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    assert comparison.persisting_fingerprints == ["backend:http_4xx:404:/orders"]
+    assert comparison.worsened_fingerprints == []
+    assert comparison.improved_fingerprints == []
+    compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+        comparison
+    )
+    assert compact.worsened_fingerprint_count == 0
+    assert compact.current_changed_examples == []
+    assert compact.previous_changed_examples == []
+    assert "worsened_grouped_error_fingerprints_present" not in compact.evidence_quality_warnings
+
+
+def test_history_comparison_keeps_known_probe_404_spike_watch_only() -> None:
+    previous = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "proxy:http_4xx:404:/wp-login.php",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 1,
+                "source_keys": ["proxy"],
+                "request_paths": ["/wp-login.php"],
+                "status_codes": [404],
+            }
+        ]
+    )
+    current = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "proxy:http_4xx:404:/wp-login.php",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "medium",
+                "count": 100,
+                "source_keys": ["proxy"],
+                "request_paths": ["/wp-login.php"],
+                "status_codes": [404],
+            }
+        ]
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[previous],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    assert comparison.worsened_fingerprints == []
+    compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+        comparison
+    )
+    assert compact.evidence_quality_warnings == []
+
+
+def test_high_severity_probe_is_actionable_not_watch_only() -> None:
+    current = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "proxy:http_4xx:404:/wp-login.php",
+                "project_name": "demo-shop",
+                "category": "http_4xx",
+                "severity": "high",
+                "count": 2,
+                "source_keys": ["proxy"],
+                "request_paths": ["/wp-login.php"],
+                "status_codes": [404],
+            }
+        ]
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+        comparison
+    )
+    assert compact.current_changed_examples[0].attention_priority == "actionable"
+    assert compact.evidence_quality_warnings
+
+
+def test_severity_change_wins_when_count_moves_the_other_direction() -> None:
+    previous = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "backend:application_error:timeout",
+                "project_name": "demo-shop",
+                "category": "application_error",
+                "severity": "medium",
+                "count": 20,
+                "source_keys": ["backend"],
+                "message_summary": "Database timeout",
+            }
+        ]
+    )
+    current = _grouped_error_run(
+        groups=[
+            {
+                "fingerprint": "backend:application_error:timeout",
+                "project_name": "demo-shop",
+                "category": "application_error",
+                "severity": "high",
+                "count": 5,
+                "source_keys": ["backend"],
+                "message_summary": "Database timeout",
+            }
+        ]
+    )
+
+    comparison = LogAnalysisHistoryComparisonService.build_grouped_error_comparison(
+        previous_grouped_error_runs=[previous],
+        current_grouped_error_runs=[current],
+    )
+
+    assert comparison is not None
+    assert comparison.worsened_fingerprints == ["backend:application_error:timeout"]
+    assert comparison.improved_fingerprints == []
 
 
 def test_history_comparison_keeps_empty_current_group_errors_as_evidence() -> None:
@@ -262,8 +655,8 @@ def test_history_comparison_builds_compact_grouped_error_delta() -> None:
                     "fingerprint": "frontend:http_4xx:404:/favicon.png",
                     "project_name": "demo-shop",
                     "category": "http_4xx",
-                    "severity": "medium",
-                    "count": 6,
+                    "severity": "high",
+                    "count": 20,
                     "source_keys": ["frontend"],
                     "request_paths": ["/favicon.png"],
                     "status_codes": [404],
@@ -297,7 +690,7 @@ def test_history_comparison_builds_compact_grouped_error_delta() -> None:
 
     assert comparison is not None
     assert comparison.worsened_fingerprints == ["frontend:http_4xx:404:/favicon.png"]
-    assert comparison.current_changed_groups[0].count == 6
+    assert comparison.current_changed_groups[0].count == 20
     assert comparison.previous_changed_groups[0].count == 4
     assert (
         comparison.current_changed_groups[0].message_summary
@@ -377,9 +770,6 @@ def test_history_comparison_flags_resolved_high_severity_grouped_errors() -> Non
     assert compact.evidence_quality_warnings == [
         "previous_high_severity_grouped_error_fingerprints_absent_from_current"
     ]
-    assert compact.next_evidence_hint == (
-        "call_tools_for_broader_current_evidence_before_final_report"
-    )
 
 
 def test_history_comparison_warns_when_resolved_high_severity_scope_is_uncovered() -> None:
@@ -442,9 +832,6 @@ def test_history_comparison_warns_when_resolved_high_severity_scope_is_uncovered
     assert compact.evidence_quality_warnings == [
         "previous_high_severity_grouped_error_fingerprints_absent_from_current"
     ]
-    assert compact.next_evidence_hint == (
-        "call_tools_for_broader_current_evidence_before_final_report"
-    )
 
 
 def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
@@ -522,21 +909,39 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     assert compact.resolved_high_severity_tool_scope_by_project == {"demo-shop": ["backend"]}
     assert compact.resolved_high_severity_current_scope_covered is True
     assert compact.evidence_quality_warnings == [
-        "worsened_grouped_error_fingerprints_present",
         "new_high_severity_grouped_error_fingerprints_present",
         "previous_high_severity_grouped_error_fingerprints_absent_from_current",
     ]
-    assert compact.next_evidence_hint == (
-        "call_tools_for_broader_current_evidence_before_final_report"
-    )
-    assert compact.priority_current_examples[0].fingerprint == "backend:http_5xx:500:/api"
-    assert compact.priority_current_examples[0].severity == "high"
-    assert len(compact.current_changed_examples) == 8
-    assert len(compact.previous_changed_examples) == 8
+    assert compact.current_changed_examples[0].fingerprint == "backend:http_5xx:500:/api"
+    assert compact.current_changed_examples[0].severity == "high"
+    assert len(compact.current_changed_examples) == 13
+    assert len(compact.previous_changed_examples) == 12
     dumped = compact.model_dump(mode="json")
     assert "new_fingerprints" not in dumped
     assert "worsened_fingerprints" not in dumped
     assert "current_changed_groups" not in dumped
+
+
+def test_history_comparison_preserves_high_severity_fingerprint_lists() -> None:
+    comparison = LogAnalysisGroupedErrorComparison(
+        available=True,
+        new_high_severity_fingerprints=[
+            f"backend:http_5xx:500:/new-{index}" for index in range(30)
+        ],
+        resolved_high_severity_fingerprints=[
+            f"backend:http_5xx:500:/resolved-{index}" for index in range(25)
+        ],
+        rationale="Full deterministic comparison is available outside the prompt.",
+    )
+
+    compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+        comparison
+    )
+
+    assert compact.new_high_severity_fingerprint_count == 30
+    assert len(compact.new_high_severity_fingerprints) == 30
+    assert compact.resolved_high_severity_fingerprint_count == 25
+    assert len(compact.resolved_high_severity_fingerprints) == 25
 
 
 def test_history_comparison_flags_empty_grouped_error_baseline_for_prompt() -> None:
@@ -572,9 +977,6 @@ def test_history_comparison_flags_empty_grouped_error_baseline_for_prompt() -> N
         "previous_grouped_error_baseline_empty",
         "all_current_grouped_error_fingerprints_are_new",
     ]
-    assert compact.next_evidence_hint == (
-        "call_tools_for_broader_current_evidence_before_final_report"
-    )
 
 
 def test_history_comparison_builds_missing_log_guard() -> None:

@@ -1,12 +1,8 @@
-"""Deterministic history comparison helpers for log-analysis prompts.
+"""Deterministic previous-vs-current comparison for log-analysis prompts.
 
-This module owns the Python-side comparison work that should not be delegated
-to the LLM: matching grouped-error fingerprints, detecting high-risk deltas,
-checking source coverage changes, and compacting those facts into bounded prompt
-payloads. It deliberately does not call MCP tools, read the database, or decide
-the final report. The agent/service layer supplies already-collected current
-grouped errors and the previous persisted analysis; the LLM then interprets the
-compact evidence and decides whether more deterministic MCP tools are needed.
+The module matches semantic error families and source coverage. It does not call
+MCP, read the database, or decide the final report; the LLM interprets the
+complete comparison evidence.
 """
 
 from __future__ import annotations
@@ -26,7 +22,12 @@ from schemas import (
     LogAnalysisSourceCoverageComparison,
     RecommendedAction,
 )
-from utils.grouped_errors import is_high_severity_group
+from utils.grouped_errors import (
+    attention_priority_rank,
+    build_grouped_error_semantics,
+    coalesce_grouped_errors,
+    is_high_severity_group,
+)
 from utils.log_artifacts import build_missing_source_map
 from utils.log_reports import build_final_report_search_text, split_report_sentences
 
@@ -34,6 +35,7 @@ logger = get_logger(__name__)
 
 UNSUPPORTED_HISTORY_COMPARISON_CLAIM_TERMS: tuple[str, ...] = (
     "stable operation",
+    "health remains stable",
     "healthy",
     "no new or worsening",
     "no 5xx",
@@ -57,6 +59,40 @@ UNSUPPORTED_HISTORY_COMPARISON_SCOPE_TERMS: tuple[str, ...] = (
     "all projects",
     "overall",
 )
+
+
+def _build_grouped_error_signals_by_identity(
+    grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint],
+) -> dict[tuple[object, ...], LogAnalysisGroupedErrorSignal]:
+    families = coalesce_grouped_errors(
+        signal for run in grouped_error_runs for signal in run.result.groups
+    )
+    return {identity: family.signal for identity, family in families.items()}
+
+
+def _severity_rank(severity: str) -> int:
+    return {
+        "critical": 3,
+        "high": 2,
+        "warning": 1,
+        "medium": 1,
+        "low": 0,
+    }.get(severity.casefold(), 0)
+
+
+def _build_resolved_high_severity_scope(
+    *,
+    resolved_identities: set[tuple[object, ...]],
+    previous_by_identity: dict[tuple[object, ...], LogAnalysisGroupedErrorSignal],
+) -> dict[str, list[str]]:
+    high_severity_groups = [
+        previous_by_identity[identity]
+        for identity in sorted(resolved_identities, key=repr)
+        if is_high_severity_group(previous_by_identity[identity])
+    ]
+    return LogAnalysisHistoryComparisonService.build_grouped_error_signal_scope_by_project(
+        high_severity_groups
+    )
 
 
 class LogAnalysisHistoryComparisonService:
@@ -132,14 +168,7 @@ class LogAnalysisHistoryComparisonService:
         previous_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint],
         current_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint],
     ) -> LogAnalysisGroupedErrorComparison | None:
-        """Return the full deterministic fingerprint diff between two baselines.
-
-        Fingerprints are treated as the stable identity for a grouped-error
-        family. The result separates new, resolved, persisting, worsened, and
-        improved families, plus high-severity subsets that need explicit prompt
-        treatment. Counts and changed examples are complete at this layer; later
-        prompt compaction may cap example rows but not the aggregate counts.
-        """
+        """Return the complete semantic-family diff between two baselines."""
 
         previous_groups: list[LogAnalysisGroupedErrorSignal] = [
             group for run in previous_grouped_error_runs for group in run.result.groups
@@ -150,42 +179,50 @@ class LogAnalysisHistoryComparisonService:
         if not current_grouped_error_runs and not previous_groups and not current_groups:
             return None
 
-        previous_by_fingerprint: dict[str, LogAnalysisGroupedErrorSignal] = {
-            signal.fingerprint: signal for signal in previous_groups
-        }
-        current_by_fingerprint: dict[str, LogAnalysisGroupedErrorSignal] = {
-            signal.fingerprint: signal for signal in current_groups
-        }
-        previous_fingerprints: set[str] = set(previous_by_fingerprint)
-        current_fingerprints: set[str] = set(current_by_fingerprint)
-        new_fingerprints: list[str] = sorted(current_fingerprints - previous_fingerprints)
-        resolved_fingerprints: list[str] = sorted(previous_fingerprints - current_fingerprints)
-        persisting_fingerprints: list[str] = sorted(previous_fingerprints & current_fingerprints)
+        previous_by_identity = _build_grouped_error_signals_by_identity(previous_grouped_error_runs)
+        current_by_identity = _build_grouped_error_signals_by_identity(current_grouped_error_runs)
+        previous_identities = set(previous_by_identity)
+        current_identities = set(current_by_identity)
+        new_identities = current_identities - previous_identities
+        resolved_identities = previous_identities - current_identities
+        persisting_identities = previous_identities & current_identities
+        new_fingerprints: list[str] = sorted(
+            current_by_identity[identity].fingerprint for identity in new_identities
+        )
+        resolved_fingerprints: list[str] = sorted(
+            previous_by_identity[identity].fingerprint for identity in resolved_identities
+        )
+        persisting_fingerprints: list[str] = sorted(
+            current_by_identity[identity].fingerprint for identity in persisting_identities
+        )
+        worsened_identities: set[tuple[object, ...]] = set()
+        improved_identities: set[tuple[object, ...]] = set()
+        for identity in persisting_identities:
+            previous = previous_by_identity[identity]
+            current = current_by_identity[identity]
+            previous_severity = _severity_rank(previous.severity)
+            current_severity = _severity_rank(current.severity)
+            if current_severity > previous_severity:
+                worsened_identities.add(identity)
+            elif current_severity < previous_severity:
+                improved_identities.add(identity)
         worsened_fingerprints: list[str] = [
-            fingerprint
-            for fingerprint in persisting_fingerprints
-            if current_by_fingerprint[fingerprint].count
-            > previous_by_fingerprint[fingerprint].count
+            current_by_identity[identity].fingerprint
+            for identity in sorted(worsened_identities, key=repr)
         ]
         improved_fingerprints: list[str] = [
-            fingerprint
-            for fingerprint in persisting_fingerprints
-            if current_by_fingerprint[fingerprint].count
-            < previous_by_fingerprint[fingerprint].count
+            current_by_identity[identity].fingerprint
+            for identity in sorted(improved_identities, key=repr)
         ]
         new_high_severity_fingerprints: list[str] = [
-            fingerprint
-            for fingerprint in new_fingerprints
-            if is_high_severity_group(current_by_fingerprint[fingerprint])
+            current_by_identity[identity].fingerprint
+            for identity in sorted(new_identities, key=repr)
+            if is_high_severity_group(current_by_identity[identity])
         ]
         resolved_high_severity_fingerprints: list[str] = [
-            fingerprint
-            for fingerprint in resolved_fingerprints
-            if is_high_severity_group(previous_by_fingerprint[fingerprint])
-        ]
-        resolved_high_severity_groups: list[LogAnalysisGroupedErrorSignal] = [
-            previous_by_fingerprint[fingerprint]
-            for fingerprint in resolved_high_severity_fingerprints
+            previous_by_identity[identity].fingerprint
+            for identity in sorted(resolved_identities, key=repr)
+            if is_high_severity_group(previous_by_identity[identity])
         ]
         current_tool_scope_by_project: dict[str, list[str]] = (
             LogAnalysisHistoryComparisonService.build_grouped_error_run_scope_by_project(
@@ -193,8 +230,9 @@ class LogAnalysisHistoryComparisonService:
             )
         )
         resolved_high_severity_tool_scope_by_project: dict[str, list[str]] = (
-            LogAnalysisHistoryComparisonService.build_grouped_error_signal_scope_by_project(
-                resolved_high_severity_groups
+            _build_resolved_high_severity_scope(
+                resolved_identities=resolved_identities,
+                previous_by_identity=previous_by_identity,
             )
         )
         resolved_high_severity_current_scope_covered: bool = (
@@ -204,23 +242,15 @@ class LogAnalysisHistoryComparisonService:
                 resolved_high_severity_tool_scope_by_project,
             )
         )
-        current_changed_fingerprints: set[str] = (
-            set(new_fingerprints)
-            | set(worsened_fingerprints)
-            | set(improved_fingerprints)
-            | set(new_high_severity_fingerprints)
-        )
-        previous_changed_fingerprints: set[str] = (
-            set(resolved_fingerprints)
-            | set(worsened_fingerprints)
-            | set(improved_fingerprints)
-            | set(resolved_high_severity_fingerprints)
+        current_changed_identities = new_identities | worsened_identities | improved_identities
+        previous_changed_identities = (
+            resolved_identities | worsened_identities | improved_identities
         )
         return LogAnalysisGroupedErrorComparison(
             available=True,
             current_tool_scope_by_project=current_tool_scope_by_project,
-            previous_group_count=len(previous_groups),
-            current_group_count=len(current_groups),
+            previous_group_count=len(previous_by_identity),
+            current_group_count=len(current_by_identity),
             new_fingerprints=new_fingerprints,
             resolved_fingerprints=resolved_fingerprints,
             persisting_fingerprints=persisting_fingerprints,
@@ -236,44 +266,32 @@ class LogAnalysisHistoryComparisonService:
             ),
             current_changed_groups=[
                 LogAnalysisHistoryComparisonService._compact_grouped_error_signal(
-                    current_by_fingerprint[fingerprint]
+                    current_by_identity[identity]
                 )
-                for fingerprint in sorted(current_changed_fingerprints)
-                if fingerprint in current_by_fingerprint
+                for identity in sorted(current_changed_identities, key=repr)
             ],
             previous_changed_groups=[
                 LogAnalysisHistoryComparisonService._compact_grouped_error_signal(
-                    previous_by_fingerprint[fingerprint]
+                    previous_by_identity[identity]
                 )
-                for fingerprint in sorted(previous_changed_fingerprints)
-                if fingerprint in previous_by_fingerprint
+                for identity in sorted(previous_changed_identities, key=repr)
             ],
             rationale=(
-                "Current grouped-error fingerprints were collected and compared with "
-                "previous deterministic grouped-error fingerprints. The LLM decides "
-                "whether this comparison is enough or whether more tools are needed."
+                "Current grouped-error families were compared with the previous "
+                "deterministic baseline using the same conservative project, source, "
+                "route, and message family identity as the current prompt."
             ),
         )
 
     @staticmethod
     def compact_grouped_error_comparison_for_prompt(
         comparison: LogAnalysisGroupedErrorComparison,
-        *,
-        max_examples: int = 8,
     ) -> LogAnalysisPromptGroupedErrorComparison:
-        """Return bounded grouped-error comparison evidence for the LLM prompt.
-
-        The prompt payload keeps exact aggregate counts and complete
-        high-severity fingerprint lists, while capping verbose changed examples.
-        This keeps token cost predictable without losing the facts that drive
-        safety decisions. Passing `None` is a caller bug because this method
-        compacts an existing comparison; no-comparison cases should be handled
-        before calling it.
-        """
+        """Return every changed semantic family without raw seen-line payloads."""
 
         if comparison is None:
             raise LogAnalysisComparisonMissingException(
-                "grouped-error comparison is required for prompt compaction"
+                "grouped-error comparison is required for prompt evidence"
             )
 
         evidence_quality_warnings: list[str] = (
@@ -281,12 +299,7 @@ class LogAnalysisHistoryComparisonService:
                 comparison
             )
         )
-        next_evidence_hint: str = (
-            "call_tools_for_broader_current_evidence_before_final_report"
-            if evidence_quality_warnings
-            else "history_comparison_may_be_enough_if_examples_show_low_risk_continuity"
-        )
-        priority_current_examples: list[LogAnalysisGroupedErrorSignal] = (
+        current_changed_groups: list[LogAnalysisGroupedErrorSignal] = (
             LogAnalysisHistoryComparisonService._prioritize_current_changed_groups(comparison)
         )
         return LogAnalysisPromptGroupedErrorComparison(
@@ -304,7 +317,7 @@ class LogAnalysisHistoryComparisonService:
             resolved_high_severity_fingerprint_count=len(
                 comparison.resolved_high_severity_fingerprints
             ),
-            resolved_high_severity_fingerprints=(comparison.resolved_high_severity_fingerprints),
+            resolved_high_severity_fingerprints=comparison.resolved_high_severity_fingerprints,
             resolved_high_severity_tool_scope_by_project=(
                 comparison.resolved_high_severity_tool_scope_by_project
             ),
@@ -312,25 +325,17 @@ class LogAnalysisHistoryComparisonService:
                 comparison.resolved_high_severity_current_scope_covered
             ),
             evidence_quality_warnings=evidence_quality_warnings,
-            next_evidence_hint=next_evidence_hint,
-            priority_current_examples=[
-                LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
-                for signal in priority_current_examples[:max_examples]
-            ],
             current_changed_examples=[
                 LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
-                for signal in comparison.current_changed_groups[:max_examples]
+                for signal in current_changed_groups
             ],
             previous_changed_examples=[
                 LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
-                for signal in comparison.previous_changed_groups[:max_examples]
+                for signal in comparison.previous_changed_groups
             ],
             rationale=(
-                "Grouped-error comparison is compacted for the prompt: counts are complete, "
-                "high-severity new fingerprints are complete, and priority_current_examples "
-                "puts new high-severity current families first for report wording. Changed "
-                "groups are capped to representative examples. Call tools for exact full "
-                "fingerprint lists."
+                "Every changed semantic family is included. Seen-line payloads are omitted "
+                "because current raw evidence remains available through deterministic tools."
             ),
         )
 
@@ -338,18 +343,14 @@ class LogAnalysisHistoryComparisonService:
     def _prioritize_current_changed_groups(
         comparison: LogAnalysisGroupedErrorComparison,
     ) -> list[LogAnalysisGroupedErrorSignal]:
-        new_high_severity_fingerprints: set[str] = set(comparison.new_high_severity_fingerprints)
-        high_severity_groups: list[LogAnalysisGroupedErrorSignal] = [
-            group
-            for group in comparison.current_changed_groups
-            if group.fingerprint in new_high_severity_fingerprints
-        ]
-        remaining_groups: list[LogAnalysisGroupedErrorSignal] = [
-            group
-            for group in comparison.current_changed_groups
-            if group.fingerprint not in new_high_severity_fingerprints
-        ]
-        return [*high_severity_groups, *remaining_groups]
+        return sorted(
+            comparison.current_changed_groups,
+            key=lambda group: (
+                attention_priority_rank(build_grouped_error_semantics(group).attention_priority),
+                0 if is_high_severity_group(group) else 1,
+                group.fingerprint,
+            ),
+        )
 
     @staticmethod
     def _build_grouped_error_evidence_quality_warnings(
@@ -364,15 +365,30 @@ class LogAnalysisHistoryComparisonService:
         """
 
         warnings: list[str] = []
-        if comparison.previous_group_count == 0 and comparison.current_group_count > 0:
-            warnings.append("previous_grouped_error_baseline_empty")
-        if 0 < comparison.current_group_count == len(comparison.new_fingerprints):
-            warnings.append("all_current_grouped_error_fingerprints_are_new")
-        if comparison.previous_group_count > 0 and (
-            comparison.current_group_count >= comparison.previous_group_count * 3
+        material_current_groups = [
+            group
+            for group in comparison.current_changed_groups
+            if build_grouped_error_semantics(group).attention_priority.value
+            in {"actionable", "investigate"}
+        ]
+        if (
+            comparison.previous_group_count == 0
+            and comparison.current_group_count > 0
+            and material_current_groups
         ):
-            warnings.append("current_group_count_far_above_previous_group_count")
-        if comparison.worsened_fingerprints:
+            warnings.append("previous_grouped_error_baseline_empty")
+        if (
+            0 < comparison.current_group_count == len(comparison.new_fingerprints)
+            and material_current_groups
+        ):
+            warnings.append("all_current_grouped_error_fingerprints_are_new")
+        worsened_fingerprints = set(comparison.worsened_fingerprints)
+        material_worsened_group_present = any(
+            group.fingerprint in worsened_fingerprints
+            and build_grouped_error_semantics(group).attention_priority.value != "watch_only"
+            for group in comparison.current_changed_groups
+        )
+        if material_worsened_group_present:
             warnings.append("worsened_grouped_error_fingerprints_present")
         if comparison.new_high_severity_fingerprints:
             warnings.append("new_high_severity_grouped_error_fingerprints_present")
@@ -386,6 +402,7 @@ class LogAnalysisHistoryComparisonService:
     ) -> LogAnalysisPromptGroupedErrorExample:
         """Trim a grouped-error signal down to fields useful as an example row."""
 
+        semantics = build_grouped_error_semantics(signal)
         return LogAnalysisPromptGroupedErrorExample(
             fingerprint=signal.fingerprint,
             project_name=signal.project_name,
@@ -393,9 +410,12 @@ class LogAnalysisHistoryComparisonService:
             severity=signal.severity,
             count=signal.count,
             source_keys=signal.source_keys,
-            request_paths=signal.request_paths[:3],
+            request_paths=list(semantics.normalized_paths),
             status_codes=signal.status_codes,
             message_summary=signal.message_summary,
+            upstream_attempted=signal.upstream_attempted,
+            attention_priority=semantics.attention_priority,
+            variant_count=signal.variant_count,
         )
 
     @staticmethod
@@ -418,9 +438,14 @@ class LogAnalysisHistoryComparisonService:
             count=signal.count,
             source_keys=signal.source_keys,
             request_paths=signal.request_paths,
+            request_methods=signal.request_methods,
+            request_hosts=signal.request_hosts,
             status_codes=signal.status_codes,
             levels=signal.levels,
             message_summary=signal.message_summary,
+            has_explicit_message=signal.has_explicit_message,
+            upstream_attempted=signal.upstream_attempted,
+            variant_count=signal.variant_count,
         )
 
     @staticmethod
@@ -457,7 +482,7 @@ class LogAnalysisHistoryComparisonService:
             source_keys_by_project.setdefault(project_name, set()).update(source_keys)
 
         return {
-            project_name: sorted(source_keys)
+            project_name: (["*"] if "*" in source_keys else sorted(source_keys))
             for project_name, source_keys in sorted(source_keys_by_project.items())
         }
 
@@ -627,16 +652,29 @@ class LogAnalysisHistoryComparisonService:
         if comparison is None or not comparison.current_tool_scope_by_project:
             return []
 
-        scoped_projects: set[str] = set(comparison.current_tool_scope_by_project)
-        collected_projects: set[str] = {
-            project.project_name
+        collection_scope_by_project: dict[str, set[str]] = {
+            project.project_name: {source.source_key for source in project.sources}
             for project in prompt_context.collection.projects
             if project.project_name
         }
-        scope_is_limited: bool = bool(collected_projects - scoped_projects) or any(
-            "*" not in source_keys
-            for source_keys in comparison.current_tool_scope_by_project.values()
-        )
+        scoped_projects: set[str] = set(comparison.current_tool_scope_by_project)
+        collected_projects: set[str] = set(collection_scope_by_project)
+        if collection_scope_by_project:
+            scope_is_limited: bool = any(
+                project_name not in scoped_projects
+                or (
+                    "*" not in comparison.current_tool_scope_by_project[project_name]
+                    and not source_keys.issubset(
+                        set(comparison.current_tool_scope_by_project[project_name])
+                    )
+                )
+                for project_name, source_keys in collection_scope_by_project.items()
+            )
+        else:
+            scope_is_limited = any(
+                "*" not in source_keys
+                for source_keys in comparison.current_tool_scope_by_project.values()
+            )
         if not scope_is_limited:
             return []
 

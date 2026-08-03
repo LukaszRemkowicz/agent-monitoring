@@ -1,0 +1,21 @@
+{
+  "action": "inspect_proxy_activity",
+  "project_name": "demo-shop",
+  "source_keys": ["nginx", "traefik"],
+  "status_counts": {
+    "200": 164,
+    "401": 31,
+    "403": 11,
+    "404": 38
+  },
+  "upstream_error_count": 0,
+  "admin_login_failure_count": 31,
+  "admin_login_success_count": 0,
+  "authentication_lockout_count": 0,
+  "admin_login_first_failure": "2026-05-19T03:14:01Z",
+  "admin_login_last_failure": "2026-05-19T03:17:08Z",
+  "summary": "Complete collected proxy evidence for /admin/login contains 31 HTTP 401 responses, no successful admin response, no lockout evidence, and no upstream error between 03:14 and 03:17 UTC.",
+  "limitations": [
+    "No observed authentication success or upstream proxy error does not prove absence of all user or service impact outside the inspected proxy evidence."
+  ]
+}

@@ -2,29 +2,42 @@
 
 Use this skill before choosing `final_report`, `call_tools`, or `read_skills`.
 
-## Decision Goal
+## Decision Method
 
-Minimize follow-up tools when `grouped_error_diff` proves the current and previous
-grouped-error baselines are operationally equivalent.
+1. Apply the evidence-completeness gate from the critical decision rules.
+2. Review current families in the declared attention order before using history.
+3. Compare semantic meaning across project, source, severity, outcome, route,
+   method, host, and message. Do not decide from counts alone.
+4. Compare history only for equivalent scope. Treat a previous high-severity
+   family as resolved only when complete current evidence covers that scope;
+   otherwise use the smallest targeted verification.
+5. Call only the smallest deterministic tool set that resolves material
+   uncertainty about outcome, impact, scope, ownership, or confidence.
+6. Error groups prove only the listed responses. For actionable authentication
+   or security findings, retrieve targeted status evidence before `final_report`
+   when it can determine success and change severity. Never infer success or its
+   absence from error groups.
+7. An unavailable source cannot be replaced by rechecking other sources. Report
+   the gap, avoid trend claims for that scope, and call another tool only for a
+   separate material question.
 
-Do not investigate count-only changes when project, source, severity, category,
-status class, route/message family, and source coverage are unchanged.
+## Optional Skills
 
-Do investigate with targeted tools when the diff shows new, worsened, resolved
-high-severity, changed source coverage, changed affected scope, or an evidence
-quality warning.
-
-## Grouped-Error Baseline Method
-
-When `evidence.kind=grouped_error_baseline` and both `evidence.previous_grouped_errors` and `evidence.current_grouped_errors` are available:
-
-1. Normalize examples into semantic families before comparing them. Use project, source ownership, category, severity, status class, route intent, message meaning, and coverage context. Do not compare only counts.
-2. Decide whether the two baselines prove the same operational story. Stable means the same affected projects, source ownership, categories, severity posture, status classes, route/message families, and coverage confidence.
-3. Treat a change as material when it changes or obscures likely impact, cause, scope, severity, coverage confidence, route intent, source ownership, or whether the pattern is benign.
-4. Use `final_report` only when the grouped-error evidence is complete enough to prove a stable low-risk baseline. If examples are omitted or the visible examples/distributions do not prove stability, do not assume the hidden fingerprints are harmless.
-5. Use `call_tools` when current fingerprints introduce, remove, or shift source ownership, route intent, message meaning, severity posture, status class, project scope, or coverage confidence. Choose the smallest set of tools that can resolve the uncertainty, but make that pass complete enough for the affected semantic family.
-6. Use `read_skills` only when a listed optional skill would change the interpretation of the observed facts. Do not read optional skills just to restate known low-risk scanner noise.
+- Mandatory skills are already loaded. Request only optional skills listed in
+  the prompt, and never request one marked `retrieved` again.
+- Read `bot_detection` when unknown or material scanner/probe evidence needs
+  interpretation. Skip it for known blocked watch-only 403/404 probes.
+- After gathering needed deterministic facts, read `owasp_security` only when it
+  can still change unclear security interpretation or incident framing. Skip it
+  when mandatory guidance already establishes the outcome, severity, and action.
+- An optional skill is not evidence until it has been retrieved.
 
 ## Report Requirement
 
-If you return `final_report` from grouped_error_baseline evidence, write analyst synthesis rather than a grouped-error inventory. Say why the two baselines prove a stable, materially changed, or uncertain operational story. Name only material family shifts that affect impact, risk, confidence, or follow-up.
+Treat zero-line and unavailable sources as coverage gaps, not proof of health.
+Use live tools for live-state claims. Synthesize impact, risk, confidence, and
+trend; do not turn the report into a family inventory.
+Access logs prove path, status, and response byte count, not response contents.
+Call sensitive-file disclosure potential unless separate evidence confirms it.
+Without that evidence, do not say the file was exposed, disclosed, compromised,
+or publicly retrievable, and do not claim exfiltration.

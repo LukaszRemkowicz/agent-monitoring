@@ -1,20 +1,26 @@
 {
   "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
   "analysis_cautions": [
-    "Grouped output mixes current high-severity evidence with routine scanner noise; inspect exact matches before final_report."
+    "Grouped output contains three unexpected non-empty HTTP 200 responses on sensitive paths mixed with routine scanner noise.",
+    "Access logs do not prove response contents; describe potential exposure, not confirmed file disclosure or exfiltration."
   ],
-  "grouped_error_count": 4,
+  "grouped_error_count": 5,
   "groups": [
     {
       "fingerprint": "demo-shop:edge:http_2xx:200:/.env",
       "category": "sensitive_path_success",
-      "severity": "critical",
+      "severity": "high",
       "count": 2,
-      "source_keys": ["nginx", "traefik"],
+      "source_keys": ["nginx"],
       "request_paths": ["/.env"],
       "status_codes": [200],
       "levels": [],
       "message_summary": "Sensitive path /.env returned HTTP 200 through the edge.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Sensitive path /.env returned HTTP 200 through the edge.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T02:10:00Z",
       "last_timestamp": "2026-05-19T02:11:00Z",
       "first_seen": {
@@ -26,37 +32,70 @@
       },
       "last_seen": {
         "line": "203.0.113.10 - - [19/May/2026:02:11:00 +0000] \"GET /.env HTTP/1.1\" 200 512",
-        "line_number": 144,
+        "line_number": 319,
         "line_truncated": false,
-        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
-        "source_key": "traefik"
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
       }
     },
     {
-      "fingerprint": "demo-shop:edge:http_403:/.git/config",
-      "category": "blocked_sensitive_probe",
-      "severity": "medium",
-      "count": 11,
-      "source_keys": ["nginx", "traefik"],
+      "fingerprint": "demo-shop:edge:http_2xx:200:/.git/config",
+      "category": "sensitive_path_success",
+      "severity": "high",
+      "count": 2,
+      "source_keys": ["nginx"],
       "request_paths": ["/.git/config"],
-      "status_codes": [403],
+      "status_codes": [200],
       "levels": [],
-      "message_summary": "Blocked attempts to fetch Git configuration paths.",
-      "first_timestamp": "2026-05-19T01:30:00Z",
-      "last_timestamp": "2026-05-19T21:06:00Z",
+      "message_summary": "Repository configuration path /.git/config returned HTTP 200.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Repository configuration path /.git/config returned HTTP 200.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T02:12:00Z",
+      "last_timestamp": "2026-05-19T02:13:00Z",
       "first_seen": {
-        "line": "198.51.100.77 - - [19/May/2026:01:30:00 +0000] \"GET /.git/config HTTP/1.1\" 403 162",
-        "line_number": 72,
+        "line": "203.0.113.10 - - [19/May/2026:02:12:00 +0000] \"GET /.git/config HTTP/1.1\" 200 274",
+        "line_number": 321,
         "line_truncated": false,
         "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
         "source_key": "nginx"
       },
       "last_seen": {
-        "line": "198.51.100.77 GET /.git/config 403",
-        "line_number": 609,
+        "line": "203.0.113.10 - - [19/May/2026:02:13:00 +0000] \"GET /.git/config HTTP/1.1\" 200 274",
+        "line_number": 322,
         "line_truncated": false,
-        "output_file": "workflow/demo-shop/2026-05-19/traefik.log",
-        "source_key": "traefik"
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      }
+    },
+    {
+      "fingerprint": "demo-shop:edge:http_2xx:200:/backup.sql",
+      "category": "sensitive_path_success",
+      "severity": "high",
+      "count": 1,
+      "source_keys": ["nginx"],
+      "request_paths": ["/backup.sql"],
+      "status_codes": [200],
+      "levels": [],
+      "message_summary": "Database backup path /backup.sql returned HTTP 200.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Database backup path /backup.sql returned HTTP 200.",
+      "semantic_identity_hash": "",
+      "first_timestamp": "2026-05-19T02:14:00Z",
+      "last_timestamp": "2026-05-19T02:14:00Z",
+      "first_seen": {
+        "line": "203.0.113.10 - - [19/May/2026:02:14:00 +0000] \"GET /backup.sql HTTP/1.1\" 200 8192",
+        "line_number": 324,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
+      },
+      "last_seen": {
+        "line": "203.0.113.10 - - [19/May/2026:02:14:00 +0000] \"GET /backup.sql HTTP/1.1\" 200 8192",
+        "line_number": 324,
+        "line_truncated": false,
+        "output_file": "workflow/demo-shop/2026-05-19/nginx.log",
+        "source_key": "nginx"
       }
     },
     {
@@ -69,6 +108,9 @@
       "status_codes": [],
       "levels": ["error"],
       "message_summary": "Celery worker logged transient catalog metadata sync timeout retries.",
+      "identity_kind": "explicit_message",
+      "semantic_summary": "Celery worker logged transient catalog metadata sync timeout retries.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T08:12:00Z",
       "last_timestamp": "2026-05-19T08:18:00Z",
       "first_seen": {
@@ -96,6 +138,9 @@
       "status_codes": [404],
       "levels": [],
       "message_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine blocked WordPress scanner noise on a non-WordPress site.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T00:20:00Z",
       "last_timestamp": "2026-05-19T23:40:00Z",
       "first_seen": {
@@ -114,12 +159,15 @@
       }
     }
   ],
-  "matching_line_count": 54,
+  "matching_line_count": 46,
   "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 5,
+  "next_offset": 5,
+  "partial_page": false,
   "next_step_tips": [
-    "Use grep_log_snapshot for exact sensitive-path lines.",
-    "Use inspect_proxy_activity for proxy status context.",
-    "Use bot_detection only after distinguishing scanner noise from the successful sensitive-path response."
+    "Use grep_log_snapshot for exact /.env, /.git/config, and /backup.sql response lines.",
+    "Use inspect_proxy_activity for proxy status context."
   ],
   "project_name": "demo-shop",
   "requested_project_name": "demo-shop",
@@ -133,7 +181,7 @@
   ],
   "session_id": "fixture-session-id",
   "snapshot_dir": "workflow/demo-shop/2026-05-19",
-  "summary": "Current logs contain one critical sensitive-path success group plus routine blocked probe and worker-noise groups.",
+  "summary": "Current logs contain three unexpected non-empty sensitive-path HTTP 200 responses plus routine scanner and worker noise.",
   "truncated": false,
   "workspace": "workflow"
 }

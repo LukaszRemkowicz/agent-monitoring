@@ -21,6 +21,7 @@ from schemas import (
     LogAnalysisGroupedErrorsResult,
     LogAnalysisReportFingerprint,
 )
+from services.log_fingerprints import LOG_ANALYSIS_FINGERPRINT_VERSION
 
 
 @dataclass(frozen=True)
@@ -177,7 +178,7 @@ async def _upsert_log_analysis(
 
 def _baseline_fingerprints(*, analysis_date: date, severity: str) -> LogAnalysisFingerprints:
     grouped_errors = FakerMCP.load_fixture_payload(
-        "sensitive_path_success",
+        "watch_only_probes",
         "group_errors",
         target_analysis_date=analysis_date,
     )
@@ -232,7 +233,7 @@ def _fingerprints_from_grouped_errors(
     grouped_error_result = LogAnalysisGroupedErrorsResult.from_mcp_payload(grouped_errors)
     since, until = _mcp_window_strings(analysis_date)
     return LogAnalysisFingerprints(
-        version="log-analysis-fingerprints-v1",
+        version=LOG_ANALYSIS_FINGERPRINT_VERSION,
         log_window=LogAnalysisFingerprintLogWindow(since=since, until=until),
         collection=LogAnalysisFingerprintCollection(
             workspace="workflow",
@@ -241,8 +242,8 @@ def _fingerprints_from_grouped_errors(
         ),
         coverage_totals={
             "projects": 2,
-            "sources": 8,
-            "collected_sources": 8,
+            "sources": 9,
+            "collected_sources": 9,
             "unavailable_sources": 0,
             "zero_line_sources": 0,
         },
@@ -311,8 +312,8 @@ def _coverage_snapshot(analysis_date: date) -> dict[str, object]:
         ],
         "totals": {
             "projects": 2,
-            "sources": 8,
-            "collected_sources": 8,
+            "sources": 9,
+            "collected_sources": 9,
             "unavailable_sources": 0,
             "zero_line_sources": 0,
         },

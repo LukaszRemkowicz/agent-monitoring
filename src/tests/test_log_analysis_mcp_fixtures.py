@@ -60,6 +60,15 @@ def test_log_analysis_mcp_fixtures_validate_common_workflow_payload() -> None:
     assert collect_logs["requested_project_names"] == ["demo-shop", "host-security"]
 
 
+def test_fixture_bot_policy_skips_known_watch_only_probes() -> None:
+    workflow: WorkflowBootstrap = FakerMCP.load_workflow_bootstrap_fixture()
+
+    assert "bot_detection" in [skill.name for skill in workflow.optional_skills]
+    assert workflow.prompt.count("Known blocked 403/404 probes") == 2
+    assert "If deterministic evidence shows bot, scanner, probe" not in workflow.prompt
+    assert "If tool results show bot, scanner, probe" not in workflow.prompt
+
+
 @pytest.mark.parametrize("scenario", ["sensitive_path_success", "backend_5xx"])
 def test_log_analysis_group_error_fixtures_include_signal_and_noise(scenario: str) -> None:
     demo_shop_group_errors = FakerMCP.load_fixture_payload(
@@ -109,7 +118,7 @@ async def test_fixture_backed_mcp_client_runs_real_agent_loop(
                         "arguments": {
                             "project_name": "demo-shop",
                             "source_key": "nginx",
-                            "pattern": "/.env",
+                            "grep": "/.env",
                         },
                     },
                     {

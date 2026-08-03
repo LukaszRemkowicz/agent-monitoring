@@ -1,0 +1,16 @@
+{
+  "action": "build_incident_bundle",
+  "project_name": "demo-shop",
+  "incident_key": "admin-login-and-audit-export-correlation",
+  "summary": "The authentication burst and audit export occupy separate time windows; the scheduler dispatched the export as service:reporter.",
+  "evidence": [
+    "The grouped admin-login failures occurred from 03:14:01 through 03:17:08 UTC.",
+    "The scheduler dispatched daily job audit-export-7 at 13:59:58 UTC as service:reporter.",
+    "The backend completed job audit-export-7 at 14:00:04 UTC as service:reporter.",
+    "Current evidence contains no shared request ID, job ID, principal, or overlapping time window linking the external login failures to the scheduled export."
+  ],
+  "limitations": [
+    "This bundle does not establish whether /admin/login produced statuses other than the grouped HTTP 401 responses.",
+    "Separate time windows and identifiers show only that no link was observed; they do not prove causal independence or authorization."
+  ]
+}

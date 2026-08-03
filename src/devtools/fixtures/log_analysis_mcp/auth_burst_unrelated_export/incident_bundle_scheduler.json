@@ -1,0 +1,15 @@
+{
+  "action": "build_incident_bundle",
+  "project_name": "demo-shop",
+  "source_keys": ["scheduler"],
+  "incident_key": "privileged-export-dispatch",
+  "summary": "The scheduler dispatched daily job audit-export-7 as service:reporter at 13:59:58 UTC.",
+  "evidence": [
+    "The scheduler dispatched daily job audit-export-7 at 13:59:58 UTC as service:reporter."
+  ],
+  "limitations": [
+    "This scheduler-scoped bundle contains no backend completion evidence.",
+    "A configured daily dispatch and service-account actor do not establish authorization.",
+    "This bundle does not establish a relationship to the earlier login failures."
+  ]
+}

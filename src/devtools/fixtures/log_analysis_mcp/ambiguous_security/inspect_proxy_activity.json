@@ -1,0 +1,16 @@
+{
+  "action": "inspect_proxy_activity",
+  "project_name": "demo-shop",
+  "source_keys": ["nginx", "traefik"],
+  "status_counts": {
+    "200": 164,
+    "401": 18,
+    "404": 3
+  },
+  "upstream_error_count": 0,
+  "admin_login_failure_count": 18,
+  "admin_login_success_count": 0,
+  "authentication_lockout_count": 0,
+  "last_failed_admin_login": "2026-05-19T03:16:42Z",
+  "summary": "The admin-login burst produced 18 HTTP 401 responses, no successful admin response, no lockout evidence, and no upstream error."
+}

@@ -1,0 +1,15 @@
+{
+  "action": "build_incident_bundle",
+  "project_name": "demo-shop",
+  "source_keys": ["backend"],
+  "incident_key": "privileged-export-completion",
+  "summary": "The backend completed audit-export-7 as service:reporter at 14:00:04 UTC.",
+  "evidence": [
+    "The backend completed job audit-export-7 at 14:00:04 UTC as service:reporter."
+  ],
+  "limitations": [
+    "This backend-scoped bundle contains no scheduler dispatch evidence and does not establish that the export was scheduled or expected.",
+    "The observed service-account actor does not establish authorization.",
+    "This bundle does not establish a relationship to the earlier login failures."
+  ]
+}

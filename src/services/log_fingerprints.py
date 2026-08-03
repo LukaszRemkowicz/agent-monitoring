@@ -20,7 +20,7 @@ from schemas import (
 )
 from utils.runtime import dump_arguments, hash_text
 
-LOG_ANALYSIS_FINGERPRINT_VERSION = "log-analysis-fingerprint-v1"
+LOG_ANALYSIS_FINGERPRINT_VERSION = "log-analysis-fingerprint-v2"
 
 
 class LogAnalysisFingerprintBuilder:
@@ -31,6 +31,7 @@ class LogAnalysisFingerprintBuilder:
         *,
         collect_logs: CollectLogsArtifact,
         tool_results: list[LogAnalysisToolResult],
+        preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] | None = None,
         final_report: LogAnalysisFinalReport,
         log_window_since: datetime,
         log_window_until: datetime,
@@ -41,9 +42,19 @@ class LogAnalysisFingerprintBuilder:
         tool_fingerprints: list[LogAnalysisToolResultFingerprint] = _build_tool_fingerprints(
             tool_results
         )
-        grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] = (
-            LogAnalysisFingerprintBuilder.build_grouped_error_runs(tool_results)
-        )
+        grouped_error_runs = list(preflight_grouped_error_runs or [])
+        covered_sources_by_project: dict[str, set[str]] = {}
+        for run in grouped_error_runs:
+            covered_sources_by_project.setdefault(run.result.project_name, set()).update(
+                run.result.searched_source_keys
+            )
+        for run in LogAnalysisFingerprintBuilder.build_grouped_error_runs(tool_results):
+            project_name = run.result.project_name
+            searched_source_keys = set(run.result.searched_source_keys)
+            if searched_source_keys <= covered_sources_by_project.get(project_name, set()):
+                continue
+            grouped_error_runs.append(run)
+            covered_sources_by_project.setdefault(project_name, set()).update(searched_source_keys)
         return LogAnalysisFingerprintPacket(
             fingerprint_version=LOG_ANALYSIS_FINGERPRINT_VERSION,
             fingerprints=LogAnalysisFingerprints(

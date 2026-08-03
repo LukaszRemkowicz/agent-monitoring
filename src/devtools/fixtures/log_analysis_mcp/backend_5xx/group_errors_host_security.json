@@ -1,5 +1,7 @@
 {
   "action": "group_errors",
+  "fingerprint_version": "group-errors-v2",
+  "snapshot_collected_at": "2026-05-19T00:00:00Z",
   "analysis_cautions": [],
   "grouped_error_count": 3,
   "groups": [
@@ -13,6 +15,9 @@
       "status_codes": [403, 404],
       "levels": [],
       "message_summary": "Edge access logs show blocked scanner probes.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Edge access logs show blocked scanner probes.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T00:22:00Z",
       "last_timestamp": "2026-05-19T23:10:00Z",
       "first_seen": {
@@ -40,6 +45,9 @@
       "status_codes": [],
       "levels": ["notice"],
       "message_summary": "Fail2ban recorded ssh-auth and nginx jail bans.",
+      "identity_kind": "explicit_message",
+      "semantic_summary": "Fail2ban recorded ssh-auth and nginx jail bans.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T02:01:00Z",
       "last_timestamp": "2026-05-19T19:44:00Z",
       "first_seen": {
@@ -67,6 +75,9 @@
       "status_codes": [404],
       "levels": [],
       "message_summary": "Routine PHP exploit probes were blocked.",
+      "identity_kind": "http_summary",
+      "semantic_summary": "Routine PHP exploit probes were blocked.",
+      "semantic_identity_hash": "",
       "first_timestamp": "2026-05-19T01:20:00Z",
       "last_timestamp": "2026-05-19T22:18:00Z",
       "first_seen": {
@@ -87,6 +98,10 @@
   ],
   "matching_line_count": 45,
   "max_groups": 20,
+  "offset": 0,
+  "returned_group_count": 3,
+  "next_offset": 3,
+  "partial_page": false,
   "next_step_tips": ["Use inspect_proxy_activity if probe volume changed materially."],
   "project_name": "host-security",
   "requested_project_name": "host-security",

@@ -10,6 +10,7 @@ from exceptions import McpClientError
 from mcp import McpWorkflowClient
 from schemas import (
     CollectLogsArtifact,
+    DeterministicToolResponseModel,
     LogCollectionTaskStatusPayload,
     LogWorkspace,
     McpToolName,
@@ -913,6 +914,9 @@ async def test_mcp_workflow_client_reads_workflow_skill_resource() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
+    class ProjectToolResponse(DeterministicToolResponseModel):
+        project_name: str
+
     requests: list[dict[str, Any]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -936,13 +940,14 @@ async def test_mcp_workflow_client_calls_deterministic_tool() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    structured_content: dict[str, object] = await client.call_deterministic_tool(
+    response: ProjectToolResponse = await client.call_deterministic_tool(
         McpToolName.GROUP_ERRORS,
         {"project_name": "demo-shop"},
+        response_model=ProjectToolResponse,
     )
 
-    assert structured_content["action"] == McpToolName.GROUP_ERRORS
-    assert structured_content["project_name"] == "demo-shop"
+    assert response.action == McpToolName.GROUP_ERRORS
+    assert response.project_name == "demo-shop"
     assert requests[0]["params"] == {
         "name": McpToolName.GROUP_ERRORS,
         "arguments": {"project_name": "demo-shop"},
@@ -975,6 +980,7 @@ async def test_mcp_workflow_client_deterministic_tool_raises_result_error() -> N
         await client.call_deterministic_tool(
             McpToolName.GROUP_ERRORS,
             {"project_name": "demo-shop", "source_key": "backend"},
+            response_model=DeterministicToolResponseModel,
         )
 
     assert "Unknown source key 'backend'" in str(error_info.value)
