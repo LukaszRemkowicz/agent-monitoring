@@ -47,7 +47,9 @@ def test_prompt_grouped_error_compaction_requires_comparison() -> None:
         LogAnalysisComparisonMissingException,
         match="grouped-error comparison is required for prompt evidence",
     ):
-        LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(None)  # type: ignore[arg-type]
+        LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
+            None  # type: ignore[arg-type]
+        )
 
 
 def _grouped_error_run(

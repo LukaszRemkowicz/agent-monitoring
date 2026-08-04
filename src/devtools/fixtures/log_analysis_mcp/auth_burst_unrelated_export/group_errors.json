@@ -133,6 +133,8 @@
     }
   ],
   "matching_line_count": 81,
+  "analysis_complete": true,
+  "analysis_group_limit": 5000,
   "max_groups": 20,
   "offset": 0,
   "returned_group_count": 4,

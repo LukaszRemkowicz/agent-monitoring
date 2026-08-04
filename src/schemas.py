@@ -716,6 +716,8 @@ class GroupErrorsResponseModel(DeterministicToolResponseModel):
     next_step_tips: list[str]
     grouped_error_count: int
     matching_line_count: int
+    analysis_complete: bool
+    analysis_group_limit: int
     max_groups: int
     offset: int
     returned_group_count: int

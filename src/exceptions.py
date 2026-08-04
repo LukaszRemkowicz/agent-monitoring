@@ -191,7 +191,7 @@ def _parse_provider_error_string(value: str) -> tuple[str | None, str | None]:
         return None, None
     try:
         payload: object = ast.literal_eval(match.group(2))
-    except (SyntaxError, ValueError):
+    except SyntaxError, ValueError:
         return match.group(1), None
     return match.group(1), _extract_provider_error_message(payload)
 

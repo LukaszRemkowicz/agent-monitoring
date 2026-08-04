@@ -331,9 +331,11 @@ uv run mypy --explicit-package-bases src
 
 GitHub Actions workflows live in `.github/workflows`:
 
-- `ci.yml`: quality checks, tests, CodeQL, version check, Docker build smoke
+- `ci.yml`: quality checks, tests, CodeQL, Trivy, version check, Docker build smoke
 - `codeql.yml`: scheduled CodeQL scan
 - `release.yml`: tags `main` through the shared release workflow
+
+Release checks and tags use the static `[project].version` in `pyproject.toml`.
 
 Operational scripts live under `infra/scripts`:
 

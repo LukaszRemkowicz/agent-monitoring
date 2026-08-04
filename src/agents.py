@@ -463,8 +463,9 @@ class MonitoringWorkflowAgent:
         evidence object.
         """
 
+        history_service = self.history_comparison_service
         source_coverage_comparison: LogAnalysisSourceCoverageComparison = (
-            self.history_comparison_service.build_missing_source_comparison(  # type: ignore[union-attr]
+            history_service.build_missing_source_comparison(  # type: ignore[union-attr]
                 previous_coverage_snapshot=previous_analysis.coverage_snapshot.model_dump(
                     mode="json"
                 ),
@@ -999,7 +1000,7 @@ class MonitoringWorkflowAgent:
                 "offset": 0,
                 "returned_group_count": len(groups),
                 "next_offset": len(groups),
-                "partial_page": False,
+                "partial_page": not response.analysis_complete,
                 "truncated": False,
             }
         )

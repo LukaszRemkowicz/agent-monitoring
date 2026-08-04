@@ -87,11 +87,13 @@ class _ManyPageMcpClient:
         self,
         page_count: int,
         *,
+        analysis_complete: bool = True,
         incomplete_last_page: bool = False,
         missing_next_offset: bool = False,
         searched_source_keys: list[str] | None = None,
     ) -> None:
         self.page_count = page_count
+        self.analysis_complete = analysis_complete
         self.incomplete_last_page = incomplete_last_page
         self.missing_next_offset = missing_next_offset
         self.searched_source_keys = (
@@ -122,6 +124,8 @@ class _ManyPageMcpClient:
                 "session_id": None,
                 "grouped_error_count": self.page_count,
                 "matching_line_count": self.page_count,
+                "analysis_complete": self.analysis_complete,
+                "analysis_group_limit": 5_000,
                 "searched_source_keys": self.searched_source_keys,
                 "analysis_cautions": [],
                 "next_step_tips": [],
@@ -129,7 +133,7 @@ class _ManyPageMcpClient:
                 "offset": offset,
                 "returned_group_count": 1,
                 **({} if self.missing_next_offset else {"next_offset": next_offset}),
-                "partial_page": self.page_count > 1,
+                "partial_page": self.page_count > 1 or not self.analysis_complete,
                 "truncated": truncated,
                 "summary": "Grouped errors.",
                 "groups": [
@@ -185,10 +189,28 @@ async def test_group_error_pagination_reads_until_mcp_is_complete() -> None:
     )
 
     assert isinstance(result, GroupErrorsResponseModel)
+    assert result.analysis_complete is True
+    assert result.analysis_group_limit == 5_000
     assert result.truncated is False
     assert result.next_offset == 51
     assert len(result.groups) == 51
     assert mcp_client.requested_offsets == list(range(51))
+
+
+@pytest.mark.asyncio
+async def test_group_error_pagination_preserves_incomplete_analysis() -> None:
+    result = await _agent(
+        _ManyPageMcpClient(page_count=1, analysis_complete=False)
+    )._collect_all_group_error_pages(
+        arguments=GroupErrorsArgumentsModel(
+            project_name="demo",
+            source_keys=["backend"],
+            max_groups=1,
+        ),
+    )
+
+    assert result.analysis_complete is False
+    assert result.partial_page is True
 
 
 @pytest.mark.asyncio
@@ -233,6 +255,8 @@ def test_group_error_response_rejects_null_next_offset() -> None:
                 "session_id": None,
                 "grouped_error_count": 0,
                 "matching_line_count": 0,
+                "analysis_complete": True,
+                "analysis_group_limit": 5_000,
                 "searched_source_keys": [],
                 "analysis_cautions": [],
                 "next_step_tips": [],
