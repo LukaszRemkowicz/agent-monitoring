@@ -1,6 +1,6 @@
 [project]
 name = "agent-monitoring"
-version = "0.1.0"
+version = "1.2.3"
 description = "Standalone background monitoring app for log and sitemap analysis."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -22,6 +22,8 @@ dependencies = [
 dev = [
     "black>=26.5.1",
     "factory-boy>=3.3.3",
+    "flake8==7.3.0",
+    "flake8-pyproject==1.2.4",
     "isort>=8.0.1",
     "mypy>=2.1.0",
     "pip-audit>=2.10.0",
@@ -81,9 +83,16 @@ profile = "black"
 line_length = 100
 skip = [".venv", "migrations"]
 
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E203", "W503"]
+exclude = [".venv", "migrations"]
+per-file-ignores = ["src/cli/shell.py:E402"]
+
 [tool.mypy]
 python_version = "3.13"
 mypy_path = ["src"]
+explicit_package_bases = true
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
