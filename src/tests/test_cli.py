@@ -957,7 +957,7 @@ def test_log_analysis_command_defaults_analysis_date_to_previous_local_day(
 ) -> None:
     class FakeDateTime(datetime):
         @classmethod
-        def now(cls, tz: Any = None) -> "FakeDateTime":
+        def now(cls, tz: Any = None) -> FakeDateTime:
             return cls(2026, 5, 20, 0, 1, tzinfo=tz)
 
     class FakeLogAnalysisService:
