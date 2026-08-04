@@ -10,11 +10,13 @@ jobs:
   quality:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/python-quality-uv.yml@main
     with:
+      python_version: "3.14"
       working_directory: .
 
   tests:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
     with:
+      python_version: "3.14"
       working_directory: .
       postgres_enabled: true
       postgres_db: agent_monitoring_test
@@ -79,7 +81,7 @@ jobs:
       category: agent-monitoring-filesystem
 
   version-check:
-    uses: LukaszRemkowicz/ci-cd/.github/workflows/version-check.yml@main
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/pyproject-version-check.yml@main
     with:
       base_branch: main
       head_branch: dev

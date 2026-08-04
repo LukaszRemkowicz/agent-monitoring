@@ -335,6 +335,8 @@ GitHub Actions workflows live in `.github/workflows`:
 - `codeql.yml`: scheduled CodeQL scan
 - `release.yml`: tags `main` through the shared release workflow
 
+Release checks and tags use the static `[project].version` in `pyproject.toml`.
+
 Operational scripts live under `infra/scripts`:
 
 ```bash
