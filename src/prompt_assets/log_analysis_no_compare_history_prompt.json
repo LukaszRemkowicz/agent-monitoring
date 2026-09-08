@@ -2,7 +2,7 @@
   "mode": "no_compare_history",
   "purpose": "Analyze complete paginated current-window evidence first; compare a previous baseline only as secondary context when present.",
   "evidence_contract": {
-    "current_grouped_errors": "Primary complete paginated current-window evidence. All semantic families are visible when evidence_complete=true.",
+    "current_grouped_errors": "Primary complete paginated current-window evidence. All semantic family identities are visible when evidence_complete=true; detailed rows are bounded per attention band and omitted_details groups remaining identities by scope.",
     "history": "Secondary context from previous_grouped_errors and previous_analysis when available. If absent, perform a current-only review.",
     "source_coverage": "Scope metadata used to decide whether current and previous evidence are comparable."
   },

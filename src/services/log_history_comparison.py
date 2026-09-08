@@ -27,6 +27,7 @@ from utils.grouped_errors import (
     build_grouped_error_semantics,
     coalesce_grouped_errors,
     is_high_severity_group,
+    project_grouped_error_prompt_rows,
 )
 from utils.log_artifacts import build_missing_source_map
 from utils.log_reports import build_final_report_search_text, split_report_sentences
@@ -287,7 +288,7 @@ class LogAnalysisHistoryComparisonService:
     def compact_grouped_error_comparison_for_prompt(
         comparison: LogAnalysisGroupedErrorComparison,
     ) -> LogAnalysisPromptGroupedErrorComparison:
-        """Return every changed semantic family without raw seen-line payloads."""
+        """Return complete change counts and a bounded detailed family ledger."""
 
         if comparison is None:
             raise LogAnalysisComparisonMissingException(
@@ -302,6 +303,25 @@ class LogAnalysisHistoryComparisonService:
         current_changed_groups: list[LogAnalysisGroupedErrorSignal] = (
             LogAnalysisHistoryComparisonService._prioritize_current_changed_groups(comparison)
         )
+        previous_changed_groups: list[LogAnalysisGroupedErrorSignal] = sorted(
+            comparison.previous_changed_groups,
+            key=LogAnalysisHistoryComparisonService._group_prompt_priority_key,
+        )
+        current_changed_examples = [
+            LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
+            for signal in current_changed_groups
+        ]
+        previous_changed_examples = [
+            LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
+            for signal in previous_changed_groups
+        ]
+        current_changed_examples, current_omitted_details = project_grouped_error_prompt_rows(
+            current_changed_examples,
+            detail_limit_per_attention=0,
+        )
+        previous_changed_examples, previous_omitted_details = project_grouped_error_prompt_rows(
+            previous_changed_examples
+        )
         return LogAnalysisPromptGroupedErrorComparison(
             available=comparison.available,
             current_tool_scope_by_project=comparison.current_tool_scope_by_project,
@@ -312,6 +332,10 @@ class LogAnalysisHistoryComparisonService:
             persisting_fingerprint_count=len(comparison.persisting_fingerprints),
             worsened_fingerprint_count=len(comparison.worsened_fingerprints),
             improved_fingerprint_count=len(comparison.improved_fingerprints),
+            new_fingerprints=comparison.new_fingerprints,
+            resolved_fingerprints=comparison.resolved_fingerprints,
+            worsened_fingerprints=comparison.worsened_fingerprints,
+            improved_fingerprints=comparison.improved_fingerprints,
             new_high_severity_fingerprint_count=len(comparison.new_high_severity_fingerprints),
             new_high_severity_fingerprints=comparison.new_high_severity_fingerprints,
             resolved_high_severity_fingerprint_count=len(
@@ -325,17 +349,17 @@ class LogAnalysisHistoryComparisonService:
                 comparison.resolved_high_severity_current_scope_covered
             ),
             evidence_quality_warnings=evidence_quality_warnings,
-            current_changed_examples=[
-                LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
-                for signal in current_changed_groups
-            ],
-            previous_changed_examples=[
-                LogAnalysisHistoryComparisonService._compact_grouped_error_example(signal)
-                for signal in comparison.previous_changed_groups
-            ],
+            current_changed_examples=current_changed_examples,
+            previous_changed_examples=previous_changed_examples,
+            current_omitted_details=current_omitted_details,
+            previous_omitted_details=previous_omitted_details,
             rationale=(
-                "Every changed semantic family is included. Seen-line payloads are omitted "
-                "because current raw evidence remains available through deterministic tools."
+                "Changed-family aggregate counts and identities are complete. Detailed rows "
+                "for current families are not duplicated from current_grouped_errors; "
+                "current_omitted_details retains every changed current identity. Previous "
+                "detail rows are bounded per attention band, with remaining identities in "
+                "previous_omitted_details. Seen-line payloads remain available through "
+                "deterministic tools."
             ),
         )
 
@@ -345,11 +369,19 @@ class LogAnalysisHistoryComparisonService:
     ) -> list[LogAnalysisGroupedErrorSignal]:
         return sorted(
             comparison.current_changed_groups,
-            key=lambda group: (
-                attention_priority_rank(build_grouped_error_semantics(group).attention_priority),
-                0 if is_high_severity_group(group) else 1,
-                group.fingerprint,
-            ),
+            key=LogAnalysisHistoryComparisonService._group_prompt_priority_key,
+        )
+
+    @staticmethod
+    def _group_prompt_priority_key(
+        group: LogAnalysisGroupedErrorSignal,
+    ) -> tuple[int, int, int, str, str]:
+        return (
+            attention_priority_rank(build_grouped_error_semantics(group).attention_priority),
+            0 if is_high_severity_group(group) else 1,
+            -group.count,
+            group.project_name,
+            group.fingerprint,
         )
 
     @staticmethod

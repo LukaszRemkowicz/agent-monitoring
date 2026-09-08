@@ -25,6 +25,7 @@ from schemas import LogAnalysisSeverity, SitemapAnalysisIn, SitemapAnalysisOut, 
 from utils.llm_usage import usage_cost_usd
 
 logger = get_logger(__name__)
+SITEMAP_ISSUE_EXAMPLE_LIMIT_PER_CATEGORY = 5
 
 
 class SitemapIssueCategory(StrEnum):
@@ -447,9 +448,13 @@ class LLMSummaryBuilder:
         *,
         llm_provider: LLMProvider,
         mcp_client: McpWorkflowClient,
+        model_name: str | None = None,
+        max_output_tokens: int = 1_200,
     ) -> None:
         self.llm_provider = llm_provider
         self.mcp_client = mcp_client
+        self.model_name = model_name
+        self.max_output_tokens = max_output_tokens
 
     async def summarize(
         self,
@@ -459,6 +464,7 @@ class LLMSummaryBuilder:
         """Return summary fields for the persisted sitemap analysis."""
 
         workflow: WorkflowBootstrap = await self.mcp_client.get_sitemap_workflow_bundle()
+        issue_examples, omitted_issue_counts = _project_sitemap_issues_for_prompt(report.issues)
         response: LLMResponse = self.llm_provider.generate(
             LLMRequest(
                 messages=(
@@ -475,7 +481,8 @@ class LLMSummaryBuilder:
                                 "total_urls": report.total_urls,
                                 "issue_count": len(report.issues),
                                 "issue_summary": issue_summary,
-                                "issues": [issue.as_dict() for issue in report.issues],
+                                "issues": issue_examples,
+                                "omitted_issue_counts": omitted_issue_counts,
                             },
                             sort_keys=True,
                             ensure_ascii=True,
@@ -484,8 +491,10 @@ class LLMSummaryBuilder:
                 ),
                 options=GenerationOptions(
                     temperature=0.0,
+                    max_output_tokens=self.max_output_tokens,
                     response_format=ResponseFormat.JSON_OBJECT,
                 ),
+                model=self.model_name,
                 metadata={
                     "workflow_name": workflow.workflow_name,
                     "phase": "summary",
@@ -496,11 +505,33 @@ class LLMSummaryBuilder:
         if payload is None and response.text is not None:
             payload = json.loads(response.text)
         summary: SitemapSummaryPayload = SitemapSummaryPayload.model_validate(payload)
+        cost_usd: float | None = usage_cost_usd(
+            response.usage,
+            model_name=response.model_name or self.model_name,
+        )
         return {
             **summary.model_dump(),
             "gpt_tokens_used": response.usage.total_tokens if response.usage else 0,
-            "gpt_cost_usd": usage_cost_usd(response.usage),
+            "gpt_cost_usd": cost_usd if cost_usd is not None else 0.0,
         }
+
+
+def _project_sitemap_issues_for_prompt(
+    issues: list[SitemapIssue],
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    """Return bounded per-category examples plus exact omitted counts."""
+
+    examples: list[dict[str, object]] = []
+    selected_counts: Counter[str] = Counter()
+    omitted_counts: Counter[str] = Counter()
+    for issue in issues:
+        category: str = issue.category.value
+        if selected_counts[category] < SITEMAP_ISSUE_EXAMPLE_LIMIT_PER_CATEGORY:
+            examples.append(issue.as_dict())
+            selected_counts[category] += 1
+        else:
+            omitted_counts[category] += 1
+    return examples, dict(omitted_counts)
 
 
 class AnalysisRunner:

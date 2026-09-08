@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections import Counter
 from typing import cast
 
 import pytest
@@ -312,6 +314,7 @@ async def test_llm_summary_builder_estimates_cost_when_provider_omits_cost() -> 
     builder = LLMSummaryBuilder(
         llm_provider=provider,
         mcp_client=FakeSitemapWorkflowClient(),
+        model_name="gpt-4.1-mini",
     )
     report = SitemapAuditReport(
         root_sitemap_url="https://example.com/sitemap.xml",
@@ -323,7 +326,60 @@ async def test_llm_summary_builder_estimates_cost_when_provider_omits_cost() -> 
     result = await builder.summarize(report, {})
 
     assert result["gpt_tokens_used"] == 1_500_000
-    assert result["gpt_cost_usd"] == 7.5
+    assert result["gpt_cost_usd"] == 1.2
+
+
+async def test_llm_summary_builder_bounds_examples_per_issue_category() -> None:
+    provider = MockProvider()
+    provider.queue_text_response(
+        "{}",
+        structured_output={
+            "summary": "Multiple sitemap issues were found.",
+            "severity": "WARNING",
+            "key_findings": ["Broken and duplicate URLs were found."],
+            "recommendations": "Fix the listed sitemap issues.",
+            "trend_summary": "No prior trend was available.",
+        },
+    )
+    builder = LLMSummaryBuilder(
+        llm_provider=provider,
+        mcp_client=FakeSitemapWorkflowClient(),
+        model_name="gpt-4.1-mini",
+    )
+    issues = [
+        SitemapIssue(
+            url=f"https://example.com/broken-{index}",
+            category=SitemapIssueCategory.BROKEN_URL,
+            message="URL returned an error status.",
+            status_code=404,
+        )
+        for index in range(7)
+    ] + [
+        SitemapIssue(
+            url=f"https://example.com/duplicate-{index}",
+            category=SitemapIssueCategory.DUPLICATE_URL,
+            message="URL appears more than once.",
+        )
+        for index in range(2)
+    ]
+
+    await builder.summarize(
+        SitemapAuditReport(
+            root_sitemap_url="https://example.com/sitemap.xml",
+            total_sitemaps=1,
+            total_urls=9,
+            issues=issues,
+        ),
+        {"broken_url": 7, "duplicate_url": 2},
+    )
+
+    request_payload = json.loads(cast(TextPart, provider.requests[0].messages[1].parts[0]).text)
+    examples_by_category = Counter(issue["category"] for issue in request_payload["issues"])
+    assert request_payload["issue_count"] == 9
+    assert request_payload["issue_summary"] == {"broken_url": 7, "duplicate_url": 2}
+    assert examples_by_category == {"broken_url": 5, "duplicate_url": 2}
+    assert request_payload["omitted_issue_counts"] == {"broken_url": 2}
+    assert provider.requests[0].options.max_output_tokens == 1_200
 
 
 async def test_llm_summary_builder_normalizes_rich_provider_fields() -> None:

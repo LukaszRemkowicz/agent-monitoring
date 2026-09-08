@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from time import monotonic
 from typing import Any
 
 from llm_core.exceptions import StructuredOutputError
 from llm_core.protocols import LLMProvider
-from llm_core.types import GenerationOptions, LLMRequest, LLMResponse, Message, ResponseFormat
+from llm_core.types import (
+    GenerationOptions,
+    LLMRequest,
+    LLMResponse,
+    Message,
+    ResponseFormat,
+    TextPart,
+)
 from pydantic import ValidationError
 
 from assets_loader import load_json, load_markdown_bullets, load_markdown_mapping, load_text
+from conf import settings
 from exceptions import (
     LogAnalysisAgentError,
     LogAnalysisHistoryComparisonServiceMissingException,
@@ -70,6 +80,7 @@ from schemas import (
     WorkflowBootstrap,
     WorkflowSkill,
     WorkflowSkillContent,
+    WorkflowTool,
 )
 from services.log_fingerprints import (
     LOG_ANALYSIS_FINGERPRINT_VERSION,
@@ -77,9 +88,41 @@ from services.log_fingerprints import (
     build_grouped_error_run,
 )
 from services.log_history_comparison import LogAnalysisHistoryComparisonService
-from utils.grouped_errors import attention_priority_rank, coalesce_grouped_errors
-from utils.llm_usage import usage_cost_usd
+from utils.grouped_errors import (
+    attention_priority_rank,
+    coalesce_grouped_errors,
+    project_grouped_error_prompt_rows,
+)
+from utils.llm_context import (
+    CONTEXT_LIMITATION,
+    BoundedMessages,
+    bound_messages,
+    is_context_length_error,
+    message_bytes,
+    smaller_messages,
+)
+from utils.llm_usage import usage_cost_usd, usage_raw_json, usage_telemetry
 from utils.runtime import dump_arguments, elapsed_ms, hash_text
+
+
+class ReasoningEffort(StrEnum):
+    """Application reasoning setting, mapped when llm-core supports it."""
+
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
+class TextVerbosity(StrEnum):
+    """Application text-verbosity setting, mapped when llm-core supports it."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
 
 logger = get_logger(__name__)
 MAX_LLM_TOOL_LOOP_ITERATIONS = 5
@@ -92,6 +135,119 @@ LOG_ANALYSIS_CRITICAL_DECISION_RULES = load_text("log_analysis_critical_decision
 HISTORICAL_CONTEXT_TEMPLATE = load_text("historical_context.md")
 LOG_ANALYSIS_NO_COMPARE_HISTORY_PROMPT = load_json("log_analysis_no_compare_history_prompt.json")
 LOG_ANALYSIS_COMPARE_HISTORY_PROMPT = load_json("log_analysis_compare_history_prompt.json")
+POST_COLLECTION_EXCLUDED_TOOL_NAMES = frozenset(
+    {
+        McpToolName.ANALYZE_DAILY_LOG_BUNDLE,
+        McpToolName.COLLECT_LOGS,
+        McpToolName.GET_LOG_COLLECTION_STATUS,
+        McpToolName.LIST_PROJECTS,
+        McpToolName.START_LOG_COLLECTION,
+        "get_mcp_health_check",
+        "get_mcp_service_status",
+    }
+)
+
+
+class LogAnalysisModelTier(StrEnum):
+    """Deterministic model tiers used by log-analysis routing."""
+
+    FAST = "fast"
+    STRONG = "strong"
+
+
+@dataclass(frozen=True, slots=True)
+class LogAnalysisModelRoute:
+    """Selected tier and auditable deterministic reason codes."""
+
+    tier: LogAnalysisModelTier
+    reasons: tuple[str, ...]
+
+
+def select_log_analysis_model_route(
+    *,
+    evidence: LogAnalysisPromptEvidence,
+    current_coverage: LogAnalysisCurrentCoverage,
+) -> LogAnalysisModelRoute:
+    """Select fast only for complete clean or unchanged low-risk evidence."""
+
+    current = evidence.current_grouped_errors
+    if current is None or not current.available:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("current_evidence_missing",))
+    if not current.evidence_complete:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("current_evidence_incomplete",))
+    if any(
+        (
+            current_coverage.collection_warnings,
+            current_coverage.unknown_requested_sources,
+            current_coverage.zero_line_sources,
+            current_coverage.unavailable_sources,
+            current_coverage.truncated_sources,
+            current_coverage.continuation_available_sources,
+        )
+    ):
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("coverage_gap_present",))
+
+    attention_counts: dict[str, int] = current.attention_priority_counts
+    if attention_counts.get("actionable", 0):
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("actionable_family_present",))
+    if attention_counts.get("investigate", 0):
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("investigate_family_present",))
+    if current.omitted_details is not None and current.omitted_details.counts_by_attention.get(
+        "actionable", 0
+    ):
+        return LogAnalysisModelRoute(
+            LogAnalysisModelTier.STRONG,
+            ("actionable_detail_projection_invariant_failed",),
+        )
+
+    if current.unique_group_count == 0:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.FAST, ("complete_clean_evidence",))
+
+    if evidence.kind != LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("stability_not_compared",))
+    if (
+        evidence.history_comparison is None
+        or evidence.history_comparison.status != LogAnalysisHistoryComparisonStatus.AVAILABLE
+    ):
+        return LogAnalysisModelRoute(
+            LogAnalysisModelTier.STRONG,
+            ("history_comparison_unavailable",),
+        )
+    grouped_error_diff = (
+        evidence.prompt_compacted.grouped_error_diff
+        if evidence.prompt_compacted is not None
+        else None
+    )
+    if grouped_error_diff is None or not grouped_error_diff.available:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("grouped_error_diff_missing",))
+    if grouped_error_diff.evidence_quality_warnings:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("evidence_warning_present",))
+    if not grouped_error_diff.resolved_high_severity_current_scope_covered:
+        return LogAnalysisModelRoute(
+            LogAnalysisModelTier.STRONG,
+            ("resolved_high_severity_scope_gap",),
+        )
+    if grouped_error_diff.new_fingerprint_count:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("new_family_present",))
+    if grouped_error_diff.worsened_fingerprint_count:
+        return LogAnalysisModelRoute(LogAnalysisModelTier.STRONG, ("worsened_family_present",))
+    if (
+        grouped_error_diff.new_fingerprint_count != len(grouped_error_diff.new_fingerprints)
+        or grouped_error_diff.resolved_fingerprint_count
+        != len(grouped_error_diff.resolved_fingerprints)
+        or grouped_error_diff.worsened_fingerprint_count
+        != len(grouped_error_diff.worsened_fingerprints)
+        or grouped_error_diff.improved_fingerprint_count
+        != len(grouped_error_diff.improved_fingerprints)
+    ):
+        return LogAnalysisModelRoute(
+            LogAnalysisModelTier.STRONG,
+            ("change_identity_mapping_incomplete",),
+        )
+    return LogAnalysisModelRoute(
+        LogAnalysisModelTier.FAST,
+        ("complete_stable_watch_or_routine_evidence",),
+    )
 
 
 class MonitoringWorkflowAgent:
@@ -104,9 +260,22 @@ class MonitoringWorkflowAgent:
         private_monitoring_context: str,
         history_comparison_service: LogAnalysisHistoryComparisonService | None = None,
         history_comparison_enabled: bool = False,
+        fast_llm_provider: LLMProvider | None = None,
+        fast_model_name: str | None = None,
+        strong_model_name: str | None = None,
+        strong_reasoning_effort: ReasoningEffort = ReasoningEffort.MEDIUM,
+        text_verbosity: TextVerbosity = TextVerbosity.LOW,
+        max_output_tokens: int = 4_000,
     ) -> None:
         self.mcp_client = mcp_client
         self.llm_provider = llm_provider
+        self.strong_llm_provider = llm_provider
+        self.fast_llm_provider = fast_llm_provider or llm_provider
+        self.fast_model_name = fast_model_name
+        self.strong_model_name = strong_model_name
+        self.strong_reasoning_effort = strong_reasoning_effort
+        self.text_verbosity = text_verbosity
+        self.max_output_tokens = max_output_tokens
         self.private_monitoring_context = private_monitoring_context
         self.llm_call_repository: LLMCallRepository | None = None
         self.history_comparison_service = history_comparison_service
@@ -175,6 +344,10 @@ class MonitoringWorkflowAgent:
             previous_analysis=previous_analysis_context,
             prepared_evidence=prepared_evidence,
         )
+        model_route: LogAnalysisModelRoute = select_log_analysis_model_route(
+            evidence=prepared_evidence,
+            current_coverage=prompt.context.current_coverage,
+        )
         (
             final_report,
             tool_results,
@@ -187,6 +360,7 @@ class MonitoringWorkflowAgent:
             analysis_date=analysis_date,
             current_logs=current_logs,
             preflight_grouped_error_runs=preflight_grouped_error_runs,
+            model_route=model_route,
         )
         logger.info(
             "completed log-analysis LLM tool loop",
@@ -202,6 +376,8 @@ class MonitoringWorkflowAgent:
                 "log_window_since": log_window.since,
                 "log_window_until": log_window.until,
                 "severity": final_report.severity,
+                "model_route_tier": model_route.tier.value,
+                "model_route_reasons": list(model_route.reasons),
                 "llm_report_execution_time_seconds": llm_report_execution_time_seconds,
             },
         )
@@ -297,6 +473,7 @@ class MonitoringWorkflowAgent:
         analysis_date: date,
         current_logs: CollectLogsArtifact,
         preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint],
+        model_route: LogAnalysisModelRoute,
     ) -> tuple[LogAnalysisFinalReport, list[LogAnalysisToolResult], int, float, float]:
         """Run the LLM tool loop and retain failure context and timing."""
 
@@ -308,6 +485,7 @@ class MonitoringWorkflowAgent:
                 analysis_date=analysis_date,
                 mcp_session_id=current_logs.session_id,
                 preflight_grouped_error_runs=preflight_grouped_error_runs,
+                model_route=model_route,
             )
         except Exception as exc:
             raise LogAnalysisAgentError(
@@ -647,15 +825,7 @@ class MonitoringWorkflowAgent:
                 next_required_action=next_required_action,
                 final_report_allowed=current_grouped_evidence_available,
                 available_projects=available_projects,
-                mandatory_skills=[
-                    WorkflowSkill(
-                        skill_name=skill.name,
-                        resource_uri=skill.resource_uri,
-                        description=skill.description,
-                        when_useful="Already loaded into the system prompt.",
-                    )
-                    for skill in mandatory_skills
-                ],
+                loaded_mandatory_skill_names=[skill.name for skill in mandatory_skills],
                 optional_skills=workflow.optional_skills,
                 collection=self._build_prompt_collection(collect_logs),
                 snapshot_access=SnapshotAccessGuidance(
@@ -669,15 +839,16 @@ class MonitoringWorkflowAgent:
                         "collection explicitly uses workspace='session'."
                     ),
                 ),
-                available_tools=workflow.tools,
+                available_tools=self._project_post_collection_tools(workflow.tools),
                 report_contract=LOG_ANALYSIS_REPORT_CONTRACT,
-                instructions=self._build_mode_specific_log_analysis_instructions(
-                    history_comparison_enabled=(
-                        prepared_evidence.kind == LogAnalysisPromptEvidenceKind.HISTORY_COMPARISON
-                    )
-                ),
             ),
         )
+
+    @staticmethod
+    def _project_post_collection_tools(tools: list[WorkflowTool]) -> list[WorkflowTool]:
+        """Return only tools that remain useful after initial log collection."""
+
+        return [tool for tool in tools if tool.tool_name not in POST_COLLECTION_EXCLUDED_TOOL_NAMES]
 
     @staticmethod
     def _build_mode_specific_log_analysis_instructions(
@@ -799,8 +970,9 @@ class MonitoringWorkflowAgent:
         tool_scope_by_project: dict[str, list[str]],
         rationale: str,
         grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] | None = None,
+        detail_limit_per_attention: int | None = None,
     ) -> LogAnalysisPromptGroupedErrorEvidence | None:
-        """Return every semantic family, ordered by operational attention."""
+        """Return complete aggregates plus a bounded detailed family ledger."""
 
         if run_count == 0 and not groups:
             return None
@@ -834,6 +1006,7 @@ class MonitoringWorkflowAgent:
                     or any(status_code >= 500 for status_code in item.status_codes)
                     else 1
                 ),
+                -item.count,
                 item.project_name,
                 item.fingerprint,
             ),
@@ -861,6 +1034,10 @@ class MonitoringWorkflowAgent:
                 source_key_counts[source_key] = source_key_counts.get(source_key, 0) + 1
         runs = grouped_error_runs or []
         event_count = sum(family.count for family in fingerprints)
+        detailed_fingerprints, omitted_details = project_grouped_error_prompt_rows(
+            fingerprints,
+            detail_limit_per_attention=detail_limit_per_attention,
+        )
         return LogAnalysisPromptGroupedErrorEvidence(
             available=True,
             label=label,
@@ -876,8 +1053,13 @@ class MonitoringWorkflowAgent:
             category_counts=category_counts,
             status_code_counts=status_code_counts,
             source_key_counts=source_key_counts,
-            fingerprints=fingerprints,
-            rationale=rationale,
+            fingerprints=detailed_fingerprints,
+            omitted_details=omitted_details,
+            rationale=(
+                f"{rationale} Aggregate counts and family identities are complete. "
+                "Detailed rows are bounded per attention band; omitted_details retains "
+                "every remaining family identity for targeted deterministic follow-up."
+            ),
         )
 
     @staticmethod
@@ -1084,7 +1266,6 @@ class MonitoringWorkflowAgent:
             for part in [
                 workflow.prompt.strip(),
                 LOG_ANALYSIS_CRITICAL_DECISION_RULES,
-                LOG_ANALYSIS_DECISION_SKILL.strip(),
                 "# Mandatory Workflow Skills",
                 mandatory_skill_prompt.strip(),
                 historical_section.strip(),
@@ -1102,6 +1283,7 @@ class MonitoringWorkflowAgent:
         analysis_date: date,
         mcp_session_id: str | None = None,
         preflight_grouped_error_runs: list[LogAnalysisGroupedErrorRunFingerprint] | None = None,
+        model_route: LogAnalysisModelRoute,
     ) -> tuple[LogAnalysisFinalReport, list[LogAnalysisToolResult], int, float]:
         """Run the LLM action loop until a final report is produced."""
 
@@ -1122,17 +1304,104 @@ class MonitoringWorkflowAgent:
         }
         llm_tokens_used: int = 0
         llm_cost_usd: float = 0.0
+        force_strong: bool = model_route.tier is LogAnalysisModelTier.STRONG
         for iteration in range(1, MAX_LLM_TOOL_LOOP_ITERATIONS + 1):
-            llm_response: LLMResponse = self._request_llm_action(
-                messages=messages,
-                workflow=workflow,
-                analysis_date=analysis_date,
-                iteration=iteration,
+            # New tool results can increase the immutable snapshot floor.
+            input_byte_budget: int = settings.LOG_ANALYSIS_LLM_MAX_INPUT_BYTES
+            model_tier: LogAnalysisModelTier = (
+                LogAnalysisModelTier.STRONG if force_strong else LogAnalysisModelTier.FAST
             )
+            llm_provider: LLMProvider = (
+                self.strong_llm_provider
+                if model_tier is LogAnalysisModelTier.STRONG
+                else self.fast_llm_provider
+            )
+            requested_model_name: str | None = (
+                self.strong_model_name
+                if model_tier is LogAnalysisModelTier.STRONG
+                else self.fast_model_name
+            )
+            # A self-contained snapshot avoids hidden history growth in Responses.
+            # Only the prompt projection is bounded; raw artifacts remain untouched.
+            llm_response: LLMResponse | None = None
+            for context_attempt in range(4):
+                snapshot: BoundedMessages = bound_messages(messages, max_bytes=input_byte_budget)
+                request_messages: list[Message] = snapshot.messages
+                request_character_count: int = self._message_character_count(request_messages)
+                try:
+                    llm_response = self._request_llm_action(
+                        messages=request_messages,
+                        workflow=workflow,
+                        analysis_date=analysis_date,
+                        iteration=iteration,
+                        llm_provider=llm_provider,
+                        model_name=requested_model_name,
+                        model_tier=model_tier,
+                        route_reasons=model_route.reasons,
+                    )
+                    break
+                except StructuredOutputError as exc:
+                    await self._record_llm_step(
+                        LogAnalysisLLMCallIn(
+                            analysis_date=analysis_date,
+                            workflow_name=workflow.workflow_name,
+                            mcp_session_id=mcp_session_id,
+                            iteration=iteration,
+                            step_type="llm_call",
+                            status="failed",
+                            provider_name=llm_provider.name,
+                            model_name=requested_model_name,
+                            request_character_count=request_character_count,
+                            error_message=str(exc),
+                        )
+                    )
+                    if model_tier is not LogAnalysisModelTier.FAST:
+                        raise
+                    force_strong = True
+                    messages[2:] = [self._build_invalid_fast_response_message(exc)]
+                    break
+                except Exception as exc:
+                    if not is_context_length_error(exc):
+                        raise
+                    if context_attempt == 3:
+                        raise ValueError(
+                            "LLM context limit exceeded after three smaller-snapshot retries. "
+                            "Reduce LOG_ANALYSIS_LLM_MAX_INPUT_BYTES or narrow analysis scope."
+                        ) from exc
+                    smaller_snapshot = smaller_messages(
+                        messages, rejected_bytes=message_bytes(request_messages)
+                    )
+                    input_byte_budget = message_bytes(smaller_snapshot.messages)
+                    logger.warning(
+                        "retrying LLM action with a smaller evidence snapshot",
+                        extra={
+                            "event": "log_analysis_llm_context_retry",
+                            "iteration": iteration,
+                            "context_attempt": context_attempt + 1,
+                            "input_byte_budget": input_byte_budget,
+                            "model": requested_model_name,
+                        },
+                    )
+            if llm_response is None:
+                continue
             usage = llm_response.usage
+            actual_model_name: str | None = llm_response.model_name or requested_model_name
             if usage is not None:
                 llm_tokens_used += usage.total_tokens
-                llm_cost_usd += usage_cost_usd(usage)
+                usage_cost: float | None = usage_cost_usd(
+                    usage,
+                    model_name=actual_model_name,
+                )
+                if usage_cost is not None:
+                    llm_cost_usd += usage_cost
+
+            prompt_tokens: int | None = usage.prompt_tokens if usage is not None else None
+            completion_tokens: int | None = usage.completion_tokens if usage is not None else None
+            total_tokens: int | None = usage.total_tokens if usage is not None else None
+            call_cost_usd: float | None = (
+                usage_cost_usd(usage, model_name=actual_model_name) if usage is not None else None
+            )
+            usage_raw: dict[str, Any] | None = usage_raw_json(usage) if usage is not None else None
 
             llm_step = LogAnalysisLLMCallIn(
                 analysis_date=analysis_date,
@@ -1142,29 +1411,61 @@ class MonitoringWorkflowAgent:
                 step_type="llm_call",
                 status="succeeded",
                 llm_response_text=llm_response.text or "",
+                provider_name=llm_response.provider_name or llm_provider.name,
+                model_name=actual_model_name,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+                cost_usd=call_cost_usd,
+                request_character_count=request_character_count,
+                usage_raw=usage_raw,
+                result_summary=(
+                    f"model_route={model_tier.value};" f"reasons={','.join(model_route.reasons)}"
+                ),
             )
+            payload: dict[str, Any] = {}
+            action: str = ""
+            final_report: LogAnalysisFinalReport | None = None
+            tool_request: LogAnalysisToolCallRequest | None = None
+            skill_request: LogAnalysisSkillReadRequest | None = None
             try:
-                payload: dict[str, Any] = self._extract_llm_payload(llm_response)
+                payload = self._extract_llm_payload(llm_response)
+                raw_action: object = payload.get("action")
+                action = str(raw_action or "")
+                if raw_action == "final_report":
+                    final_report = self._build_final_report_payload(payload)
+                elif raw_action == "call_tools":
+                    tool_request = self._build_tool_call_request(payload)
+                elif raw_action == "read_skills":
+                    skill_request = self._build_skill_read_request(payload)
+                else:
+                    raise ValueError("LLM action did not match expected shape.")
             except Exception as exc:
                 await self._record_llm_step(
                     llm_step.model_copy(
                         update={
+                            "action": action,
                             "status": "failed",
                             "error_message": str(exc),
                         }
                     )
                 )
+                if model_tier is LogAnalysisModelTier.FAST:
+                    force_strong = True
+                    messages[2:] = [self._build_invalid_fast_response_message(exc)]
+                    continue
                 raise
-            action: object = payload.get("action")
-            await self._record_llm_step(llm_step.model_copy(update={"action": str(action or "")}))
+            await self._record_llm_step(llm_step.model_copy(update={"action": action}))
             self._log_llm_action_payload(
                 response=llm_response,
                 payload=payload,
                 workflow=workflow,
                 iteration=iteration,
+                request_character_count=request_character_count,
             )
             if action == "final_report":
-                final_report: LogAnalysisFinalReport = self._build_final_report_payload(payload)
+                if final_report is None:
+                    raise RuntimeError("validated final_report payload is missing")
                 final_report_allowed = not prompt.context.current_coverage.truncated_sources and (
                     prompt.context.final_report_allowed
                     or self._group_errors_cover_collection(
@@ -1173,6 +1474,7 @@ class MonitoringWorkflowAgent:
                     )
                 )
                 if not final_report_allowed:
+                    force_strong = True
                     messages[2:] = [
                         self._build_final_report_not_allowed_message(
                             previous_action=payload,
@@ -1192,11 +1494,22 @@ class MonitoringWorkflowAgent:
                         )
                     )
                     if correction_message is not None:
+                        force_strong = True
                         messages[2:] = [correction_message]
                         continue
+                if (
+                    snapshot.omitted_details
+                    and CONTEXT_LIMITATION not in final_report.coverage_gaps
+                ):
+                    final_report = final_report.model_copy(
+                        update={"coverage_gaps": [*final_report.coverage_gaps, CONTEXT_LIMITATION]}
+                    )
                 return final_report, tool_results, llm_tokens_used, llm_cost_usd
+            if model_tier is LogAnalysisModelTier.FAST:
+                force_strong = True
             if action == "call_tools":
-                tool_request: LogAnalysisToolCallRequest = self._build_tool_call_request(payload)
+                if tool_request is None:
+                    raise RuntimeError("validated tool request is missing")
                 new_tool_results: list[LogAnalysisToolResult] = await self._execute_requested_tools(
                     tool_request=tool_request,
                     workflow=workflow,
@@ -1206,7 +1519,8 @@ class MonitoringWorkflowAgent:
                     mcp_session_id=mcp_session_id,
                 )
             elif action == "read_skills":
-                skill_request: LogAnalysisSkillReadRequest = self._build_skill_read_request(payload)
+                if skill_request is None:
+                    raise RuntimeError("validated skill request is missing")
                 new_tool_results = await self._execute_requested_skill_reads(
                     skill_request=skill_request,
                     workflow=workflow,
@@ -1215,9 +1529,6 @@ class MonitoringWorkflowAgent:
                     analysis_date=analysis_date,
                     mcp_session_id=mcp_session_id,
                 )
-            else:
-                raise ValueError("LLM action did not match expected shape.")
-
             tool_results.extend(new_tool_results)
             messages[2:] = [
                 self._build_tool_loop_followup_message(
@@ -1228,6 +1539,26 @@ class MonitoringWorkflowAgent:
             ]
 
         raise ValueError("LLM tool loop exceeded maximum iterations before final_report.")
+
+    @staticmethod
+    def _build_invalid_fast_response_message(exc: Exception) -> Message:
+        """Ask the strong model to repair an invalid fast-model action."""
+
+        return Message.from_text(
+            "user",
+            json.dumps(
+                {
+                    "previous_fast_response_invalid": True,
+                    "validation_error": str(exc),
+                    "instruction": (
+                        "Return one valid JSON action matching call_tools, read_skills, "
+                        "or final_report. Use the retained deterministic evidence and "
+                        "do not weaken coverage boundaries."
+                    ),
+                },
+                sort_keys=True,
+            ),
+        )
 
     @staticmethod
     def _build_tool_loop_followup_message(
@@ -1469,32 +1800,76 @@ class MonitoringWorkflowAgent:
         workflow: WorkflowBootstrap,
         analysis_date: date,
         iteration: int,
+        llm_provider: LLMProvider,
+        model_name: str | None,
+        model_tier: LogAnalysisModelTier,
+        route_reasons: tuple[str, ...],
     ) -> LLMResponse:
         """Ask the configured LLM provider for the next JSON workflow action."""
 
-        request: LLMRequest = LLMRequest(
-            messages=tuple(messages),
-            options=GenerationOptions(
-                temperature=None,
-                response_format=ResponseFormat.JSON_OBJECT,
-            ),
-            metadata={
+        option_values: dict[str, Any] = {
+            "temperature": None,
+            "max_output_tokens": self.max_output_tokens,
+            "response_format": ResponseFormat.JSON_OBJECT,
+        }
+        option_fields: object = getattr(GenerationOptions, "__dataclass_fields__", {})
+        if isinstance(option_fields, dict) and "reasoning_effort" in option_fields:
+            option_values["reasoning_effort"] = (
+                self.strong_reasoning_effort if model_tier is LogAnalysisModelTier.STRONG else None
+            )
+            option_values["text_verbosity"] = (
+                self.text_verbosity if model_tier is LogAnalysisModelTier.STRONG else None
+            )
+        request_values: dict[str, Any] = {
+            "messages": tuple(messages),
+            "model": model_name,
+            "options": GenerationOptions(**option_values),
+            "metadata": {
                 "workflow_name": workflow.workflow_name,
                 "analysis_date": analysis_date.isoformat(),
                 "phase": "log_analysis_2b",
                 "iteration": str(iteration),
+                "model_tier": model_tier.value,
+                "model_route_reasons": ",".join(route_reasons),
             },
-        )
+        }
+        request_fields: object = getattr(LLMRequest, "__dataclass_fields__", {})
+        if isinstance(request_fields, dict) and "prompt_cache_key" in request_fields:
+            request_values["prompt_cache_key"] = "log-analysis:v1"
+        request: LLMRequest = LLMRequest(**request_values)
         logger.info(
             "calling LLM for log-analysis workflow action",
             extra={
                 "event": "log_analysis_llm_action_start",
                 "workflow_name": workflow.workflow_name,
                 "iteration": iteration,
-                "provider": self.llm_provider.name,
+                "provider": llm_provider.name,
+                "model": model_name,
+                "model_tier": model_tier.value,
+                "model_route_reasons": list(route_reasons),
+                "request_byte_count": message_bytes(messages),
+                "request_character_count": self._message_character_count(messages),
+                "message_character_counts": [
+                    {
+                        "role": message.role,
+                        "character_count": self._message_character_count([message]),
+                    }
+                    for message in messages
+                ],
             },
         )
-        return self.llm_provider.generate(request)
+        return llm_provider.generate(request)
+
+    @staticmethod
+    def _message_character_count(messages: list[Message]) -> int:
+        """Return text characters sent in one provider request."""
+
+        return sum(
+            len(part.text)
+            for message in messages
+            for part in message.parts
+            if isinstance(part, TextPart)
+        )
 
     async def _record_llm_step(self, entry: LogAnalysisLLMCallIn) -> None:
         """Persist one LLM workflow step when DB recording is enabled."""
@@ -1510,6 +1885,7 @@ class MonitoringWorkflowAgent:
         payload: dict[str, Any],
         workflow: WorkflowBootstrap,
         iteration: int,
+        request_character_count: int,
     ) -> None:
         """Log the LLM action payload between tool-loop iterations."""
 
@@ -1534,7 +1910,12 @@ class MonitoringWorkflowAgent:
             "llm_response_text": response.text,
             "llm_response_structured_output": response.structured_output,
             "llm_action_payload": payload,
+            "provider_name": response.provider_name,
+            "model_name": response.model_name,
+            "request_character_count": request_character_count,
         }
+        if response.usage is not None:
+            extra.update(usage_telemetry(response.usage, model_name=response.model_name))
         if action == "final_report":
             key_findings: object = payload.get("key_findings")
             extra["final_report_severity"] = payload.get("severity")
@@ -1692,6 +2073,22 @@ class MonitoringWorkflowAgent:
     ) -> LogAnalysisCurrentCoverage:
         """Build current source coverage state facts the LLM may cite in coverage gaps."""
 
+        collection_warnings: list[str] = sorted(
+            {
+                warning
+                for project in collect_logs.projects
+                for warning in project.warnings
+                if warning
+            }
+        )
+        unknown_requested_sources: list[str] = sorted(
+            {
+                f"{project.project_name}.{source_key}"
+                for project in collect_logs.projects
+                for source_key in project.unknown_requested_source_keys
+                if source_key
+            }
+        )
         zero_line_sources: list[str] = []
         unavailable_sources: list[str] = []
         truncated_sources: list[str] = []
@@ -1710,6 +2107,8 @@ class MonitoringWorkflowAgent:
                 if source.transfer is not None and source.transfer.next_offset is not None:
                     continuation_available_sources.append(source_name)
         return LogAnalysisCurrentCoverage(
+            collection_warnings=collection_warnings,
+            unknown_requested_sources=unknown_requested_sources,
             zero_line_sources=zero_line_sources,
             unavailable_sources=unavailable_sources,
             truncated_sources=truncated_sources,
