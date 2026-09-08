@@ -3,9 +3,15 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Protocol
 from urllib.parse import parse_qsl, urlsplit
 
-from schemas import LogAnalysisAttentionPriority, LogAnalysisGroupedErrorSignal
+from schemas import (
+    LogAnalysisAttentionPriority,
+    LogAnalysisGroupedErrorSignal,
+    LogAnalysisPromptGroupedErrorFingerprintScope,
+    LogAnalysisPromptGroupedErrorOmittedDetails,
+)
 
 _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -48,6 +54,22 @@ _KNOWN_PROBE_ROUTE = re.compile(
     r")$",
     re.IGNORECASE,
 )
+PROMPT_GROUPED_ERROR_DETAIL_LIMIT_PER_ATTENTION = 8
+PROMPT_GROUPED_ERROR_DETAIL_LIMITS: dict[LogAnalysisAttentionPriority, int | None] = {
+    LogAnalysisAttentionPriority.ACTIONABLE: None,
+    LogAnalysisAttentionPriority.INVESTIGATE: PROMPT_GROUPED_ERROR_DETAIL_LIMIT_PER_ATTENTION,
+    LogAnalysisAttentionPriority.WATCH_ONLY: PROMPT_GROUPED_ERROR_DETAIL_LIMIT_PER_ATTENTION,
+    LogAnalysisAttentionPriority.ROUTINE: PROMPT_GROUPED_ERROR_DETAIL_LIMIT_PER_ATTENTION,
+}
+
+
+class PromptGroupedErrorRow(Protocol):
+    """Fields shared by detailed baseline and comparison prompt rows."""
+
+    fingerprint: str
+    project_name: str
+    source_keys: list[str]
+    attention_priority: LogAnalysisAttentionPriority
 
 
 @dataclass(frozen=True)
@@ -181,6 +203,77 @@ def attention_priority_rank(priority: LogAnalysisAttentionPriority) -> int:
         LogAnalysisAttentionPriority.WATCH_ONLY: 2,
         LogAnalysisAttentionPriority.ROUTINE: 3,
     }[priority]
+
+
+def project_grouped_error_prompt_rows[PromptGroupedErrorRowT: PromptGroupedErrorRow](
+    rows: list[PromptGroupedErrorRowT],
+    *,
+    detail_limit_per_attention: int | None = None,
+) -> tuple[list[PromptGroupedErrorRowT], LogAnalysisPromptGroupedErrorOmittedDetails | None]:
+    """Bound low-priority rows while retaining every actionable row and family identity."""
+
+    if detail_limit_per_attention is not None and detail_limit_per_attention < 0:
+        raise ValueError("detail_limit_per_attention must be non-negative")
+
+    detail_limits_by_attention: dict[LogAnalysisAttentionPriority, int | None] = (
+        {priority: detail_limit_per_attention for priority in LogAnalysisAttentionPriority}
+        if detail_limit_per_attention is not None
+        else PROMPT_GROUPED_ERROR_DETAIL_LIMITS
+    )
+
+    selected: list[PromptGroupedErrorRowT] = []
+    omitted: list[PromptGroupedErrorRowT] = []
+    selected_counts: dict[LogAnalysisAttentionPriority, int] = {
+        priority: 0 for priority in LogAnalysisAttentionPriority
+    }
+    for row in rows:
+        priority = row.attention_priority
+        detail_limit: int | None = detail_limits_by_attention[priority]
+        if detail_limit is None or selected_counts[priority] < detail_limit:
+            selected.append(row)
+            selected_counts[priority] += 1
+        else:
+            omitted.append(row)
+
+    if not omitted:
+        return selected, None
+
+    counts_by_attention: dict[str, int] = {}
+    fingerprints_by_scope: dict[
+        LogAnalysisAttentionPriority, dict[tuple[str, tuple[str, ...]], set[str]]
+    ] = {}
+    for row in omitted:
+        priority = row.attention_priority
+        priority_value = priority.value
+        counts_by_attention[priority_value] = counts_by_attention.get(priority_value, 0) + 1
+        scope = (row.project_name, tuple(sorted(row.source_keys)))
+        fingerprints_by_scope.setdefault(priority, {}).setdefault(scope, set()).add(row.fingerprint)
+
+    fingerprint_scopes_by_attention: dict[
+        str, list[LogAnalysisPromptGroupedErrorFingerprintScope]
+    ] = {}
+    for priority in LogAnalysisAttentionPriority:
+        scopes = fingerprints_by_scope.get(priority)
+        if not scopes:
+            continue
+        fingerprint_scopes_by_attention[priority.value] = [
+            LogAnalysisPromptGroupedErrorFingerprintScope(
+                project_name=project_name,
+                source_keys=list(source_keys),
+                fingerprints=sorted(fingerprints),
+            )
+            for (project_name, source_keys), fingerprints in sorted(scopes.items())
+        ]
+
+    return selected, LogAnalysisPromptGroupedErrorOmittedDetails(
+        count=len(omitted),
+        detail_limit_per_attention=detail_limit_per_attention,
+        detail_limits_by_attention={
+            priority.value: limit for priority, limit in detail_limits_by_attention.items()
+        },
+        counts_by_attention=counts_by_attention,
+        fingerprint_scopes_by_attention=fingerprint_scopes_by_attention,
+    )
 
 
 def _normalize_route(value: str) -> str:

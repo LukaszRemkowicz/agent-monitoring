@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agent-monitoring"
-version = "1.2.3"
+version = "1.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "aerich" },

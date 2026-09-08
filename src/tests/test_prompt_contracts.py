@@ -18,7 +18,10 @@ def test_mode_contracts_make_current_evidence_primary_and_history_secondary() ->
 
         assert "primary" in evidence_contract["current_grouped_errors"].lower()
         assert "paginated" in evidence_contract["current_grouped_errors"].lower()
-        assert "all semantic families" in evidence_contract["current_grouped_errors"].lower()
+        current_contract = evidence_contract["current_grouped_errors"].lower()
+        assert "all semantic family identities" in current_contract
+        assert "bounded per attention band" in current_contract
+        assert "omitted_details" in current_contract
         assert "secondary" in evidence_contract["history"].lower()
         assert mode_prompt["attention_order"] == ATTENTION_ORDER
 

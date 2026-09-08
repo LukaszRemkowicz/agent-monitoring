@@ -90,9 +90,14 @@ class LogAnalysisService:
         else:
             analysis = await self.repository.create(analysis_input)
         try:
-            historical_context: str = await self._build_historical_context(analysis_date)
             previous_analysis: LogAnalysisOut | None = await self.repository.get_latest_before_date(
                 analysis_date
+            )
+            historical_context: str = await self._build_historical_context(
+                analysis_date,
+                exclude_analysis_date=(
+                    previous_analysis.analysis_date if previous_analysis is not None else None
+                ),
             )
             logger.info(
                 "loaded previous log-analysis for monitoring agent",
@@ -261,10 +266,19 @@ class LogAnalysisService:
             until_datetime=log_window_until,
         )
 
-    async def _build_historical_context(self, analysis_date: date) -> str:
+    async def _build_historical_context(
+        self,
+        analysis_date: date,
+        *,
+        exclude_analysis_date: date | None = None,
+    ) -> str:
         """Return landingpage-style markdown context from recent stored reports."""
 
         historical_runs: list[LogAnalysisOut] = await self.repository.last_5_days(analysis_date)
+        if exclude_analysis_date is not None:
+            historical_runs = [
+                run for run in historical_runs if run.analysis_date != exclude_analysis_date
+            ]
         historical_context: str = HistoricalContextBuilder.build(historical_runs)
         if historical_context:
             logger.info(

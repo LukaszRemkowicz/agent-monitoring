@@ -195,6 +195,28 @@ stored report remains useful for review and trend history, but raw follow-up
 from the MCP reference may no longer resolve. `uv run typer reports log show`
 prints this MCP artifact retention notice alongside the follow-up hints.
 
+Each log-analysis model action also records provider/model identity, normalized
+prompt/completion/total tokens, request character count, estimated/provider
+cost, and the raw provider usage payload. Cached and reasoning-token details
+remain available in that raw payload without being added again to total tokens.
+
+Log-analysis requests use a self-contained evidence snapshot on every turn;
+`previous_response_id` is intentionally unused so old snapshots cannot accumulate
+in provider-side history. `LOG_ANALYSIS_LLM_MAX_INPUT_BYTES` defaults to 100,000
+UTF-8 text bytes. It is a conservative application ceiling, not an exact token
+count; configure it below your model's context limit with room for output and
+protocol overhead. Large evidence views retain scalar aggregates and prioritize
+explicit high-risk rows, with omission counts and claim limitations. Original
+artifacts and deterministic coverage checks remain unchanged. Reports include a
+coverage gap when their model input omitted details.
+
+A `context_length_exceeded` response triggers up to three retries with smaller
+snapshots, without rerunning MCP tools. Other provider errors are not retried by
+this mechanism. Mandatory instructions, skill text, and private context are never
+silently cut: if these or the minimum evidence cannot fit, the run fails with an
+explicit budget error. Narrow the analysis scope or reduce the context file in
+that case. Prompt caching remains enabled when supported by llm-core.
+
 Clean up stored monitoring DB rows after the configured retention window:
 
 ```bash

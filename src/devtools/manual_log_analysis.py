@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import typer
 
-from agents import MonitoringWorkflowAgent
+from agents import MonitoringWorkflowAgent, ReasoningEffort, TextVerbosity
 from conf import settings
 from db.models import EmailDelivery
 from decorators import as_async, db
@@ -145,6 +145,12 @@ async def run_manual_fixture(
         agent=MonitoringWorkflowAgent(
             mcp_client,
             llm_provider=get_llm_provider(settings.LLM_STRONG_MODEL),
+            fast_llm_provider=get_llm_provider(settings.LLM_FAST_MODEL),
+            fast_model_name=settings.LLM_FAST_MODEL,
+            strong_model_name=settings.LLM_STRONG_MODEL,
+            strong_reasoning_effort=ReasoningEffort(settings.LLM_STRONG_REASONING_EFFORT),
+            text_verbosity=TextVerbosity(settings.LLM_TEXT_VERBOSITY),
+            max_output_tokens=settings.LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS,
             private_monitoring_context=_resolve_manual_fixture_monitoring_context(
                 use_private_context=use_private_context
             ),

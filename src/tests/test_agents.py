@@ -1,10 +1,11 @@
 import json
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
 import pytest
 from llm_core.providers.mock import MockProvider
-from llm_core.types import ResponseFormat, TextPart
+from llm_core.types import LLMRequest, LLMResponse, Message, ResponseFormat, TextPart
 from llm_core.usage import Usage
 from pydantic import BaseModel, ValidationError
 from pytest_mock import MockerFixture
@@ -347,6 +348,26 @@ class FakeMcpWorkflowClient(McpWorkflowClient):
                     description="Search collected log snapshots.",
                     arguments=[],
                 ),
+                WorkflowTool(
+                    tool_name=McpToolName.LIST_PROJECTS,
+                    description="List collection projects.",
+                    arguments=[],
+                ),
+                WorkflowTool(
+                    tool_name=McpToolName.COLLECT_LOGS,
+                    description="Collect the initial log snapshot.",
+                    arguments=[],
+                ),
+                WorkflowTool(
+                    tool_name="get_mcp_service_status",
+                    description="Inspect bootstrap service status.",
+                    arguments=[],
+                ),
+                WorkflowTool(
+                    tool_name="get_mcp_health_check",
+                    description="Inspect bootstrap service health.",
+                    arguments=[],
+                ),
             ],
         )
 
@@ -535,6 +556,26 @@ class FakeMcpWorkflowClientWithoutProjects(FakeMcpWorkflowClient):
     async def list_projects(self) -> list[ProjectManifestSummary]:
         self.calls.append(McpToolName.LIST_PROJECTS)
         return []
+
+
+class CompleteCoverageMcpWorkflowClient(FakeMcpWorkflowClient):
+    async def collect_logs(
+        self,
+        *,
+        since: str,
+        until: str,
+    ) -> CollectLogsArtifact:
+        self.calls.append(f"collect_logs:{since}:{until}")
+        return CollectLogsArtifact.model_validate(
+            build_collect_logs_artifact_payload(
+                since=since,
+                until=until,
+                session_id="generated-workflow-session-id",
+                requested_project_names=["demo-shop"],
+                next_step_tips=["Use group_snapshot_errors before final report."],
+                resolved_source_keys=["backend"],
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -736,7 +777,9 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     prompt_project = context.prompt.context.collection.projects[0]
     assert collected_project.resolved_source_keys == prompt_project.resolved_source_keys
     assert PRIVATE_MONITORING_CONTEXT in context.prompt.system_prompt
-    assert LOG_ANALYSIS_DECISION_SKILL in context.prompt.system_prompt
+    assert LOG_ANALYSIS_DECISION_SKILL not in context.prompt.system_prompt
+    assert "Current complete paginated evidence is primary" in context.prompt.system_prompt
+    assert "An unavailable source cannot be replaced" in context.prompt.system_prompt
     assert PRIVATE_MONITORING_CONTEXT not in context.prompt.user_prompt
     assert context.prompt.context.analysis_date == analysis_date
     assert [project.project_name for project in context.prompt.context.available_projects] == (
@@ -744,7 +787,12 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     )
     assert prompt_project.snapshot_dir == collected_project.snapshot_dir
     assert prompt_project.sources[0].source_key == collected_project.sources[0].source_key
-    assert context.prompt.context.available_tools[0].tool_name == McpToolName.GROUP_ERRORS
+    assert [tool.tool_name for tool in context.prompt.context.available_tools] == [
+        McpToolName.GROUP_ERRORS,
+        McpToolName.INSPECT_PROXY_ACTIVITY,
+        "inspect_live_fail2ban_activity",
+        McpToolName.GREP_LOG_SNAPSHOT,
+    ]
     assert len(context.tool_results) == 1
     assert context.tool_results[0].tool_name == McpToolName.GROUP_ERRORS
     assert context.tool_results[0].structured_content["action"] == McpToolName.GROUP_ERRORS
@@ -799,10 +847,10 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
     assert user_prompt["available_projects"][0]["project_name"] == (
         context.prompt.context.available_projects[0].project_name
     )
-    assert user_prompt["mandatory_skills"][0]["name"] == context.workflow.mandatory_skills[0].name
-    assert user_prompt["mandatory_skills"][0]["resource_uri"] == (
-        context.workflow.mandatory_skills[0].resource_uri
-    )
+    assert user_prompt["loaded_mandatory_skill_names"] == [
+        context.workflow.mandatory_skills[0].name
+    ]
+    assert "mandatory_skills" not in user_prompt
     assert user_prompt["optional_skills"][0]["when_useful"] == (
         context.workflow.optional_skills[0].when_useful
     )
@@ -813,13 +861,7 @@ async def test_monitoring_workflow_agent_collects_logs_and_prepares_prompt_conte
         "project_name",
         "archive_name",
     ]
-    instructions = user_prompt["instructions"]
-    assert isinstance(instructions, list)
-    assert instructions
-    assert all(isinstance(instruction, str) for instruction in instructions)
-    joined_instructions = "\n".join(instructions)
-    assert "critical decision rules" in joined_instructions
-    assert "complete current evidence" in joined_instructions
+    assert "instructions" not in user_prompt
     assert set(user_prompt["report_contract"]) == {
         "summary",
         "severity",
@@ -1045,6 +1087,8 @@ async def test_monitoring_workflow_agent_includes_previous_analysis_in_user_prom
         previous_analysis.fingerprints.grouped_error_runs[0].result.groups[0].fingerprint
     )
     assert user_prompt["current_coverage"] == {
+        "collection_warnings": ["nginx stderr unavailable"],
+        "unknown_requested_sources": [],
         "zero_line_sources": [],
         "unavailable_sources": ["demo-shop.nginx"],
         "truncated_sources": [],
@@ -1221,7 +1265,7 @@ async def test_monitoring_workflow_agent_preloads_group_errors_when_comparison_d
 
 
 @pytest.mark.asyncio
-async def test_no_compare_grouped_error_prompt_preserves_broad_baseline(
+async def test_no_compare_grouped_error_prompt_preserves_broad_baseline_identities(
     agent_factory: AgentFactory,
 ) -> None:
     mcp_client = FakeMcpWorkflowClient()
@@ -1399,22 +1443,40 @@ async def test_no_compare_grouped_error_prompt_preserves_broad_baseline(
     user_prompt = json.loads(context.prompt.user_prompt)
     previous_evidence = user_prompt["evidence"]["previous_grouped_errors"]
     current_evidence = user_prompt["evidence"]["current_grouped_errors"]
-    assert len(previous_evidence["fingerprints"]) == 30
+    assert len(previous_evidence["fingerprints"]) == 8
     assert {tuple(row["source_keys"]) for row in previous_evidence["fingerprints"]} == {
         ("backend",),
         ("nginx",),
     }
-    assert "omitted_example_count" not in previous_evidence
-    assert {path for row in previous_evidence["fingerprints"] for path in row["request_paths"]} == {
-        *(f"/old-{index}.php" for index in range(25)),
-        *(f"/old-backend-{index}.json" for index in range(5)),
+    assert previous_evidence["omitted_details"]["count"] == 22
+    previous_prompt_fingerprints = {
+        row["fingerprint"] for row in previous_evidence["fingerprints"]
+    } | {
+        fingerprint
+        for scopes in previous_evidence["omitted_details"][
+            "fingerprint_scopes_by_attention"
+        ].values()
+        for scope in scopes
+        for fingerprint in scope["fingerprints"]
     }
-    assert len(current_evidence["fingerprints"]) == 30
+    assert previous_prompt_fingerprints == {group["fingerprint"] for group in previous_groups}
+    assert len(current_evidence["fingerprints"]) == 8
     assert {tuple(row["source_keys"]) for row in current_evidence["fingerprints"]} == {
         ("backend",),
         ("traefik",),
     }
-    assert "omitted_example_count" not in current_evidence
+    assert current_evidence["omitted_details"]["count"] == 22
+    current_prompt_fingerprints = {
+        row["fingerprint"] for row in current_evidence["fingerprints"]
+    } | {
+        fingerprint
+        for scopes in current_evidence["omitted_details"][
+            "fingerprint_scopes_by_attention"
+        ].values()
+        for scope in scopes
+        for fingerprint in scope["fingerprints"]
+    }
+    assert current_prompt_fingerprints == {group["fingerprint"] for group in current_groups}
 
 
 @pytest.mark.asyncio
@@ -1703,9 +1765,14 @@ async def test_monitoring_workflow_agent_surfaces_new_high_severity_grouped_erro
     assert grouped_errors["resolved_fingerprint_count"] == 1
     assert grouped_errors["new_high_severity_fingerprints"] == ["nginx:http_5xx:500:/api"]
     assert grouped_errors["new_high_severity_fingerprint_count"] == 1
-    assert grouped_errors["current_changed_examples"][0]["fingerprint"] == (
-        "nginx:http_5xx:500:/api"
-    )
+    assert grouped_errors["current_changed_examples"] == []
+    current_grouped_errors = user_prompt["evidence"]["current_grouped_errors"]
+    assert current_grouped_errors["fingerprints"][0]["fingerprint"] == ("nginx:http_5xx:500:/api")
+    assert current_grouped_errors["fingerprints"][0]["attention_priority"] == "actionable"
+    current_changed_refs = grouped_errors["current_omitted_details"][
+        "fingerprint_scopes_by_attention"
+    ]["actionable"]
+    assert current_changed_refs[0]["fingerprints"] == ["nginx:http_5xx:500:/api"]
     assert user_prompt["next_required_action"] == LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION
     assert [result.tool_name for result in context.tool_results] == [
         McpToolName.INSPECT_PROXY_ACTIVITY,
@@ -2200,6 +2267,161 @@ async def test_monitoring_workflow_agent_reduces_requests_for_stable_history(
 
 
 @pytest.mark.asyncio
+async def test_monitoring_workflow_agent_finishes_complete_clean_case_on_fast_model() -> None:
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    fast_provider = MockProvider()
+    strong_provider = MockProvider()
+    fast_provider.queue_response(
+        LLMResponse(
+            text=json.dumps(_final_report_payload(summary="Clean evidence used the fast model.")),
+            provider_name="mock",
+            model_name="gpt-4.1-mini",
+        )
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=strong_provider,
+        fast_llm_provider=fast_provider,
+        fast_model_name="gpt-4.1-mini",
+        strong_model_name="gpt-5",
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    assert context.final_report.summary == "Clean evidence used the fast model."
+    assert len(fast_provider.requests) == 1
+    assert strong_provider.requests == []
+    assert fast_provider.requests[0].model == "gpt-4.1-mini"
+    if hasattr(fast_provider.requests[0], "prompt_cache_key"):
+        assert getattr(fast_provider.requests[0], "prompt_cache_key") == "log-analysis:v1"
+        assert getattr(fast_provider.requests[0].options, "reasoning_effort") is None
+
+
+@pytest.mark.asyncio
+async def test_fast_tool_request_escalates_without_retaining_response_history() -> None:
+    @dataclass(frozen=True)
+    class ResponseWithID(LLMResponse):
+        response_id: str | None = None
+
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    mcp_client.tool_results[McpToolName.INSPECT_PROXY_ACTIVITY] = {
+        "action": McpToolName.INSPECT_PROXY_ACTIVITY,
+        "project_name": "demo-shop",
+        "total_requests": 10,
+        "status_class_counts": {"2xx": 10, "4xx": 0, "5xx": 0},
+        "upstream_error_count": 0,
+    }
+    fast_provider = MockProvider()
+    strong_provider = MockProvider()
+    fast_response_values: dict[str, Any] = {
+        "text": json.dumps(
+            {
+                "action": LogAnalysisAllowedAction.CALL_TOOLS,
+                "tool_calls": [
+                    {
+                        "tool_name": McpToolName.INSPECT_PROXY_ACTIVITY,
+                        "arguments": {"project_name": "demo-shop"},
+                    }
+                ],
+            }
+        ),
+        "response_id": "resp_fast_tool",
+        "provider_name": "mock",
+        "model_name": "gpt-4.1-mini",
+    }
+    fast_provider.queue_response(ResponseWithID(**fast_response_values))
+    strong_response_values: dict[str, Any] = {
+        "text": json.dumps(_final_report_payload(summary="Strong model reviewed follow-up.")),
+        "response_id": "resp_strong_final",
+        "provider_name": "mock",
+        "model_name": "gpt-5",
+    }
+    strong_provider.queue_response(ResponseWithID(**strong_response_values))
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=strong_provider,
+        fast_llm_provider=fast_provider,
+        fast_model_name="gpt-4.1-mini",
+        strong_model_name="gpt-5",
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    assert context.final_report.summary == "Strong model reviewed follow-up."
+    assert len(fast_provider.requests) == 1
+    assert len(strong_provider.requests) == 1
+    strong_request = strong_provider.requests[0]
+    assert strong_request.model == "gpt-5"
+    assert getattr(strong_request, "previous_response_id", None) is None
+    assert [message.role for message in strong_request.messages] == ["system", "user", "user"]
+    if hasattr(strong_request.options, "reasoning_effort"):
+        assert getattr(strong_request.options, "reasoning_effort") == "medium"
+        assert getattr(strong_request.options, "text_verbosity") == "low"
+    assert strong_request.options.max_output_tokens == 4_000
+
+
+@pytest.mark.asyncio
+async def test_invalid_fast_response_escalates_to_strong_model() -> None:
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    fast_provider = MockProvider()
+    strong_provider = MockProvider()
+    fast_provider.queue_response(
+        LLMResponse(
+            text="not-json",
+            provider_name="mock",
+            model_name="gpt-4.1-mini",
+        )
+    )
+    strong_provider.queue_response(
+        LLMResponse(
+            text=json.dumps(_final_report_payload(summary="Strong model repaired the response.")),
+            provider_name="mock",
+            model_name="gpt-5",
+        )
+    )
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=strong_provider,
+        fast_llm_provider=fast_provider,
+        fast_model_name="gpt-4.1-mini",
+        strong_model_name="gpt-5",
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+
+    assert context.final_report.summary == "Strong model repaired the response."
+    assert len(fast_provider.requests) == 1
+    assert len(strong_provider.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_monitoring_workflow_agent_flags_changed_history_coverage(
     history_agent_factory: HistoryAgentFactory,
 ) -> None:
@@ -2282,6 +2504,8 @@ async def test_monitoring_workflow_agent_flags_changed_history_coverage(
     assert source_coverage["tool_scope_by_project"] == {}
     assert source_coverage["recommended_action"] == RecommendedAction.LLM_MAY_DECIDE
     assert user_prompt["current_coverage"] == {
+        "collection_warnings": ["nginx stderr unavailable"],
+        "unknown_requested_sources": [],
         "zero_line_sources": [],
         "unavailable_sources": ["demo-shop.nginx"],
         "truncated_sources": [],
@@ -2838,7 +3062,20 @@ async def test_monitoring_workflow_agent_persists_llm_tool_usage_by_trace_id(
                     },
                 ],
             }
-        )
+        ),
+        usage=Usage(
+            prompt_tokens=1_000,
+            completion_tokens=50,
+            total_tokens=1_050,
+            cost_usd=0.003,
+            raw={
+                "input_tokens": 1_000,
+                "input_tokens_details": {"cached_tokens": 600},
+                "output_tokens": 50,
+                "output_tokens_details": {"reasoning_tokens": 20},
+                "total_tokens": 1_050,
+            },
+        ),
     )
     llm_provider.queue_text_response(
         json.dumps(
@@ -2876,6 +3113,15 @@ async def test_monitoring_workflow_agent_persists_llm_tool_usage_by_trace_id(
     action_entries = [step for step in steps if step.step_type == "llm_call"]
     assert action_entries[0].action == LogAnalysisAllowedAction.CALL_TOOLS
     assert action_entries[0].llm_response_text
+    assert action_entries[0].provider_name == "mock"
+    assert action_entries[0].prompt_tokens == 1_000
+    assert action_entries[0].completion_tokens == 50
+    assert action_entries[0].total_tokens == 1_050
+    assert action_entries[0].cost_usd == 0.003
+    assert action_entries[0].request_character_count > 0
+    usage_raw = action_entries[0].usage_raw
+    assert usage_raw is not None
+    assert usage_raw["input_tokens_details"] == {"cached_tokens": 600}
     llm_tool_calls = [step for step in steps if step.step_type == "mcp_tool_call"]
     assert [tool_call.tool_name for tool_call in llm_tool_calls] == [
         McpToolName.INSPECT_PROXY_ACTIVITY,
@@ -2883,6 +3129,45 @@ async def test_monitoring_workflow_agent_persists_llm_tool_usage_by_trace_id(
     ]
     assert all(tool_call.status == "succeeded" for tool_call in llm_tool_calls)
     assert all(tool_call.arguments_hash for tool_call in llm_tool_calls)
+
+
+@pytest.mark.asyncio
+async def test_monitoring_workflow_agent_persists_usage_before_payload_parse_failure(
+    agent_factory: AgentFactory,
+) -> None:
+    mcp_client = FakeMcpWorkflowClient()
+    llm_provider = MockProvider()
+    llm_provider.queue_text_response(
+        "not-json",
+        usage=Usage(
+            prompt_tokens=700,
+            completion_tokens=5,
+            total_tokens=705,
+            raw={"input_tokens_details": {"cached_tokens": 400}},
+        ),
+    )
+    llm_call_repository = LLMCallRepository(trace_id="trace-invalid-payload")
+    agent = agent_factory(mcp_client, llm_provider)
+    agent.llm_call_repository = llm_call_repository
+
+    with pytest.raises(LogAnalysisAgentError, match="response was not valid JSON"):
+        await agent.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogCollectionWindow(
+                since="2026-05-19T00:00:00Z",
+                until="2026-05-20T00:00:00Z",
+                since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+                until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+            ),
+        )
+
+    step = await LogAnalysisLLMCall.objects.get(trace_id="trace-invalid-payload")
+    assert step.status == "failed"
+    assert step.prompt_tokens == 700
+    assert step.completion_tokens == 5
+    assert step.total_tokens == 705
+    assert step.request_character_count > 0
+    assert step.usage_raw == {"input_tokens_details": {"cached_tokens": 400}}
 
 
 @pytest.mark.asyncio
@@ -2903,7 +3188,16 @@ async def test_monitoring_workflow_agent_logs_llm_actions(
                     }
                 ],
             }
-        )
+        ),
+        usage=Usage(
+            prompt_tokens=800,
+            completion_tokens=40,
+            total_tokens=840,
+            raw={
+                "input_tokens_details": {"cached_tokens": 500},
+                "output_tokens_details": {"reasoning_tokens": 10},
+            },
+        ),
     )
     llm_provider.queue_text_response(
         json.dumps(
@@ -2946,6 +3240,12 @@ async def test_monitoring_workflow_agent_logs_llm_actions(
     assert first_extra["action"] == LogAnalysisAllowedAction.CALL_TOOLS
     assert first_extra["requested_tool_names"] == [McpToolName.GROUP_ERRORS]
     assert first_extra["tool_call_count"] == 1
+    assert first_extra["provider_name"] == "mock"
+    assert first_extra["prompt_tokens"] == 800
+    assert first_extra["completion_tokens"] == 40
+    assert first_extra["total_tokens"] == 840
+    assert first_extra["cached_prompt_tokens"] == 500
+    assert first_extra["reasoning_completion_tokens"] == 10
     assert first_extra["llm_response_text"] == (
         '{"action": "call_tools", "tool_calls": [{"tool_name": "group_errors", '
         '"arguments": {"project_name": "demo-shop"}}]}'
@@ -3153,9 +3453,12 @@ async def test_monitoring_workflow_agent_rejects_invalid_final_report(
                 "summary": "Missing required fields.",
                 "severity": "NOTICE",
             }
-        )
+        ),
+        usage=Usage(prompt_tokens=600, completion_tokens=20, total_tokens=620),
     )
+    llm_call_repository = LLMCallRepository(trace_id="trace-invalid-final-report")
     agent = agent_factory(mcp_client, llm_provider)
+    agent.llm_call_repository = llm_call_repository
 
     with pytest.raises(
         LogAnalysisAgentError,
@@ -3172,6 +3475,10 @@ async def test_monitoring_workflow_agent_rejects_invalid_final_report(
         )
     assert isinstance(error_info.value.__cause__, ValueError)
     assert error_info.value.collect_logs is not None
+    step = await LogAnalysisLLMCall.objects.get(trace_id="trace-invalid-final-report")
+    assert step.action == LogAnalysisAllowedAction.FINAL_REPORT
+    assert step.status == "failed"
+    assert step.total_tokens == 620
 
 
 @pytest.mark.asyncio
@@ -3201,3 +3508,137 @@ async def test_monitoring_workflow_agent_stops_when_mcp_has_no_projects(
         "read_resource:skill://workflow/severity_guide",
         McpToolName.LIST_PROJECTS,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("private_context", "provider_limit"),
+    [(PRIVATE_MONITORING_CONTEXT, 30_000), ("R" * 50_000, 70_000)],
+    ids=["small-instructions", "large-instructions"],
+)
+async def test_context_overflow_retries_smaller_snapshot_and_retains_full_tool_results(
+    private_context: str,
+    provider_limit: int,
+) -> None:
+    from llm_core.exceptions import ProviderExecutionError
+
+    from tests.conftest import override_settings
+    from utils.llm_context import CONTEXT_LIMITATION, message_bytes
+
+    class ContextError(Exception):
+        code = "context_length_exceeded"
+
+    class LimitedProvider(MockProvider):
+        attempted_messages: list[list[Message]]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempted_messages = []
+
+        def generate(self, request: LLMRequest) -> LLMResponse:
+            self.attempted_messages.append(list(request.messages))
+            if message_bytes(list(request.messages)) > provider_limit:
+                raise ProviderExecutionError("OpenAI provider request failed") from ContextError()
+            return super().generate(request)
+
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    raw_rows = [{"message": "request details " * 300} for _ in range(100)]
+    mcp_client.tool_results[McpToolName.INSPECT_PROXY_ACTIVITY] = {
+        "action": McpToolName.INSPECT_PROXY_ACTIVITY,
+        "project_name": "demo-shop",
+        "total_requests": 100,
+        "rows": raw_rows,
+    }
+    provider = LimitedProvider()
+    provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": McpToolName.INSPECT_PROXY_ACTIVITY,
+                        "arguments": {"project_name": "demo-shop"},
+                    }
+                ],
+            }
+        )
+    )
+    provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "read_skills",
+                "skill_names": ["bot_detection"],
+            }
+        )
+    )
+    provider.queue_text_response(json.dumps(_final_report_payload(summary="Bounded review.")))
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=provider,
+        private_monitoring_context=private_context,
+    )
+    with override_settings(LOG_ANALYSIS_LLM_MAX_INPUT_BYTES=100_000):
+        context = await agent.run_log_analysis(
+            analysis_date=date(2026, 5, 19),
+            log_window=LogCollectionWindow(
+                since="2026-05-19T00:00:00Z",
+                until="2026-05-20T00:00:00Z",
+                since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+                until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+            ),
+        )
+    assert context.final_report.summary == "Bounded review."
+    assert CONTEXT_LIMITATION in context.final_report.coverage_gaps
+    assert context.tool_results[0].structured_content["rows"] == raw_rows
+    sizes = [message_bytes(messages) for messages in provider.attempted_messages]
+    assert max(sizes) <= 100_000
+    assert any(size > provider_limit for size in sizes)
+    assert sizes[-1] <= provider_limit
+    assert len(provider.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_real_openai_invalid_json_escalates_fast_to_strong() -> None:
+    from types import SimpleNamespace
+
+    from llm_core.providers.openai import OpenAIProvider, OpenAIProviderConfig
+
+    class InvalidResponses:
+        def create(self, **payload: Any) -> dict[str, Any]:
+            return {"model": "gpt-4.1-mini", "output_text": '{"action":'}
+
+    fast_provider = OpenAIProvider(
+        OpenAIProviderConfig(model="gpt-4.1-mini"),
+        client=SimpleNamespace(responses=InvalidResponses()),
+    )
+    strong_provider = MockProvider()
+    strong_provider.queue_text_response(
+        json.dumps(_final_report_payload(summary="Recovered JSON."))
+    )
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=strong_provider,
+        fast_llm_provider=fast_provider,
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+    agent.llm_call_repository = LLMCallRepository(trace_id="provider-json-recovery")
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+    assert context.final_report.summary == "Recovered JSON."
+    assert len(strong_provider.requests) == 1
+    assert strong_provider.requests[0].metadata["model_tier"] == "strong"
+    assert mcp_client.calls.count("get_workflow_bundle") == 1
+    steps = await LogAnalysisLLMCall.filter(trace_id="provider-json-recovery").order_by("id")
+    llm_steps = [step for step in steps if step.step_type == "llm_call"]
+    assert [step.status for step in llm_steps] == ["failed", "succeeded"]
+    assert llm_steps[0].provider_name == "openai"
+    assert llm_steps[0].error_message
+    assert llm_steps[0].total_tokens is None

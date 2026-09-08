@@ -269,11 +269,19 @@ def test_history_comparison_preserves_semantic_family_variant_count() -> None:
 
     assert comparison is not None
     assert comparison.current_group_count == 1
+    assert comparison.current_changed_groups[0].variant_count == 2
+    assert build_grouped_error_semantics(comparison.current_changed_groups[0]).normalized_paths == (
+        "/orders/{id}",
+    )
     compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
         comparison
     )
-    assert compact.current_changed_examples[0].variant_count == 2
-    assert compact.current_changed_examples[0].request_paths == ["/orders/{id}"]
+    assert compact.current_changed_examples == []
+    assert compact.current_omitted_details is not None
+    assert compact.current_omitted_details.counts_by_attention == {"investigate": 1}
+    assert compact.current_omitted_details.fingerprint_scopes_by_attention["investigate"][
+        0
+    ].fingerprints == ["proxy:http_4xx:v2:1"]
 
 
 def test_prompt_history_example_preserves_complete_message_summary() -> None:
@@ -490,10 +498,19 @@ def test_high_severity_probe_is_actionable_not_watch_only() -> None:
     )
 
     assert comparison is not None
+    assert (
+        build_grouped_error_semantics(comparison.current_changed_groups[0]).attention_priority
+        == "actionable"
+    )
     compact = LogAnalysisHistoryComparisonService.compact_grouped_error_comparison_for_prompt(
         comparison
     )
-    assert compact.current_changed_examples[0].attention_priority == "actionable"
+    assert compact.current_changed_examples == []
+    assert compact.current_omitted_details is not None
+    assert compact.current_omitted_details.counts_by_attention == {"actionable": 1}
+    assert compact.current_omitted_details.fingerprint_scopes_by_attention["actionable"][
+        0
+    ].fingerprints == ["proxy:http_4xx:404:/wp-login.php"]
     assert compact.evidence_quality_warnings
 
 
@@ -904,6 +921,10 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
     assert compact.persisting_fingerprint_count == 40
     assert compact.worsened_fingerprint_count == 9
     assert compact.improved_fingerprint_count == 1
+    assert compact.new_fingerprints == comparison.new_fingerprints
+    assert compact.resolved_fingerprints == comparison.resolved_fingerprints
+    assert compact.worsened_fingerprints == comparison.worsened_fingerprints
+    assert compact.improved_fingerprints == comparison.improved_fingerprints
     assert compact.new_high_severity_fingerprint_count == 1
     assert compact.new_high_severity_fingerprints == ["backend:http_5xx:500:/api"]
     assert compact.resolved_high_severity_fingerprint_count == 1
@@ -914,13 +935,44 @@ def test_history_comparison_compacts_grouped_error_delta_for_prompt() -> None:
         "new_high_severity_grouped_error_fingerprints_present",
         "previous_high_severity_grouped_error_fingerprints_absent_from_current",
     ]
-    assert compact.current_changed_examples[0].fingerprint == "backend:http_5xx:500:/api"
-    assert compact.current_changed_examples[0].severity == "high"
-    assert len(compact.current_changed_examples) == 13
-    assert len(compact.previous_changed_examples) == 12
+    assert compact.current_changed_examples == []
+    assert len(compact.previous_changed_examples) == 8
+    assert compact.current_omitted_details is not None
+    assert compact.current_omitted_details.count == 13
+    assert compact.current_omitted_details.counts_by_attention == {
+        "actionable": 1,
+        "investigate": 12,
+    }
+    assert compact.previous_omitted_details is not None
+    assert compact.previous_omitted_details.count == 4
+    assert compact.previous_omitted_details.counts_by_attention == {"investigate": 4}
+    current_prompt_fingerprints = {
+        example.fingerprint for example in compact.current_changed_examples
+    } | {
+        fingerprint
+        for scopes in compact.current_omitted_details.fingerprint_scopes_by_attention.values()
+        for scope in scopes
+        for fingerprint in scope.fingerprints
+    }
+    previous_prompt_fingerprints = {
+        example.fingerprint for example in compact.previous_changed_examples
+    } | {
+        fingerprint
+        for scopes in compact.previous_omitted_details.fingerprint_scopes_by_attention.values()
+        for scope in scopes
+        for fingerprint in scope.fingerprints
+    }
+    assert current_prompt_fingerprints == {
+        group.fingerprint for group in comparison.current_changed_groups
+    }
+    assert previous_prompt_fingerprints == {
+        group.fingerprint for group in comparison.previous_changed_groups
+    }
     dumped = compact.model_dump(mode="json")
-    assert "new_fingerprints" not in dumped
-    assert "worsened_fingerprints" not in dumped
+    assert dumped["new_fingerprints"] == comparison.new_fingerprints
+    assert dumped["resolved_fingerprints"] == comparison.resolved_fingerprints
+    assert dumped["worsened_fingerprints"] == comparison.worsened_fingerprints
+    assert dumped["improved_fingerprints"] == comparison.improved_fingerprints
     assert "current_changed_groups" not in dumped
 
 
@@ -1059,7 +1111,7 @@ def test_history_comparison_finds_unsupported_broad_report_claims() -> None:
         ],
         next_required_action=LogAnalysisNextRequiredAction.CHOOSE_NEXT_ACTION,
         final_report_allowed=True,
-        mandatory_skills=[],
+        loaded_mandatory_skill_names=[],
         collection=LogAnalysisPromptCollection(
             action=McpToolName.COLLECT_LOGS,
             workspace=LogWorkspace.WORKFLOW,

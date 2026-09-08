@@ -46,6 +46,15 @@ PROJECT_CONTEXT_PROMPT_PATH = env.str(
 LLM_DEFAULT_MODEL = env.str("LLM_DEFAULT_MODEL", default="gpt-4.1-mini")
 LLM_FAST_MODEL = env.str("LLM_FAST_MODEL", default="gpt-4.1-mini")
 LLM_STRONG_MODEL = env.str("LLM_STRONG_MODEL", default="gpt-5")
+LLM_STRONG_REASONING_EFFORT = env.str("LLM_STRONG_REASONING_EFFORT", default="medium")
+LLM_TEXT_VERBOSITY = env.str("LLM_TEXT_VERBOSITY", default="low")
+LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS = env.int(
+    "LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS",
+    default=4_000,
+)
+# Conservative UTF-8 input ceiling; leave room for output and protocol overhead.
+LOG_ANALYSIS_LLM_MAX_INPUT_BYTES = env.int("LOG_ANALYSIS_LLM_MAX_INPUT_BYTES", default=100_000)
+SITEMAP_LLM_MAX_OUTPUT_TOKENS = env.int("SITEMAP_LLM_MAX_OUTPUT_TOKENS", default=1_200)
 LLM_MODELS = (
     LLM_DEFAULT_MODEL,
     LLM_FAST_MODEL,
