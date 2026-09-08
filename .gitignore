@@ -1,6 +1,7 @@
 doc/analysis/
 docs/analysis/
 infra/docs/analysis/
+docs/superpowers/
 
 # Local agent workspace
 .agent/

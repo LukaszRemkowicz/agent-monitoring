@@ -231,7 +231,7 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                             source_keys=["backend"],
                         )
                     ],
-                    mandatory_skills=[],
+                    loaded_mandatory_skill_names=[],
                     optional_skills=[],
                     collection=LogAnalysisPromptCollection(
                         action=McpToolName.COLLECT_LOGS,
@@ -255,9 +255,6 @@ def _log_analysis_result(analysis_date: date) -> LogAnalysisWorkflowResult:
                         "recommendations": "string",
                         "trend_summary": "string",
                     },
-                    instructions=[
-                        "Use deterministic MCP snapshot tools before final report.",
-                    ],
                 ),
             ),
             final_report=LogAnalysisFinalReport(
@@ -715,13 +712,21 @@ def test_log_analysis_command_loads_mcp_workflow_bundle(
         dependencies["service_calls"][0]["llm_call_repository"]
         is dependencies["llm_call_repository"]
     )
-    dependencies["llm_provider_factory"].assert_called_once_with("gpt-5")
+    assert dependencies["llm_provider_factory"].call_args_list == [
+        mocker.call("gpt-5"),
+        mocker.call("gpt-4.1-mini"),
+    ]
     assert dependencies["agent_constructor"].call_args.args[0] is dependencies["mcp_client"]
     assert (
         dependencies["agent_constructor"].call_args.kwargs["llm_provider"]
         is dependencies["llm_provider"]
     )
-    assert "strong_llm_provider" not in dependencies["agent_constructor"].call_args.kwargs
+    assert (
+        dependencies["agent_constructor"].call_args.kwargs["fast_llm_provider"]
+        is dependencies["llm_provider"]
+    )
+    assert dependencies["agent_constructor"].call_args.kwargs["strong_model_name"] == "gpt-5"
+    assert dependencies["agent_constructor"].call_args.kwargs["fast_model_name"] == "gpt-4.1-mini"
     dependencies["email_service"].send_log_analysis.assert_awaited_once()
     assert dependencies["repository"].updated[0][1] == {"email_sent": True}
     delivery = dependencies["email_delivery_repository"].created[0]

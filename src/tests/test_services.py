@@ -131,7 +131,7 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                         source_keys=["backend"],
                     ),
                 ],
-                mandatory_skills=[],
+                loaded_mandatory_skill_names=[],
                 optional_skills=[],
                 collection=LogAnalysisPromptCollection(
                     action=McpToolName.COLLECT_LOGS,
@@ -172,9 +172,6 @@ class FakeWorkflowAgent(MonitoringWorkflowAgent):
                     "watch_only_items": "list[string]",
                     "trend_summary": "string",
                 },
-                instructions=[
-                    "Use deterministic MCP snapshot tools before final report.",
-                ],
             ),
         )
         return LogAnalysisAgentContext(
@@ -567,6 +564,45 @@ async def test_log_analysis_service_passes_previous_analysis_to_agent() -> None:
 
     assert repository.get_latest_before_date_calls == [date(2026, 5, 19)]
     assert agent.received_previous_analysis == previous_run
+
+
+@pytest.mark.asyncio
+async def test_log_analysis_service_excludes_previous_analysis_from_historical_markdown() -> None:
+    agent = FakeWorkflowAgent()
+    repository = FakeLogAnalysisRepository()
+    previous_run = LogAnalysisOut(
+        id=8,
+        created_at=datetime(2026, 5, 18, tzinfo=UTC),
+        analysis_date=date(2026, 5, 18),
+        status=RunStatus.SUCCEEDED,
+        summary="Latest report represented by previous_analysis.",
+        severity="INFO",
+    )
+    older_run = LogAnalysisOut(
+        id=7,
+        created_at=datetime(2026, 5, 17, tzinfo=UTC),
+        analysis_date=date(2026, 5, 17),
+        status=RunStatus.SUCCEEDED,
+        summary="Older trend context.",
+        severity="WARNING",
+    )
+    repository._latest_before_date = previous_run
+    repository._last_5_days = [previous_run, older_run]
+    service = LogAnalysisService(agent=agent, repository=repository)
+
+    await service.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogAnalysisService.create_log_collection_window(date(2026, 5, 19)),
+        force=False,
+    )
+
+    assert agent.received_previous_analysis == previous_run
+    assert "2026-05-18" not in agent.received_historical_context
+    assert "Latest report represented by previous_analysis." not in (
+        agent.received_historical_context
+    )
+    assert "2026-05-17" in agent.received_historical_context
+    assert "Older trend context." in agent.received_historical_context
 
 
 @pytest.mark.asyncio

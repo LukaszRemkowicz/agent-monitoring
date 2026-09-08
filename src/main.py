@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import click
 import typer
 
-from agents import MonitoringWorkflowAgent
+from agents import MonitoringWorkflowAgent, ReasoningEffort, TextVerbosity
 from conf import settings
 from db.models import EmailDelivery
 from decorators import as_async, db
@@ -99,6 +99,12 @@ async def log_analysis(
         agent=MonitoringWorkflowAgent(
             mcp_client,
             llm_provider=get_llm_provider(settings.LLM_STRONG_MODEL),
+            fast_llm_provider=get_llm_provider(settings.LLM_FAST_MODEL),
+            fast_model_name=settings.LLM_FAST_MODEL,
+            strong_model_name=settings.LLM_STRONG_MODEL,
+            strong_reasoning_effort=ReasoningEffort(settings.LLM_STRONG_REASONING_EFFORT),
+            text_verbosity=TextVerbosity(settings.LLM_TEXT_VERBOSITY),
+            max_output_tokens=settings.LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS,
             private_monitoring_context=load_private_monitoring_context(
                 settings.PROJECT_CONTEXT_PROMPT_PATH
             ),
@@ -252,6 +258,8 @@ async def sitemap_analysis(
         summary_builder=LLMSummaryBuilder(
             llm_provider=get_llm_provider(settings.LLM_DEFAULT_MODEL),
             mcp_client=mcp_client,
+            model_name=settings.LLM_DEFAULT_MODEL,
+            max_output_tokens=settings.SITEMAP_LLM_MAX_OUTPUT_TOKENS,
         ),
     )
     try:

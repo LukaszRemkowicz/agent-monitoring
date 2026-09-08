@@ -1,8 +1,9 @@
 # Critical Log-Analysis Decision Rules
 
 - Current complete paginated evidence is primary. Historical summaries and previous-vs-current comparisons are secondary.
-- `evidence_complete=true` means only that all grouped semantic families for the collected scope are visible; it does not prove chronology, correlation, causality, or raw details. Review families in this order: actionable, investigate, watch_only, routine. If a material conclusion depends on omitted facts, call the smallest targeted deterministic tool that can resolve it.
+- `evidence_complete=true` means only that all grouped semantic families for the collected scope are represented; it does not prove chronology, correlation, causality, or raw details. Detailed rows are bounded per attention band, and `omitted_details` retains every remaining family identity grouped by scope. Review families in this order: actionable, investigate, watch_only, routine. If a material conclusion depends on an identity without a detailed row, call the smallest targeted deterministic tool that can resolve it.
 - If `current_grouped_errors.evidence_complete=false`, `final_report` is prohibited. Request more current evidence with `call_tools`; if current completeness cannot be established, fail rather than conclude. Incomplete history only prohibits trend claims.
+- An unavailable source cannot be replaced by rechecking other sources. Report that coverage gap and avoid conclusions for its scope.
 - Keep known 403/404 probes such as `404 /wp-login.php` visible as `watch_only`. A count-only change does not trigger tools unless outcome, severity, scope, or impact changes.
 - Prioritize real 5xx, application exceptions, successful sensitive access, security-control failure, demonstrated user impact, and unresolved high severity.
 - Compare semantic meaning and affected scope, not raw count or string churn. Make trend claims only when current and historical evidence are comparable.

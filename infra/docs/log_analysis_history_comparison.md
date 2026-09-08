@@ -144,23 +144,28 @@ lines. It compares deterministic grouped-error summaries returned by MCP:
 }
 ```
 
-The comparison key is the exact `fingerprint` string. Python does not do
-semantic matching between similar paths or messages.
+Python derives a conservative semantic family from project/source scope,
+category, status, method, host, normalized route, upstream-attempt state, and
+explicit message identity. The exact fingerprint of the deterministic
+representative remains the prompt and persistence reference.
 
 For example:
 
 ```text
-current fingerprints - previous fingerprints = new fingerprints
-previous fingerprints - current fingerprints = resolved fingerprints
-previous fingerprints intersect current fingerprints = persisting fingerprints
+current semantic families - previous semantic families = new fingerprints
+previous semantic families - current semantic families = resolved fingerprints
+previous semantic families intersect current semantic families = persisting fingerprints
 ```
 
-For persisting fingerprints, Python compares only the grouped count:
+For persisting fingerprints, Python compares severity rank:
 
 ```text
-current count > previous count = worsened
-current count < previous count = improved
+current severity rank > previous severity rank = worsened
+current severity rank < previous severity rank = improved
 ```
+
+Count-only changes remain available in the grouped evidence but do not create a
+`worsened` or `improved` label.
 
 Python also marks a grouped-error as high severity when the grouped error says
 `high` or `critical`, or when any grouped status code is `>= 500`.
@@ -220,9 +225,9 @@ counts.
 This method performs the actual grouped-error comparison:
 
 1. Flatten previous and current grouped-error runs into grouped-error rows.
-2. Build dictionaries keyed by exact `fingerprint`.
-3. Use set operations to calculate new, resolved, and persisting fingerprints.
-4. Compare counts for persisting fingerprints to calculate worsened and improved
+2. Build dictionaries keyed by the conservative semantic family.
+3. Use set operations to calculate new, resolved, and persisting families.
+4. Compare severity rank for persisting families to calculate worsened and improved
    fingerprints.
 5. Detect new and resolved high-severity fingerprints.
 6. Record the current tool scope by project/source.
@@ -237,11 +242,23 @@ Python and tests, but it can be too large for the LLM prompt.
 This method turns the full comparison into a smaller prompt payload:
 
 - complete aggregate counts are preserved
+- complete new, resolved, worsened, and improved fingerprint lists are preserved
 - complete high-severity fingerprint lists are preserved
-- changed examples are capped
+- current changed families are reference-only because current baseline details
+  are already present
+- previous changed examples are capped at eight per attention band
+- every omitted family identity remains in scope-grouped fingerprint references
 - evidence-quality warnings are added when the cheap path is risky
 
 This is the object the LLM usually sees as `grouped_error_diff`.
+
+Current and previous grouped-error baselines keep every actionable family as a
+verbose row. Investigate, watch-only, and routine rows are capped at eight per
+attention band, with every omitted identity retained as a reference.
+`evidence_complete=true` still means MCP completed the deterministic scan; it
+does not mean every family has a verbose prompt row. When a material conclusion
+depends on an identity under `omitted_details`, the LLM must request the smallest
+deterministic follow-up that supplies the missing detail.
 
 ### `build_missing_source_comparison()`
 

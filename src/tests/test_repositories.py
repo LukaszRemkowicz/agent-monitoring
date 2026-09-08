@@ -532,6 +532,17 @@ async def test_log_analysis_llm_call_repository_creates_steps() -> None:
             step_type="llm_call",
             action="call_tools",
             llm_response_text='{"action": "call_tools"}',
+            provider_name="openai",
+            model_name="gpt-5",
+            prompt_tokens=1_000,
+            completion_tokens=50,
+            total_tokens=1_050,
+            cost_usd=0.003,
+            request_character_count=4_000,
+            usage_raw={
+                "input_tokens": 1_000,
+                "input_tokens_details": {"cached_tokens": 600},
+            },
         )
     )
     await repository.create(
@@ -564,6 +575,18 @@ async def test_log_analysis_llm_call_repository_creates_steps() -> None:
     assert [step.step_type for step in steps] == ["llm_call", "mcp_tool_call"]
     assert steps[0].action == "call_tools"
     assert steps[0].llm_response_text == '{"action": "call_tools"}'
+    assert steps[0].provider_name == "openai"
+    assert steps[0].model_name == "gpt-5"
+    assert steps[0].prompt_tokens == 1_000
+    assert steps[0].completion_tokens == 50
+    assert steps[0].total_tokens == 1_050
+    assert steps[0].cost_usd == 0.003
+    assert steps[0].request_character_count == 4_000
+    assert steps[0].usage_raw == {
+        "input_tokens": 1_000,
+        "input_tokens_details": {"cached_tokens": 600},
+    }
     assert steps[1].tool_name == "inspect_proxy_activity"
+    assert getattr(steps[1], "prompt_tokens") is None
     assert steps[1].status == "succeeded"
     assert steps[1].arguments_text == '{"project_name": "demo-shop"}'

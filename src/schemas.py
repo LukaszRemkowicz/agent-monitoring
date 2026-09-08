@@ -1097,10 +1097,32 @@ class LogAnalysisPromptGroupedErrorFingerprint(BaseModel):
     )
 
 
+class LogAnalysisPromptGroupedErrorFingerprintScope(BaseModel):
+    """Omitted-detail family identities grouped by their deterministic scope."""
+
+    project_name: str = ""
+    source_keys: list[str] = Field(default_factory=list)
+    fingerprints: list[str] = Field(default_factory=list)
+
+
+class LogAnalysisPromptGroupedErrorOmittedDetails(BaseModel):
+    """Complete identity ledger for families whose verbose rows were omitted."""
+
+    count: int
+    detail_limit_per_attention: int | None = None
+    detail_limits_by_attention: dict[str, int | None] = Field(default_factory=dict)
+    counts_by_attention: dict[str, int] = Field(default_factory=dict)
+    fingerprint_scopes_by_attention: dict[
+        str, list[LogAnalysisPromptGroupedErrorFingerprintScope]
+    ] = Field(default_factory=dict)
+
+
 class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     """Prompt-safe grouped-error comparison view.
 
-    Every changed semantic family is included without raw seen-line payloads.
+    Aggregate changes are complete. Detailed rows are bounded per attention
+    band, while omitted family identities remain visible through scope-grouped
+    fingerprint references.
     """
 
     available: bool
@@ -1112,6 +1134,10 @@ class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     persisting_fingerprint_count: int = 0
     worsened_fingerprint_count: int = 0
     improved_fingerprint_count: int = 0
+    new_fingerprints: list[str] = Field(default_factory=list)
+    resolved_fingerprints: list[str] = Field(default_factory=list)
+    worsened_fingerprints: list[str] = Field(default_factory=list)
+    improved_fingerprints: list[str] = Field(default_factory=list)
     new_high_severity_fingerprint_count: int = 0
     new_high_severity_fingerprints: list[str] = Field(default_factory=list)
     resolved_high_severity_fingerprint_count: int = 0
@@ -1124,6 +1150,14 @@ class LogAnalysisPromptGroupedErrorComparison(BaseModel):
     )
     previous_changed_examples: list[LogAnalysisPromptGroupedErrorExample] = Field(
         default_factory=list
+    )
+    current_omitted_details: LogAnalysisPromptGroupedErrorOmittedDetails | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    previous_omitted_details: LogAnalysisPromptGroupedErrorOmittedDetails | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
     )
     rationale: str
 
@@ -1150,12 +1184,18 @@ class LogAnalysisPromptGroupedErrorEvidence(BaseModel):
     status_code_counts: dict[str, int] = Field(default_factory=dict)
     source_key_counts: dict[str, int] = Field(default_factory=dict)
     fingerprints: list[LogAnalysisPromptGroupedErrorFingerprint] = Field(default_factory=list)
+    omitted_details: LogAnalysisPromptGroupedErrorOmittedDetails | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     rationale: str = ""
 
 
 class LogAnalysisCurrentCoverage(BaseModel):
     """Current-run collection source coverage state facts for report coverage gaps."""
 
+    collection_warnings: list[str] = Field(default_factory=list)
+    unknown_requested_sources: list[str] = Field(default_factory=list)
     zero_line_sources: list[str] = Field(default_factory=list)
     unavailable_sources: list[str] = Field(default_factory=list)
     truncated_sources: list[str] = Field(default_factory=list)
@@ -1298,13 +1338,12 @@ class LogAnalysisPromptContext(BaseModel):
     next_required_action: LogAnalysisNextRequiredAction
     final_report_allowed: bool
     available_projects: list[ProjectManifestSummary] = Field(default_factory=list)
-    mandatory_skills: list[WorkflowSkill]
+    loaded_mandatory_skill_names: list[str] = Field(default_factory=list)
     optional_skills: list[WorkflowSkill] = Field(default_factory=list)
     collection: LogAnalysisPromptCollection
     snapshot_access: SnapshotAccessGuidance
     available_tools: list[WorkflowTool] = Field(default_factory=list)
     report_contract: dict[str, str]
-    instructions: list[str] = Field(default_factory=list)
 
 
 class LogAnalysisPreparedPrompt(BaseModel):
@@ -1550,6 +1589,14 @@ class LogAnalysisLLMCallIn(BaseModel):
     finished_at: datetime | None = None
     duration_ms: int | None = None
     llm_response_text: str = ""
+    provider_name: str | None = None
+    model_name: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cost_usd: float | None = None
+    request_character_count: int | None = None
+    usage_raw: dict[str, Any] | None = None
     error_message: str = ""
     result_summary: str = ""
 
@@ -1585,6 +1632,14 @@ class LogAnalysisLLMCallOut(LogAnalysisLLMCallIn):
                 "finished_at": step.finished_at,
                 "duration_ms": step.duration_ms,
                 "llm_response_text": step.llm_response_text,
+                "provider_name": step.provider_name,
+                "model_name": step.model_name,
+                "prompt_tokens": step.prompt_tokens,
+                "completion_tokens": step.completion_tokens,
+                "total_tokens": step.total_tokens,
+                "cost_usd": step.cost_usd,
+                "request_character_count": step.request_character_count,
+                "usage_raw": step.usage_raw,
                 "error_message": step.error_message,
                 "result_summary": step.result_summary,
             }
