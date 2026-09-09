@@ -26,6 +26,7 @@ from exceptions import (
     LogAnalysisHistoryComparisonServiceMissingException,
     McpClientError,
 )
+from llm import IncompleteLLMResponseError
 from logging_config import get_logger
 from mcp import McpWorkflowClient
 from repositories import LLMCallRepository
@@ -265,7 +266,7 @@ class MonitoringWorkflowAgent:
         strong_model_name: str | None = None,
         strong_reasoning_effort: ReasoningEffort = ReasoningEffort.MEDIUM,
         text_verbosity: TextVerbosity = TextVerbosity.LOW,
-        max_output_tokens: int = 4_000,
+        max_output_tokens: int = 16_000,
     ) -> None:
         self.mcp_client = mcp_client
         self.llm_provider = llm_provider
@@ -1324,7 +1325,10 @@ class MonitoringWorkflowAgent:
             # A self-contained snapshot avoids hidden history growth in Responses.
             # Only the prompt projection is bounded; raw artifacts remain untouched.
             llm_response: LLMResponse | None = None
-            for context_attempt in range(4):
+            context_attempt: int = 0
+            output_attempt: int = 0
+            output_token_budget: int = self.max_output_tokens
+            while True:
                 snapshot: BoundedMessages = bound_messages(messages, max_bytes=input_byte_budget)
                 request_messages: list[Message] = snapshot.messages
                 request_character_count: int = self._message_character_count(request_messages)
@@ -1338,8 +1342,78 @@ class MonitoringWorkflowAgent:
                         model_name=requested_model_name,
                         model_tier=model_tier,
                         route_reasons=model_route.reasons,
+                        max_output_tokens=output_token_budget,
                     )
                     break
+                except IncompleteLLMResponseError as exc:
+                    response: LLMResponse = exc.response
+                    failed_usage = response.usage
+                    failed_cost: float | None = (
+                        usage_cost_usd(
+                            failed_usage, model_name=response.model_name or requested_model_name
+                        )
+                        if failed_usage is not None
+                        else None
+                    )
+                    if failed_usage is not None:
+                        llm_tokens_used += failed_usage.total_tokens
+                        llm_cost_usd += failed_cost or 0.0
+                    await self._record_llm_step(
+                        LogAnalysisLLMCallIn(
+                            analysis_date=analysis_date,
+                            workflow_name=workflow.workflow_name,
+                            mcp_session_id=mcp_session_id,
+                            iteration=iteration,
+                            step_type="llm_call",
+                            status="failed",
+                            provider_name=response.provider_name or llm_provider.name,
+                            model_name=response.model_name or requested_model_name,
+                            request_character_count=request_character_count,
+                            prompt_tokens=failed_usage.prompt_tokens if failed_usage else None,
+                            completion_tokens=(
+                                failed_usage.completion_tokens if failed_usage else None
+                            ),
+                            total_tokens=failed_usage.total_tokens if failed_usage else None,
+                            cost_usd=failed_cost,
+                            usage_raw=usage_raw_json(failed_usage) if failed_usage else None,
+                            error_message=str(exc),
+                            result_summary=json.dumps(
+                                {
+                                    "response_id": (response.raw_response or {}).get("id"),
+                                    "status": "incomplete",
+                                    "reason": exc.reason,
+                                    "max_output_tokens": output_token_budget,
+                                    "output_attempt": output_attempt,
+                                }
+                            ),
+                        )
+                    )
+                    if exc.reason != "max_output_tokens":
+                        raise
+                    next_budget: int = min(output_token_budget * 2, 64_000)
+                    if output_attempt == 2 or next_budget <= output_token_budget:
+                        raise ValueError(
+                            f"LLM output remained incomplete after {output_attempt} output retries "
+                            f"(max_output_tokens={output_token_budget})."
+                        ) from exc
+                    output_attempt += 1
+                    output_token_budget = next_budget
+                    if model_tier is LogAnalysisModelTier.FAST:
+                        # Escalate before requesting budgets beyond the fast model's capacity.
+                        force_strong = True
+                        model_tier = LogAnalysisModelTier.STRONG
+                        llm_provider = self.strong_llm_provider
+                        requested_model_name = self.strong_model_name
+                    logger.warning(
+                        "retrying incomplete LLM action with a larger output budget",
+                        extra={
+                            "event": "log_analysis_llm_output_retry",
+                            "iteration": iteration,
+                            "output_attempt": output_attempt,
+                            "max_output_tokens": output_token_budget,
+                            "model": requested_model_name,
+                        },
+                    )
                 except StructuredOutputError as exc:
                     await self._record_llm_step(
                         LogAnalysisLLMCallIn(
@@ -1372,12 +1446,13 @@ class MonitoringWorkflowAgent:
                         messages, rejected_bytes=message_bytes(request_messages)
                     )
                     input_byte_budget = message_bytes(smaller_snapshot.messages)
+                    context_attempt += 1
                     logger.warning(
                         "retrying LLM action with a smaller evidence snapshot",
                         extra={
                             "event": "log_analysis_llm_context_retry",
                             "iteration": iteration,
-                            "context_attempt": context_attempt + 1,
+                            "context_attempt": context_attempt,
                             "input_byte_budget": input_byte_budget,
                             "model": requested_model_name,
                         },
@@ -1804,12 +1879,15 @@ class MonitoringWorkflowAgent:
         model_name: str | None,
         model_tier: LogAnalysisModelTier,
         route_reasons: tuple[str, ...],
+        max_output_tokens: int | None = None,
     ) -> LLMResponse:
         """Ask the configured LLM provider for the next JSON workflow action."""
 
         option_values: dict[str, Any] = {
             "temperature": None,
-            "max_output_tokens": self.max_output_tokens,
+            "max_output_tokens": (
+                max_output_tokens if max_output_tokens is not None else self.max_output_tokens
+            ),
             "response_format": ResponseFormat.JSON_OBJECT,
         }
         option_fields: object = getattr(GenerationOptions, "__dataclass_fields__", {})

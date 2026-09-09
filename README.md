@@ -85,6 +85,7 @@ MCP_WORKFLOW_JWT=...
 LLM_DEFAULT_MODEL=gpt-4.1-mini
 LLM_FAST_MODEL=gpt-4.1-mini
 LLM_STRONG_MODEL=gpt-5
+LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS=16000
 SITEMAP_EMAIL_TO=
 PROJECT_CONTEXT_PROMPT_PATH=/home/lukasz/devops/agent-monitoring/vps_monitoring_context.md
 LOGS_DIR=/var/log/agent-monitoring
@@ -216,6 +217,18 @@ this mechanism. Mandatory instructions, skill text, and private context are neve
 silently cut: if these or the minimum evidence cannot fit, the run fails with an
 explicit budget error. Narrow the analysis scope or reduce the context file in
 that case. Prompt caching remains enabled when supported by llm-core.
+
+Log-analysis output defaults to 16,000 tokens, including reasoning tokens, and
+production Compose forwards `LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS` from Doppler.
+An API response marked incomplete due to `max_output_tokens` triggers up to two
+retries for that action, doubling the output allowance each time up to 64,000.
+If the fast model is truncated, its retry uses the strong model.
+Retries use the same evidence without rerunning MCP tools or accepting partial
+JSON. Context-limit retries can still shrink the evidence projection if needed.
+Failed attempts retain token usage, cost, response ID, and the incomplete reason
+in LLM-call records; successful run totals include those failed attempts. Other
+incomplete reasons are recorded and fail without increasing the output budget.
+An explicitly configured initial budget at or above 64,000 is not increased.
 
 Clean up stored monitoring DB rows after the configured retention window:
 
