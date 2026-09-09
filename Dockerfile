@@ -9,7 +9,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY --from=ghcr.io/astral-sh/uv:0.9.11 /uv /usr/local/bin/uv
+RUN pip install --no-cache-dir "uv==0.12.10"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \

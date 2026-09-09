@@ -1,8 +1,11 @@
+import pytest
+from llm_core.exceptions import ProviderExecutionError
 from llm_core.providers.mock import MockProvider
 from llm_core.providers.openai import OpenAIProvider
 from llm_core.registry import LLMProviderRegistry
+from llm_core.types import GenerationOptions, ResponseFormat
 
-from llm import configure_llm_providers, get_llm_provider
+from llm import IncompleteLLMResponseError, configure_llm_providers, get_llm_provider
 from tests.conftest import override_settings
 
 
@@ -59,3 +62,27 @@ def test_configure_llm_providers_registers_distinct_default_model() -> None:
             "gpt-5",
             "mock",
         ]
+
+
+@pytest.mark.parametrize("text", ['{"action":', '{"action":"final_report"}', ""])
+def test_openai_incomplete_response_retains_usage_before_json_parsing(text: str) -> None:
+    provider = get_llm_provider("gpt-5")
+    assert isinstance(provider, OpenAIProvider)
+    with pytest.raises(ProviderExecutionError, match="max_output_tokens") as error:
+        provider.parse_response_payload(
+            {
+                "id": "resp_truncated",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output_text": text,
+                "model": "gpt-5",
+                "usage": {"input_tokens": 20840, "output_tokens": 4000, "total_tokens": 24840},
+            },
+            options=GenerationOptions(response_format=ResponseFormat.JSON_OBJECT),
+        )
+    assert isinstance(error.value, IncompleteLLMResponseError)
+    response = error.value.response
+    assert response.usage is not None
+    assert response.raw_response is not None
+    assert response.usage.total_tokens == 24840
+    assert response.raw_response["id"] == "resp_truncated"
