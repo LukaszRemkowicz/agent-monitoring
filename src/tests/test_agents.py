@@ -2375,7 +2375,7 @@ async def test_fast_tool_request_escalates_without_retaining_response_history() 
     if hasattr(strong_request.options, "reasoning_effort"):
         assert getattr(strong_request.options, "reasoning_effort") == "medium"
         assert getattr(strong_request.options, "text_verbosity") == "low"
-    assert strong_request.options.max_output_tokens == 4_000
+    assert strong_request.options.max_output_tokens == 16_000
 
 
 @pytest.mark.asyncio
@@ -3642,3 +3642,194 @@ async def test_real_openai_invalid_json_escalates_fast_to_strong() -> None:
     assert llm_steps[0].provider_name == "openai"
     assert llm_steps[0].error_message
     assert llm_steps[0].total_tokens is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initial_budget", [4000, 16000])
+@pytest.mark.parametrize("outcome", ["recover", "exhaust", "content_filter", "context_retry"])
+async def test_output_truncation_recovery_preserves_evidence_and_usage(
+    mocker: MockerFixture, outcome: str, initial_budget: int
+) -> None:
+    from llm_core.providers.openai import OpenAIProvider
+
+    from llm import get_llm_provider
+
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    mcp_client.tool_results[McpToolName.INSPECT_PROXY_ACTIVITY] = {
+        "action": "inspect_proxy_activity",
+        "total_requests": 12,
+    }
+    if outcome == "context_retry":
+        mcp_client.tool_results[McpToolName.INSPECT_PROXY_ACTIVITY]["rows"] = [
+            {"message": "request details " * 300} for _ in range(100)
+        ]
+    fast_provider = MockProvider()
+    fast_provider.queue_text_response(
+        json.dumps(
+            {
+                "action": "call_tools",
+                "tool_calls": [
+                    {
+                        "tool_name": "inspect_proxy_activity",
+                        "arguments": {"project_name": "demo-shop"},
+                    }
+                ],
+            }
+        )
+    )
+    provider = get_llm_provider("gpt-5")
+    assert isinstance(provider, OpenAIProvider)
+    client = mocker.Mock()
+    provider._client = client
+    incomplete = {
+        "id": "resp_incomplete",
+        "status": "incomplete",
+        "model": "gpt-5",
+        "incomplete_details": {
+            "reason": "content_filter" if outcome == "content_filter" else "max_output_tokens"
+        },
+        "output_text": (
+            '{"action":"call_tools","tool_calls":['
+            '{"tool_name":"inspect_live_fail2ban_activity","arguments":{}}]}'
+        ),
+        "usage": {
+            "input_tokens": 20840,
+            "output_tokens": 4000,
+            "total_tokens": 24840,
+            "output_tokens_details": {"reasoning_tokens": 3392},
+        },
+    }
+    complete = {
+        "status": "completed",
+        "model": "gpt-5",
+        "output_text": json.dumps(_final_report_payload(summary="Recovered report.")),
+        "usage": {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300},
+    }
+    responses: list[Any] = [incomplete, complete]
+    if outcome == "exhaust":
+        responses = [incomplete] * 3
+    elif outcome == "content_filter":
+        responses = [incomplete]
+    elif outcome == "context_retry":
+
+        class ContextError(RuntimeError):
+            code = "context_length_exceeded"
+
+        responses = [incomplete, ContextError("context_length_exceeded"), complete]
+    client.responses.create.side_effect = responses
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=provider,
+        fast_llm_provider=fast_provider,
+        strong_model_name="gpt-5",
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+        max_output_tokens=initial_budget,
+    )
+    agent.llm_call_repository = LLMCallRepository(trace_id=f"output-{outcome}")
+    window = LogCollectionWindow(
+        since="2026-05-19T00:00:00Z",
+        until="2026-05-20T00:00:00Z",
+        since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+        until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+    )
+    if outcome in {"recover", "context_retry"}:
+        context = await agent.run_log_analysis(analysis_date=date(2026, 5, 19), log_window=window)
+        assert context.final_report.summary == "Recovered report."
+        assert context.llm_tokens_used == 25140
+        assert context.llm_cost_usd > 0
+    else:
+        with pytest.raises(LogAnalysisAgentError, match="output.*retries|content_filter"):
+            await agent.run_log_analysis(analysis_date=date(2026, 5, 19), log_window=window)
+    calls = client.responses.create.call_args_list
+    expected_limits = {
+        "recover": [4000, 8000],
+        "exhaust": [4000, 8000, 16000],
+        "content_filter": [4000],
+        "context_retry": [4000, 8000, 8000],
+    }
+    assert [call.kwargs["max_output_tokens"] for call in calls] == [
+        limit * (initial_budget // 4000) for limit in expected_limits[outcome]
+    ]
+    if len(calls) > 1:
+        assert calls[0].kwargs["input"] == calls[1].kwargs["input"]
+    assert (
+        sum("call_deterministic_tool:inspect_proxy_activity:" in call for call in mcp_client.calls)
+        == 1
+    )
+    assert not any(
+        "call_deterministic_tool:inspect_live_fail2ban_activity:" in call
+        for call in mcp_client.calls
+    )
+    steps = await LogAnalysisLLMCall.objects.filter(
+        trace_id=f"output-{outcome}", status="failed"
+    ).order_by("id")
+    assert len(steps) == (3 if outcome == "exhaust" else 1)
+    assert steps[0].total_tokens == 24840
+    assert steps[0].completion_tokens == 4000
+    assert steps[0].usage_raw is not None
+    assert steps[0].usage_raw["output_tokens_details"]["reasoning_tokens"] == 3392
+    assert "resp_incomplete" in steps[0].result_summary
+    assert agent.max_output_tokens == initial_budget
+
+
+@pytest.mark.asyncio
+async def test_fast_output_truncation_retries_on_strong_model(mocker: MockerFixture) -> None:
+    from llm_core.providers.openai import OpenAIProvider
+
+    from llm import get_llm_provider
+
+    fast = get_llm_provider("gpt-4.1-mini")
+    strong = get_llm_provider("gpt-5")
+    assert isinstance(fast, OpenAIProvider)
+    assert isinstance(strong, OpenAIProvider)
+    client = mocker.Mock()
+    fast._client = client
+    strong._client = client
+    client.responses.create.side_effect = [
+        {
+            "id": "resp_fast_incomplete",
+            "status": "incomplete",
+            "model": "gpt-4.1-mini",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": '{"action":',
+            "usage": {"input_tokens": 100, "output_tokens": 16000, "total_tokens": 16100},
+        },
+        {
+            "status": "completed",
+            "model": "gpt-5",
+            "output_text": json.dumps(_final_report_payload(summary="Strong recovery.")),
+            "usage": {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300},
+        },
+    ]
+    mcp_client = CompleteCoverageMcpWorkflowClient()
+    agent = MonitoringWorkflowAgent(
+        mcp_client,
+        llm_provider=strong,
+        fast_llm_provider=fast,
+        fast_model_name="gpt-4.1-mini",
+        strong_model_name="gpt-5",
+        private_monitoring_context=PRIVATE_MONITORING_CONTEXT,
+    )
+    agent.llm_call_repository = LLMCallRepository(trace_id="fast-output-recovery")
+    context = await agent.run_log_analysis(
+        analysis_date=date(2026, 5, 19),
+        log_window=LogCollectionWindow(
+            since="2026-05-19T00:00:00Z",
+            until="2026-05-20T00:00:00Z",
+            since_datetime=datetime(2026, 5, 19, tzinfo=UTC),
+            until_datetime=datetime(2026, 5, 20, tzinfo=UTC),
+        ),
+    )
+    assert context.final_report.summary == "Strong recovery."
+    assert context.llm_tokens_used == 16400
+    calls = client.responses.create.call_args_list
+    assert [call.kwargs["model"] for call in calls] == ["gpt-4.1-mini", "gpt-5"]
+    assert [call.kwargs["max_output_tokens"] for call in calls] == [16000, 32000]
+    assert calls[0].kwargs["input"] == calls[1].kwargs["input"]
+    assert sum(call.startswith("collect_logs:") for call in mcp_client.calls) == 1
+    steps = await LogAnalysisLLMCall.objects.filter(trace_id="fast-output-recovery").order_by("id")
+    assert [(step.model_name, step.status) for step in steps] == [
+        ("gpt-4.1-mini", "failed"),
+        ("gpt-5", "succeeded"),
+    ]
+    assert steps[0].total_tokens == 16100

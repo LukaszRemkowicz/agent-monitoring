@@ -50,7 +50,7 @@ LLM_STRONG_REASONING_EFFORT = env.str("LLM_STRONG_REASONING_EFFORT", default="me
 LLM_TEXT_VERBOSITY = env.str("LLM_TEXT_VERBOSITY", default="low")
 LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS = env.int(
     "LOG_ANALYSIS_LLM_MAX_OUTPUT_TOKENS",
-    default=4_000,
+    default=16_000,
 )
 # Conservative UTF-8 input ceiling; leave room for output and protocol overhead.
 LOG_ANALYSIS_LLM_MAX_INPUT_BYTES = env.int("LOG_ANALYSIS_LLM_MAX_INPUT_BYTES", default=100_000)
